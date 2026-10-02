@@ -111,6 +111,11 @@ alternatives, organize trade-offs, and recommend a course of action, but must
 not silently finalize those decisions. The same applies to accepting or
 rejecting a product hypothesis when that outcome changes direction.
 
+For a technical spike, the outcome and any next implementation direction must
+be reviewed or confirmed by a human. The agent may propose `keep`, `revise`,
+`reject`, or `defer` and suggest follow-up work, but it must not close the
+spike's learning cycle on the human's behalf.
+
 “It worked” is evidence about an experiment, not by itself a decision to adopt
 the implementation or service permanently.
 
@@ -145,7 +150,13 @@ Question -> Hypothesize -> Specify -> Spike -> Measure -> Decide -> Document
 Use this when the main output is reduced uncertainty about an Agentic LLM,
 MCP, provider, transport, Extension/backend boundary, or local-to-cloud
 option. Keep the spike narrow and do not treat its result as an automatic
-architecture commitment.
+architecture commitment. The agent should organize the evidence, compare
+alternatives, explain trade-offs, and recommend an outcome. A technical spike
+is not considered complete as a learning cycle until a human has reviewed its
+evidence and recorded or confirmed the decision or follow-up. This human
+confirmation is specific to spikes, architecture/service-selection
+experiments, and hypothesis-testing work; it does not add an approval gate to
+every straightforward implementation or fix.
 
 ### UX or analysis hypothesis
 
