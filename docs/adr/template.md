@@ -10,8 +10,10 @@ What problem, constraint, or decision requires a durable record?
 
 ## Decision
 
-What is being adopted, rejected, or deferred? State the human-confirmed
-decision and its boundary.
+For `Proposed`, describe the proposed decision, candidate direction, decision
+options, or currently recommended direction under human review. For `Accepted`,
+state the human-confirmed decision and its boundary. Do not treat a Proposed
+candidate as a final architecture decision.
 
 ## Alternatives considered
 

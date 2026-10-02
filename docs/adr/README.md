@@ -57,10 +57,12 @@ Use a lightweight status such as:
 - `Superseded` — a later ADR replaces it; or
 - `Deprecated` — it should no longer guide new work.
 
-An agent may prepare a `Proposed` ADR from spike evidence and may update a
-draft after review. An agent must not mark a material decision `Accepted`
-without human confirmation. The final decision, including whether to adopt,
-revise, reject, or defer an option, is human-owned.
+An agent may prepare a `Proposed` ADR from spike evidence, update a draft, and
+suggest a status change. A `Proposed` ADR may therefore describe a candidate
+direction while human review is pending. Transitions to `Accepted`,
+`Superseded`, or `Deprecated` require human confirmation because they change
+which architecture decision should guide the project. The final decision,
+including whether to adopt, revise, reject, or defer an option, is human-owned.
 
 ## Naming and numbering
 
