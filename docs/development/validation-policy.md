@@ -94,6 +94,23 @@ For lightweight reporting, classify checks as:
 
 These labels are descriptive, not a new workflow or test matrix.
 
+### Issue-required external evidence
+
+Layer 3 is optional for an ordinary implementation or PR and is not a default
+merge gate. An Issue or Technical Spike may nevertheless make a live result
+explicit Acceptance Evidence for its Question. Examples include requiring a
+Hosted Tableau MCP run to determine whether a multi-tool loop works, or a live
+provider call to compare a provider-specific behavior.
+
+When Layer 3 is explicitly required, an unavailable service, skipped run,
+provider outage, missing auth prerequisite, or equivalent failure is not a
+pass and does not make the Issue fully validated. Record the outcome as
+`inconclusive` or `pending external validation`, classify the cause without
+calling an outage an application defect, and leave the necessary evidence
+visible in the Issue/PR. Recheck whether `Closes #<issue>` and any human
+decision or follow-up are appropriate. Do not silently downgrade required
+evidence to optional merely because it is external.
+
 ## Validation evidence in Issues and PRs
 
 Use the documentation standard from Issue #3. Record, as applicable:
