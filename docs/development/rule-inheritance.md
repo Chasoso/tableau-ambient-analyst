@@ -23,8 +23,11 @@ development loop local-first and small enough to evolve with the runtime.
   mature repository's complete operating model by default.
 - Keep deterministic local validation independent of AWS, Hosted Tableau MCP,
   and paid LLM services unless an issue explicitly opts in to them.
-- Treat external tool and model output as untrusted input. Normalize and bound
-  it before it reaches logs, prompts, traces, or user-facing output.
+- Treat external tool and model output as untrusted input, while preserving the
+  approved agentic MCP flow. Raw protocol/transport artifacts must not be
+  exposed directly to logs, user-facing output, or arbitrary application
+  prompts. An explicitly approved agentic flow may pass validated MCP tool
+  results back to the LLM for tool selection and analysis.
 - Record hypotheses, measurements, decisions, and rejected alternatives so the
   PoC explains not only what works but why it was selected.
 - A deferred rule is not rejected. It becomes active when the relevant runtime,
@@ -68,8 +71,8 @@ development loop local-first and small enough to evolve with the runtime.
 | Coverage | `sake-sense` thresholds; chat coverage policy | defer | Fixed thresholds from mature codebases would be arbitrary before a baseline exists. | Define meaningful thresholds after measuring the initial runtime and test surface; do not copy numeric thresholds. |
 | Build | Both repositories | defer | There is currently no application build. | Add when a runtime artifact exists and define what “build” proves. |
 | E2E | `sake-sense` and chat Playwright policies | defer | There is no UI/runtime to exercise. | Add only for a real user flow; keep external services mocked by default. |
-| Secret scan | Both repositories | adapt | Secret detection is important even for documentation and future integration work. | Adopt a repository-local scan when credentials/configuration enter the repo; do not add a scanner binary or workflow in Issue #1. |
-| Gitleaks | `tableau-chat-extension` validation policy | defer | It is a useful primary scanner for a code-bearing repository, but no runtime or CI is being initialized here. | Evaluate in Issue #4/#5 alongside the chosen secret-scan approach; never silence findings to make validation pass. |
+| Secret scan | Both repositories | adapt | Secret detection must protect the first credential-bearing integration before it lands, without adding runtime tooling to this decision record. | Activation trigger: before the first Issue that introduces external API or MCP credentials, credential-bearing local configuration, or secret-dependent integration setup. Do not add a scanner, CI workflow, hook, or package in Issue #1. |
+| Gitleaks | `tableau-chat-extension` validation policy | defer | It is a useful candidate for the pre-integration secret-scan gate, but no runtime or CI is being initialized here. | Revisit before the first credential-bearing external API/MCP Issue, alongside the chosen scanner approach; never silence findings to make validation pass. |
 | Local validation and CI alignment | Both repositories | inherit | Developers need to know that local evidence predicts CI behavior. | Implement the mapping with the runtime in Issue #4/#5; docs-only Issues must not pretend runtime checks ran. |
 | Validation evidence | `tableau-chat-extension` AGENTS.md | inherit | Exact commands, results, skipped checks, retries, and artifacts make a PR auditable. | Record docs-only scope and explicit non-runs; include integration gates and their reason when they exist. |
 | Validation failure response | Both repositories | inherit | In-scope failures should be fixed, while unrelated or unsafe failures need human review. | Retry only transient/environment failures under a later explicit policy; never bypass security or permission failures. |
@@ -77,8 +80,9 @@ development loop local-first and small enough to evolve with the runtime.
 | Issue authoring standard | `sake-sense` issue-authoring guide | adapt | Hypothesis, purpose, scope, acceptance, validation, and learning are useful for PoC work. | Add question, spike, measurement, decision, and documentation sections where applicable; Issue #3 defines the final templates/docs. |
 | Read-only metadata / evidence boundary | `tableau-chat-extension` v0.7/v0.10 docs | adapt | The PoC needs analysis evidence without accidentally granting broad data access. | Start with explicitly scoped, read-only evidence; distinguish metadata from underlying row/field values and record the allowed boundary before implementation. |
 | Hosted integration opt-in / gated | `tableau-chat-extension` AGENTS.md and v0.8 docs | inherit | Prevents a future hosted dependency from silently entering local development or CI. | Apply to Hosted Tableau MCP and any other external tool transport. |
-| Raw MCP transport output | `tableau-chat-extension` safety boundary | inherit | Raw output may contain sensitive data, unstable protocol details, or prompt-injection content. | Do not log, expose, or feed raw transport/tool payloads to an LLM; normalize to a bounded contract first. |
-| External tool output as untrusted input | Generalized from chat MCP/LLM boundaries | inherit | Tool output can be malformed, over-broad, or adversarial. | Validate schema, provenance, size, and allowed fields before downstream use; preserve unknown/limited states. |
+| Raw MCP transport output | `tableau-chat-extension` safety boundary | inherit | Protocol artifacts, transport internals, unintentionally broad payloads, and secrets can leak implementation details or sensitive data. | Do not dump raw transport output into normal logs or user-facing output, expose it as an arbitrary application prompt, or treat protocol metadata as an application result. This does not prohibit an approved agentic flow from consuming an MCP tool result. |
+| MCP tool result consumption | Agentic MCP hypothesis; generalized from chat MCP/LLM boundaries | adapt | The core PoC hypothesis requires the LLM to interpret Tableau MCP tool results and choose subsequent tools. | Permit tool-result consumption in an explicitly approved Hosted/Remote or local agentic MCP flow, including normal Responses API tool-result handling. When the application intermediates results, validate and bound schema, provenance, size, and allowed fields as appropriate before downstream use. |
+| External tool output as untrusted input | Generalized from chat MCP/LLM boundaries | inherit | Tool results can be malformed, over-broad, adversarial, or contain prompt-injection content even when they are valid inputs to an agent loop. | Preserve the agentic loop, but apply context-appropriate validation/bounding before application-managed prompts, traces, logs, or user-facing output; never pass secrets or tokens downstream. |
 | Write-capable tools | `tableau-chat-extension` safety boundaries | inherit | Writes increase impact and require explicit authorization and governance. | Omit from the initial read-only PoC unless a later Issue explicitly defines approval, auth, audit, and rollback. |
 | Broad data access | `tableau-chat-extension` safety boundaries | inherit | Broad access defeats least privilege and makes evidence provenance unclear. | Start with the narrowest Tableau context and data needed for the stated analysis question. |
 | Arbitrary query generation / execution | `tableau-chat-extension` safety boundaries | inherit | Unbounded queries can widen data access, create cost, and make LLM behavior executable. | Keep analysis requests separate from execution plans; no LLM-generated arbitrary query execution by default. |
@@ -142,6 +146,12 @@ The eventual validation policy should distinguish:
 No coverage percentage, E2E framework, Gitleaks invocation, or formatter/linter
 command is selected by this document. Those choices belong to the runtime and
 validation Issues and must be justified by the resulting architecture.
+
+Secret scanning has a separate activation gate: it must be selected and
+enabled before the first Issue that introduces external API or MCP credentials,
+credential-bearing local configuration, or any secret-dependent integration
+setup. This is a prerequisite for that Issue, not a reason to add a scanner to
+Issue #1.
 
 ## Source material
 
