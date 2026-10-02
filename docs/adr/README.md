@@ -9,14 +9,18 @@ An ADR is not a research log or a Technical Spike transcript:
 
 ```text
 Technical Spike: uncertainty -> experiment -> evidence
-ADR:              evidence -> human decision -> durable rationale
+Proposed ADR:     evidence -> candidate direction -> human review
+Accepted ADR:     human-confirmed decision -> durable rationale
 ```
 
 An Issue may define the Question and Scope, a Technical Spike may produce
-Evidence, and a PR may record implementation and Validation. After a material
-human decision, an ADR may preserve the durable rationale. These artifacts are
-related, but the sequence is not a mandatory workflow for every change. In
-particular, a Spike result is not automatically an Architecture Decision.
+Evidence, and an agent may prepare a Proposed ADR before the human decision is
+finalized. The Proposed ADR can organize evidence, alternatives, trade-offs,
+and a candidate or recommended direction for human review. After human
+confirmation, it may transition to Accepted and serve as the durable rationale
+for the architecture decision. These artifacts are related, but the sequence
+is not a mandatory workflow for every change. In particular, a Spike result or
+a Proposed ADR is not automatically an Accepted Architecture Decision.
 
 ## When an ADR is useful
 
@@ -63,6 +67,10 @@ direction while human review is pending. Transitions to `Accepted`,
 `Superseded`, or `Deprecated` require human confirmation because they change
 which architecture decision should guide the project. The final decision,
 including whether to adopt, revise, reject, or defer an option, is human-owned.
+
+When an ADR is marked `Superseded`, link the succeeding ADR from the Status
+section or the Evidence / references section. A lightweight entry such as
+`Superseded by ADR-0007` is sufficient; no graph or automation is required.
 
 ## Naming and numbering
 

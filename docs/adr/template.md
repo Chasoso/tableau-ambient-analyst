@@ -4,6 +4,9 @@
 
 Proposed
 
+If this ADR is `Superseded`, link the successor here or under
+`Evidence / references`, for example: `Superseded by ADR-0007`.
+
 ## Context
 
 What problem, constraint, or decision requires a durable record?
