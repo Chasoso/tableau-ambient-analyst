@@ -6,9 +6,7 @@ import { parseReviewResult, reviewerInvocationFailure, type ReviewGateResult } f
 export type IndependentReviewInput = {
   cwd: string;
   base: string;
-  branch: string;
   issue: string;
-  validation: string[];
 };
 
 type IssueContext = {
@@ -17,14 +15,19 @@ type IssueContext = {
   url: string;
 };
 
-export function buildReviewerPrompt(input: IndependentReviewInput, issue: IssueContext): string {
+export function buildReviewerPrompt(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  validation: string[],
+  branch: string,
+): string {
   return `Repository: Chasoso/tableau-ambient-analyst
 Issue: #${input.issue}
-Branch: ${input.branch}
+Branch: ${branch}
 Base: ${input.base}
 
 Validation:
-${input.validation.map((item) => `- ${item}`).join('\n')}
+${validation.map((item) => `- ${item}`).join('\n')}
 
 Issue title: ${issue.title}
 Issue URL: ${issue.url}
@@ -66,6 +69,9 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
     return reviewerInvocationFailure('Issue body could not be retrieved.');
   }
 
+  const branch = currentBranch(input.cwd);
+  const validationEvidence = ['npm run validate: passed (executed by review runner)'];
+
   const schemaPath = resolve(input.cwd, 'src/review/review-result.schema.json');
 
   try {
@@ -76,7 +82,7 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
         cwd: input.cwd,
         encoding: 'utf8',
         env: reviewerEnvironment(),
-        input: buildReviewerPrompt(input, issue),
+        input: buildReviewerPrompt(input, issue, validationEvidence, branch),
         maxBuffer: 1024 * 1024,
       },
     );

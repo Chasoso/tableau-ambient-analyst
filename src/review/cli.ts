@@ -1,6 +1,5 @@
 import { maxReviewCycles, reviewCycleLimitExceeded } from './gate.js';
 import {
-  currentBranch,
   resolveWorkingDirectory,
   runIndependentReview,
   type IndependentReviewInput,
@@ -24,11 +23,7 @@ const cycle = Number.parseInt(argumentsByName.get('cycle') ?? '1', 10);
 const input: IndependentReviewInput = {
   cwd,
   base: argumentsByName.get('base') ?? 'main',
-  branch: argumentsByName.get('branch') ?? currentBranch(cwd),
   issue: requiredArgument('issue'),
-  validation: (
-    argumentsByName.get('validation') ?? 'npm run validate: executed by review command'
-  ).split('|'),
 };
 
 const result =

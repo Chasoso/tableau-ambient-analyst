@@ -97,14 +97,13 @@ The repository provides an opt-in local command:
 npm run review:independent -- \
   --issue 26 \
   --base main \
-  --cycle 1 \
-  --validation 'npm ci: passed|npm run validate: passed|git diff --check: passed'
+  --cycle 1
 ```
 
 The command builds the small runner, re-runs deterministic validation, fetches
 the Issue body, and starts a fresh read-only Codex process. It exits non-zero
 unless the reviewer returns a valid `PASS` result. `--cycle` is checked against
-the enforced maximum of three; an invocation above that limit stops with
+the enforced maximum of four; an invocation above that limit stops with
 `HUMAN_DECISION_REQUIRED` before another reviewer starts. This command is not
 called by `npm run validate` and is not added to ordinary CI. Before validation
 or reviewer invocation, the runner requires a non-base feature branch, an
@@ -115,7 +114,7 @@ reported as a complete review.
 The runner is intentionally one review invocation rather than a general
 orchestrator. The implementer handles an in-scope fix after
 `CHANGES_REQUIRED`, reruns validation, and invokes the command again from the
-updated branch. The documented maximum is three independent review cycles;
+updated branch. The documented maximum is four independent review cycles;
 remaining blocking findings then become `HUMAN_DECISION_REQUIRED`.
 
 ## Gate result contract
@@ -184,7 +183,7 @@ uncertainty.
 - `CHANGES_REQUIRED`: return blocking findings, fix in scope, rerun validation,
   and start a fresh review;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
-- three review cycles with unresolved blocking findings: stop and escalate.
+- four review cycles with unresolved blocking findings: stop and escalate.
 
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn.

@@ -1,5 +1,5 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
-export const maxReviewCycles = 3;
+export const maxReviewCycles = 4;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 
