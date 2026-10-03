@@ -133,9 +133,9 @@ These are the proposed evaluation dimensions, not an accepted architecture.
 
 ## Current validation
 
-- `npm ci`: passed on the clean `main` baseline.
-- `npm run validate`: passed on the clean `main` baseline (41 tests).
-- `git diff --check`: passed before branch creation.
+- `npm ci`: passed on the clean `main` baseline and feature branch.
+- `npm run validate`: passed on the feature branch (41 tests).
+- `git diff --check`: passed on the feature branch before the latest commit.
 - live provider runs: `NOT RUN — prerequisite missing`.
 - live Tableau MCP runs: `NOT RUN — prerequisite missing`.
 - normal CI remains deterministic and has no live provider/MCP dependency.
