@@ -177,6 +177,7 @@ permission changes, material cost or data-flow choices, and merging.
 - [Development lifecycle](docs/development/development-loop.md)
 - [Validation policy](docs/development/validation-policy.md)
 - [External integration safety](docs/development/external-integration-safety.md)
+- [Domain-neutral evaluation cases](docs/evaluation/agentic-cases.md)
 - [ADR guide](docs/adr/README.md)
 - [Initial runtime ADR](docs/adr/0001-initial-application-runtime.md)
 
