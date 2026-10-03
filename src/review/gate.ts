@@ -1,4 +1,5 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
+export const maxReviewCycles = 3;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 
@@ -53,6 +54,15 @@ export function reviewerInvocationFailure(message: string): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
     blockingFindings: [`Reviewer invocation failed: ${message}`],
+    nonBlockingFindings: [],
+    escalationRequired: true,
+  };
+}
+
+export function reviewCycleLimitExceeded(cycle: number): ReviewGateResult {
+  return {
+    result: 'HUMAN_DECISION_REQUIRED',
+    blockingFindings: [`Review cycle ${cycle} exceeds the maximum of ${maxReviewCycles}.`],
     nonBlockingFindings: [],
     escalationRequired: true,
   };

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canOpenPullRequest,
+  maxReviewCycles,
   parseReviewResult,
+  reviewCycleLimitExceeded,
   reviewerInvocationFailure,
 } from '../src/review/gate.js';
 import { extractFinalReviewerMessage } from '../src/review/runner.js';
@@ -86,5 +88,13 @@ describe('independent review gate contract', () => {
     ].join('\n');
 
     expect(extractFinalReviewerMessage(output)).toContain('"result":"PASS"');
+  });
+
+  it('stops when the bounded review cycle limit is exceeded', () => {
+    const result = reviewCycleLimitExceeded(maxReviewCycles + 1);
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.escalationRequired).toBe(true);
+    expect(canOpenPullRequest(true, result)).toBe(false);
   });
 });

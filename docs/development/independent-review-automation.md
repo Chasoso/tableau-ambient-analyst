@@ -97,13 +97,16 @@ The repository provides an opt-in local command:
 npm run review:independent -- \
   --issue 26 \
   --base main \
+  --cycle 1 \
   --validation 'npm ci: passed|npm run validate: passed|git diff --check: passed'
 ```
 
 The command builds the small runner, re-runs deterministic validation, fetches
 the Issue body, and starts a fresh read-only Codex process. It exits non-zero
-unless the reviewer returns a valid `PASS` result. This command is not called
-by `npm run validate` and is not added to ordinary CI.
+unless the reviewer returns a valid `PASS` result. `--cycle` is checked against
+the enforced maximum of three; an invocation above that limit stops with
+`HUMAN_DECISION_REQUIRED` before another reviewer starts. This command is not
+called by `npm run validate` and is not added to ordinary CI.
 
 The runner is intentionally one review invocation rather than a general
 orchestrator. The implementer handles an in-scope fix after
@@ -158,7 +161,10 @@ uncommitted changes are not treated as a successful complete-diff review.
 
 The first reviewer run produced blocking findings. The runner was corrected to
 enforce validation, include the complete Issue material, report the actual
-branch, and use structured JSONL output. Deterministic validation was rerun.
+branch, use structured JSONL output, and enforce the maximum review cycle.
+Deterministic validation was rerun. The read-only reviewer is instructed to
+inspect the reported validation result rather than rerun write-producing tests
+inside its restricted sandbox.
 The updated branch must be reviewed by a new `--ephemeral` process before any
 PASS is accepted; the implementer cannot self-certify the fixes.
 
