@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
-    "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
+    "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "review:independent": "npm run build && node dist/review/cli.js"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
