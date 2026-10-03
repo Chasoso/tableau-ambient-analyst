@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted
 
-This is a Proposed ADR from Technical Spike evidence. It is not an Accepted
-runtime decision. Human review is required before the status or direction is
-treated as project guidance.
+This ADR was accepted after the runtime technical spike and human review.
+TypeScript / Node.js is the initial core runtime for the PoC. The decision can
+be revisited if requirements or measured evidence change.
 
 ## Context
 
@@ -17,10 +17,10 @@ later connect to a Dashboard Extension. The project may also need external LLM
 providers, cloud execution, and native desktop audio capture on Windows or
 macOS, but none of those future choices should be fixed prematurely.
 
-The current hypothesis was TypeScript / Node.js for the core application, with
-a platform-specific capture helper if native audio becomes necessary. That is
-a provisional hypothesis, not a requirement. This spike compares it with
-Python, C# / .NET, and a deliberately small Hybrid approach.
+The selected initial direction is TypeScript / Node.js for the core
+application, with a platform-specific capture helper if native audio becomes
+necessary. The spike compared this direction with Python, C# / .NET, and a
+deliberately small Hybrid approach.
 
 The comparison is domain-neutral. It does not depend on a particular Tableau
 workbook, datasource, or demo dataset.
@@ -32,15 +32,15 @@ by operating system.
 
 ## Decision
 
-### Proposed direction
+### Accepted direction
 
-Use TypeScript / Node.js as the initial core runtime and toolchain for the PoC,
-subject to human confirmation.
+Use TypeScript / Node.js as the initial core runtime and toolchain for the PoC.
 
-The proposed toolchain direction is TypeScript on Node.js with a browser-facing
-TypeScript/JavaScript Extension boundary. Exact Node.js, TypeScript, package
-manager, framework, and test-library versions remain implementation choices for
-a later bootstrap Issue; this ADR does not add them.
+The accepted toolchain direction is TypeScript on Node.js with a
+browser-facing TypeScript/JavaScript Extension boundary. Exact Node.js,
+TypeScript, package manager, framework, and test-library versions remain
+implementation choices for a later bootstrap Issue; this ADR does not add
+them.
 
 Keep the core runtime cross-platform. If native desktop audio capture becomes
 necessary, introduce a platform-specific capture boundary rather than changing
@@ -48,7 +48,7 @@ the core runtime solely for one operating system. Candidate implementations
 could include Windows/WASAPI with a C#/.NET helper or macOS/ScreenCaptureKit
 with a Swift/native helper, but neither is selected here.
 
-This proposal does not select an LLM provider, MCP transport, persistence
+This decision does not select an LLM provider, MCP transport, persistence
 technology, WebSocket architecture, cloud provider, deployment topology, or
 final audio architecture.
 
@@ -125,7 +125,7 @@ before those costs are known to be necessary.
 
 ## Rationale
 
-The proposed TypeScript / Node.js direction optimizes for the current PoC's
+The accepted TypeScript / Node.js direction optimizes for the current PoC's
 highest-confidence needs:
 
 - the future Dashboard Extension is a JavaScript web application;
@@ -151,11 +151,11 @@ preserves more options.
 
 ## Trade-offs / consequences
 
-If this proposal is accepted, the project gains a coherent first toolchain for
+With this decision, the project gains a coherent first toolchain for
 the Extension-adjacent application and MCP experiments. It also postpones a
 multi-language boundary until a concrete capability requires it.
 
-The proposal accepts these costs:
+This decision accepts these costs:
 
 - TypeScript is not the strongest option for platform-specific native audio
   capture.
@@ -173,7 +173,7 @@ audio implementation is introduced by this ADR.
 
 ## Revisit when
 
-Revisit this proposal when any of the following becomes true:
+Revisit this decision when any of the following becomes true:
 
 - native platform audio capture becomes a core acceptance criterion rather than
   a future possibility;
