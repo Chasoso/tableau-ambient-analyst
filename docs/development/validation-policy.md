@@ -109,8 +109,9 @@ active Ruleset requires the existing `validation` and `secret-scan` checks;
 live or paid integration checks are not merge requirements. The Ruleset is the
 source of truth for enforcement details. It does not require an approving
 review count, so the human merge decision remains explicit without making a
-single-maintainer workflow unusable. An owner-only bypass is retained for
-recovery when the repository configuration or CI itself needs repair.
+single-maintainer workflow unusable. The repository owner retains an
+always-available Ruleset bypass capability. Repository policy reserves that
+bypass for CI or repository-configuration recovery rather than normal merges.
 
 External LLM, Hosted Tableau MCP, Tableau Cloud, live auth, tunnel, and paid
 API tests must not be normal CI requirements. A live test may be an explicit
