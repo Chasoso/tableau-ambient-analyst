@@ -106,7 +106,11 @@ the Issue body, and starts a fresh read-only Codex process. It exits non-zero
 unless the reviewer returns a valid `PASS` result. `--cycle` is checked against
 the enforced maximum of three; an invocation above that limit stops with
 `HUMAN_DECISION_REQUIRED` before another reviewer starts. This command is not
-called by `npm run validate` and is not added to ordinary CI.
+called by `npm run validate` and is not added to ordinary CI. Before validation
+or reviewer invocation, the runner requires a non-base feature branch, an
+existing base ref, a clean committed working tree, and a non-empty diff against
+that base. This prevents uncommitted or omitted working-tree changes from being
+reported as a complete review.
 
 The runner is intentionally one review invocation rather than a general
 orchestrator. The implementer handles an in-scope fix after

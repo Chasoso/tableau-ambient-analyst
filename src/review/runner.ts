@@ -48,6 +48,12 @@ inspect the reported validation evidence instead.
 }
 
 export function runIndependentReview(input: IndependentReviewInput): ReviewGateResult {
+  const preflightError = validateReviewScope(input.cwd, input.base);
+
+  if (preflightError) {
+    return reviewerInvocationFailure(preflightError);
+  }
+
   const validation = runDeterministicValidation(input.cwd);
 
   if (!validation.passed) {
@@ -136,6 +142,46 @@ export function currentBranch(cwd: string): string {
   } catch {
     return 'unknown-branch';
   }
+}
+
+function validateReviewScope(cwd: string, base: string): string | undefined {
+  if (!/^[A-Za-z0-9._/-]+$/.test(base)) {
+    return 'Base branch name is invalid.';
+  }
+
+  try {
+    const branch = currentBranch(cwd);
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+
+    if (!branch || branch === base) {
+      return 'Independent review requires a non-base feature branch.';
+    }
+
+    if (status) {
+      return 'Working tree must be clean and committed before independent review.';
+    }
+
+    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+
+    const changedFiles = execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+
+    if (!changedFiles) {
+      return 'Independent review requires a non-empty diff against the base branch.';
+    }
+  } catch {
+    return 'Could not verify the committed feature branch and base diff.';
+  }
+
+  return undefined;
 }
 
 function runDeterministicValidation(cwd: string): { passed: boolean } {
