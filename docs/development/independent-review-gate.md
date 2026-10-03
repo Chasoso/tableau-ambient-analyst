@@ -64,6 +64,76 @@ and validation result. It must remain factual and minimal. Do not require or
 provide the implementer's hidden reasoning, implementation transcript, or a
 summary designed to persuade the reviewer that the change is correct.
 
+## Pilot execution
+
+During the pilot, run the independent review manually in a separate Codex
+session or context. The reviewer context must not contain the implementation
+conversation, implementer reasoning, or a persuasive explanation of why the
+solution is correct.
+
+Use this sequence:
+
+1. The implementer completes the Issue work on the feature branch.
+2. The implementer performs self-review and reviews the complete diff.
+3. The implementer runs deterministic validation and records the actual
+   results.
+4. Start a separate Codex session or context with no implementation history.
+5. Give that reviewer only neutral inputs: the repository, feature branch,
+   intended base branch, Issue number, validation results, and this reusable
+   review procedure/prompt.
+6. The reviewer independently reads the complete Issue and acceptance
+   criteria, `AGENTS.md`, relevant policies, the complete diff against the
+   intended base, changed files, necessary surrounding code/docs, and relevant
+   ADRs.
+7. The reviewer returns `PASS` or `CHANGES_REQUIRED` using the output contract
+   below.
+8. If the result is `CHANGES_REQUIRED`, return the findings to the implementer,
+   apply only necessary in-scope fixes, and rerun deterministic validation.
+9. Start another fresh independent review against the updated complete diff.
+10. Repeat until the result is `PASS`, blocking findings are zero, and no
+    unresolved human escalation remains.
+11. Only then create the PR or, when an existing draft is being used for the
+    bootstrap exception below, mark it ready for normal review.
+
+A minimal handoff should contain factual metadata such as:
+
+```text
+Repository: Chasoso/tableau-ambient-analyst
+Issue: #NN
+Branch: feat/...
+Base: main
+
+Validation:
+- npm ci: passed
+- npm run validate: passed
+- git diff --check: passed
+
+Run the repository's independent pre-PR review procedure.
+```
+
+The handoff must not limit the reviewer to named files or selected changes.
+The reviewer must inspect the complete diff itself and may inspect necessary
+surrounding code or documentation. Do not pass an implementer summary as a
+substitute for that inspection.
+
+After any material correction, prefer a new review context for re-review. At a
+minimum, the updated complete diff must be independently re-evaluated; the
+implementer may never approve its own correction.
+
+If the environment cannot start a separate Codex session or context, record:
+
+```text
+Independent review: pending / unavailable
+Gate: not passed
+```
+
+Do not substitute the implementation session's self-review and do not report
+`PASS` in that situation. During the initial bootstrap of this gate only, a
+draft PR may be used to obtain the first independent review when no separate
+pre-PR reviewer is available. Such a draft is a bootstrap exception: it is not
+gate-passed, not ready for merge, and must remain clearly marked as pending
+until a fresh reviewer returns `PASS`.
+
 ## Review checklist
 
 Use the following checklist for every independent review. Mark an item as not
@@ -287,8 +357,9 @@ the implementer's self-assertion.
 
 ## Pilot approach
 
-Apply this gate manually to the next 2–3 representative Issues before adding
-automation. Record lightweight observations in the Issue or PR when useful:
+Apply the pilot execution procedure manually to the next 2–3 representative
+Issues before adding automation. Record lightweight observations in the Issue
+or PR when useful:
 
 - independent-review finding count;
 - blocking and non-blocking finding counts;
