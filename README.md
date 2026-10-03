@@ -41,7 +41,7 @@ full autonomy, or consistently correct decisions.
 
 Current direction:
 
-- TypeScript / Node.js is the proposed core runtime.
+- TypeScript / Node.js is the accepted initial core runtime.
 - The core is intended to remain cross-platform.
 - Development and baseline CI are local-first, deterministic, and no-network
   at the application level.
@@ -180,5 +180,6 @@ permission changes, material cost or data-flow choices, and merging.
 - [ADR guide](docs/adr/README.md)
 - [Initial runtime ADR](docs/adr/0001-initial-application-runtime.md)
 
-The ADR remains `Proposed`; runtime and provider decisions are not silently
-accepted by this README.
+The initial runtime ADR is `Accepted`: TypeScript / Node.js is the current core
+runtime. Provider, audio, deployment, and other architecture decisions remain
+open until separately evaluated and confirmed.
