@@ -6,6 +6,7 @@ import {
   parseReviewResult,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
+  validationFailure,
 } from '../src/review/gate.js';
 import { extractFinalReviewerMessage } from '../src/review/runner.js';
 
@@ -95,6 +96,14 @@ describe('independent review gate contract', () => {
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
     expect(result.escalationRequired).toBe(true);
+    expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+
+  it('keeps validation failures in the implementer fix loop', () => {
+    const result = validationFailure('typecheck failed');
+
+    expect(result.result).toBe('CHANGES_REQUIRED');
+    expect(result.escalationRequired).toBe(false);
     expect(canOpenPullRequest(true, result)).toBe(false);
   });
 });

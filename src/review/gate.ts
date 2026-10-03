@@ -1,5 +1,5 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
-export const maxReviewCycles = 5;
+export const maxReviewCycles = 6;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 
@@ -63,6 +63,15 @@ export function reviewerInvocationFailure(message: string): ReviewGateResult {
     blockingFindings: [`Reviewer invocation failed: ${message}`],
     nonBlockingFindings: [],
     escalationRequired: true,
+  };
+}
+
+export function validationFailure(message: string): ReviewGateResult {
+  return {
+    result: 'CHANGES_REQUIRED',
+    blockingFindings: [`Deterministic validation failed: ${message}`],
+    nonBlockingFindings: [],
+    escalationRequired: false,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   maxReviewCycles,
   parseReviewResult,
   reviewerInvocationFailure,
+  validationFailure,
   type ReviewGateResult,
 } from './gate.js';
 
@@ -75,7 +76,7 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
   const validation = runDeterministicValidation(input.cwd);
 
   if (!validation.passed) {
-    return reviewerInvocationFailure('Deterministic validation did not pass.');
+    return validationFailure('rerun the repository validation and fix the failure.');
   }
 
   const issue = readIssueContext(input.cwd, input.issue);
