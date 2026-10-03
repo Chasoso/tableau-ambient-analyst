@@ -14,9 +14,10 @@ The default path is:
 local -> deterministic -> no-network -> repeatable -> low-cost
 ```
 
-Runtime-specific commands and CI mappings are deliberately left for a later
-runtime/validation implementation Issue. This document defines categories and
-decision boundaries, not a command suite.
+The initial TypeScript/Node.js runtime maps the Layer 1 categories to local
+commands documented in this repository. This document still defines the
+categories and decision boundaries; it does not make external integrations or
+CI part of the default path.
 
 ## Validation layers
 
@@ -34,8 +35,25 @@ availability. The eventual runtime may map them to commands such as:
 - local secret scan; and
 - `git diff --check`.
 
-No concrete command name, framework, coverage threshold, or CI job is selected
-here. The runtime and later validation Issue must define the mapping.
+No coverage threshold or CI job is selected here. The runtime bootstrap maps the
+currently available checks as follows:
+
+| Category | Local command |
+| --- | --- |
+| formatter check | `npm run format:check` |
+| lint | `npm run lint` |
+| typecheck | `npm run typecheck` |
+| deterministic unit tests | `npm test` |
+| deterministic local build | `npm run build` |
+| complete Layer 1 validation | `npm run validate` |
+
+`git diff --check` remains a repository review check. Secret scanning is not
+mapped here because its intended primary scanner is deferred to Issue #13.
+
+For a clean local setup, use `npm ci` from the repository root, followed by
+`npm run validate`. Package installation may access the package registry; the
+validation commands themselves do not call external LLM, MCP, Tableau, cloud,
+database, or paid services.
 
 ### Layer 2 — Local integration validation
 
