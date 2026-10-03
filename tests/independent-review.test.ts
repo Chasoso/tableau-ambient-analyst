@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -10,6 +14,7 @@ import {
 } from '../src/review/gate.js';
 import {
   extractFinalReviewerMessage,
+  reserveReviewCycleAtPath,
   runReviewControlFlow,
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
@@ -302,5 +307,66 @@ describe('independent review runner control flow', () => {
 
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+});
+
+describe('review cycle state', () => {
+  it('creates initial state only when the state file is absent', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual({
+        branch: 'feature/review',
+        base: 'main',
+        cyclesUsed: 1,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['invalid JSON', '{'],
+    ['non-object JSON', 'null'],
+    ['array JSON', '[]'],
+    ['missing branch', JSON.stringify({ base: 'main', cyclesUsed: 0 })],
+    ['non-string branch', JSON.stringify({ branch: 42, base: 'main', cyclesUsed: 0 })],
+    ['non-string base', JSON.stringify({ branch: 'feature/review', base: 42, cyclesUsed: 0 })],
+    [
+      'non-integer cycles',
+      JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: 1.5 }),
+    ],
+    ['negative cycles', JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: -1 })],
+  ])('fails closed for %s without resetting the state', (_description, contents) => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    writeFileSync(statePath, contents, 'utf8');
+
+    try {
+      const error = reserveReviewCycleAtPath(statePath, 'feature/review', 'main');
+
+      expect(error).toContain('invalid');
+      expect(readFileSync(statePath, 'utf8')).toBe(contents);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the cycle limit when a valid state reaches the maximum', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: maxReviewCycles }),
+      'utf8',
+    );
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

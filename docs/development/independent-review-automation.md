@@ -123,7 +123,10 @@ the Issue context has been retrieved, immediately before the Codex process is
 started. A validation failure or Issue retrieval failure therefore returns a
 closed result without consuming a review cycle. Each runner invocation
 reserves at most one cycle; the cycle-limit result is returned before Codex is
-started.
+started. The state file is resolved through Git so linked worktrees use their
+actual git directory. It is created with a temporary file and rename, and an
+existing malformed or invalid state fails closed with
+`HUMAN_DECISION_REQUIRED` rather than resetting the counter.
 
 ## Gate result contract
 
