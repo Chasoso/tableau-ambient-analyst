@@ -97,6 +97,11 @@ default validation path is local, deterministic, no-network, repeatable, and
 low-cost. Future CI should center on this same path so that local evidence and
 CI evidence have the same meaning.
 
+The current baseline maps Layer 1 local validation to `npm run validate`. The
+baseline CI runs `npm ci` followed by the same `npm run validate`, and runs
+Gitleaks as the repository's primary secret-scan gate. Neither path performs
+live LLM, MCP, Tableau, cloud, database, tunnel, or paid integration calls.
+
 External LLM, Hosted Tableau MCP, Tableau Cloud, live auth, tunnel, and paid
 API tests must not be normal CI requirements. A live test may be an explicit
 manual check or an opt-in job when a later Issue defines its credentials,
