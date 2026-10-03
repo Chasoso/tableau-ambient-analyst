@@ -1,4 +1,3 @@
-import { maxReviewCycles, reviewCycleLimitExceeded } from './gate.js';
 import {
   resolveWorkingDirectory,
   runIndependentReview,
@@ -19,17 +18,13 @@ for (let index = 0; index < rawArguments.length; index += 1) {
 }
 
 const cwd = resolveWorkingDirectory(argumentsByName.get('cwd') ?? process.cwd());
-const cycle = Number.parseInt(argumentsByName.get('cycle') ?? '1', 10);
 const input: IndependentReviewInput = {
   cwd,
   base: argumentsByName.get('base') ?? 'main',
   issue: requiredArgument('issue'),
 };
 
-const result =
-  cycle >= 1 && cycle <= maxReviewCycles
-    ? runIndependentReview(input)
-    : reviewCycleLimitExceeded(cycle);
+const result = runIndependentReview(input);
 console.log(JSON.stringify(result, null, 2));
 
 if (result.result !== 'PASS') {

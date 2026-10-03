@@ -1,7 +1,16 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { isAbsolute, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 
-import { parseReviewResult, reviewerInvocationFailure, type ReviewGateResult } from './gate.js';
+import {
+  maxReviewCycles,
+  parseReviewResult,
+  reviewerInvocationFailure,
+  type ReviewGateResult,
+} from './gate.js';
+
+const reviewerTimeoutMs = 10 * 60 * 1000;
+const reviewStateFile = 'tableau-ambient-review-state.json';
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -57,6 +66,12 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
     return reviewerInvocationFailure(preflightError);
   }
 
+  const cycleError = reserveReviewCycle(input.cwd, input.base);
+
+  if (cycleError) {
+    return reviewerInvocationFailure(cycleError);
+  }
+
   const validation = runDeterministicValidation(input.cwd);
 
   if (!validation.passed) {
@@ -84,11 +99,16 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
         env: reviewerEnvironment(),
         input: buildReviewerPrompt(input, issue, validationEvidence, branch),
         maxBuffer: 1024 * 1024,
+        timeout: reviewerTimeoutMs,
       },
     );
 
     if (processResult.error) {
       return reviewerInvocationFailure(processResult.error.message);
+    }
+
+    if (processResult.signal) {
+      return reviewerInvocationFailure(`Codex was terminated by ${processResult.signal}.`);
     }
 
     if (processResult.status !== 0) {
@@ -185,6 +205,38 @@ function validateReviewScope(cwd: string, base: string): string | undefined {
     }
   } catch {
     return 'Could not verify the committed feature branch and base diff.';
+  }
+
+  return undefined;
+}
+
+function reserveReviewCycle(cwd: string, base: string): string | undefined {
+  const branch = currentBranch(cwd);
+  const statePath = join(cwd, '.git', reviewStateFile);
+  let cyclesUsed = 0;
+
+  try {
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      branch?: string;
+      base?: string;
+      cyclesUsed?: number;
+    };
+    if (state.branch === branch && state.base === base && typeof state.cyclesUsed === 'number') {
+      cyclesUsed = state.cyclesUsed;
+    }
+  } catch {
+    // The local state file is intentionally not tracked by Git.
+  }
+
+  if (cyclesUsed >= maxReviewCycles) {
+    return `Review cycle limit of ${maxReviewCycles} reached for ${branch}.`;
+  }
+
+  try {
+    const state = JSON.stringify({ branch, base, cyclesUsed: cyclesUsed + 1 });
+    writeFileSync(statePath, state, 'utf8');
+  } catch {
+    return 'Could not persist the bounded review-cycle state.';
   }
 
   return undefined;

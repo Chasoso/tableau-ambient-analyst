@@ -1,5 +1,5 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
-export const maxReviewCycles = 4;
+export const maxReviewCycles = 5;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 
@@ -33,12 +33,19 @@ export function parseReviewResult(raw: string): ReviewGateResult {
   }
 
   const { result, blockingFindings, nonBlockingFindings, escalationRequired } = value;
+  const allowedKeys = new Set([
+    'result',
+    'blockingFindings',
+    'nonBlockingFindings',
+    'escalationRequired',
+  ]);
 
   if (
     !isReviewResultName(result) ||
     !isStringArray(blockingFindings) ||
     !isStringArray(nonBlockingFindings) ||
-    typeof escalationRequired !== 'boolean'
+    typeof escalationRequired !== 'boolean' ||
+    Object.keys(value).some((key) => !allowedKeys.has(key))
   ) {
     return malformedResult('Reviewer output did not match the gate result contract.');
   }

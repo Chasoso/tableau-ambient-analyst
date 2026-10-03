@@ -96,25 +96,24 @@ The repository provides an opt-in local command:
 ```bash
 npm run review:independent -- \
   --issue 26 \
-  --base main \
-  --cycle 1
+  --base main
 ```
 
 The command builds the small runner, re-runs deterministic validation, fetches
 the Issue body, and starts a fresh read-only Codex process. It exits non-zero
-unless the reviewer returns a valid `PASS` result. `--cycle` is checked against
-the enforced maximum of four; an invocation above that limit stops with
-`HUMAN_DECISION_REQUIRED` before another reviewer starts. This command is not
-called by `npm run validate` and is not added to ordinary CI. Before validation
-or reviewer invocation, the runner requires a non-base feature branch, an
-existing base ref, a clean committed working tree, and a non-empty diff against
-that base. This prevents uncommitted or omitted working-tree changes from being
-reported as a complete review.
+unless the reviewer returns a valid `PASS` result. The runner stores only a
+small branch/base cycle counter in the local, untracked
+`.git/tableau-ambient-review-state.json` file and stops after five invocations across process
+restarts. This command is not called by `npm run validate` and is not added to
+ordinary CI. Before validation or reviewer invocation, the runner requires a
+non-base feature branch, an existing base ref, a clean committed working tree,
+and a non-empty diff against that base. This prevents uncommitted or omitted
+working-tree changes from being reported as a complete review.
 
 The runner is intentionally one review invocation rather than a general
 orchestrator. The implementer handles an in-scope fix after
 `CHANGES_REQUIRED`, reruns validation, and invokes the command again from the
-updated branch. The documented maximum is four independent review cycles;
+updated branch. The documented maximum is five independent review cycles;
 remaining blocking findings then become `HUMAN_DECISION_REQUIRED`.
 
 ## Gate result contract
@@ -183,7 +182,7 @@ uncertainty.
 - `CHANGES_REQUIRED`: return blocking findings, fix in scope, rerun validation,
   and start a fresh review;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
-- four review cycles with unresolved blocking findings: stop and escalate.
+- five review cycles with unresolved blocking findings: stop and escalate.
 
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn.
