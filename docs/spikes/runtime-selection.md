@@ -10,9 +10,9 @@ choices?
 
 TypeScript / Node.js may be the smallest broadly aligned core runtime because
 the future Dashboard Extension is JavaScript-based and the PoC needs async
-agentic API, MCP, streaming, and structured-data handling. Windows-specific
-audio may be better isolated behind a later helper rather than deciding the
-whole application runtime.
+agentic API, MCP, streaming, and structured-data handling. Platform-specific
+native audio may be better isolated behind later helpers rather than deciding
+the whole application runtime.
 
 This remains provisional. The purpose of the spike is to test the hypothesis
 against alternatives, not to prove it.
@@ -69,6 +69,12 @@ application boundary than on basic MCP availability alone.
 The official SDK pages should be rechecked before implementation because MCP
 specification versions and SDK release lines are moving quickly.
 
+The current official MCP SDK tiering lists TypeScript, Python, and C# as Tier 1
+SDKs. C# therefore remains a credible MCP option; the recommendation is not
+based on C# being weak at MCP. TypeScript remains preferable for this initial
+core because of the Extension affinity, the possibility of one language across
+the browser/server flow, and lower initial operational complexity.
+
 ### Tableau Extension boundary
 
 Tableau documents Extensions as web applications using a JavaScript library.
@@ -81,14 +87,19 @@ That makes TypeScript / Node.js the lowest-friction initial pairing for the
 browser-facing edge, while leaving a Python or .NET backend possible behind a
 deliberate contract.
 
-### Windows audio
+### Platform-specific native audio
 
 Windows-native capture such as WASAPI loopback or microphone integration is a
 stronger fit for a Windows-native implementation than for a browser-oriented
-Node.js core. C# / .NET is therefore a credible helper choice if audio becomes
-central. Python may also be useful for audio analysis, but neither observation
-changes the current separation between the application runtime and a possible
-native capture helper.
+Node.js core. C# / .NET is therefore a credible Windows helper candidate if
+capture becomes central. Microsoft documents WASAPI as the Windows Audio
+Session API for application audio endpoints.
+
+macOS provides different native options: Apple documents ScreenCaptureKit for
+capturing screen content and audio, and Core Audio for interacting with audio
+hardware and system audio taps. Swift/native code is therefore a credible
+macOS helper candidate. Neither platform-specific observation should determine
+the portable core runtime by itself.
 
 ### Developer experience and operations
 
@@ -96,16 +107,19 @@ TypeScript / Node.js offers one primary language for the future Extension edge
 and the first local server, reducing early contract and setup overhead. Python
 is attractive when analysis, notebooks, local ML, or scientific processing
 dominates. C# / .NET is attractive for Windows-native integration and a
-Microsoft-centered operational target. Hybrid has the broadest capability
-coverage but the highest coordination and operational cost.
+Microsoft-centered operational target, while its Tier 1 MCP SDK status keeps it
+credible for MCP work as well. Hybrid has the broadest capability coverage but
+the highest coordination and operational cost.
 
 ## Recommendation
 
 Recommend TypeScript / Node.js for the initial core runtime and toolchain,
 pending human review of this Proposed ADR.
 
-Keep Windows-specific audio behind a module or process boundary and revisit a
-C# helper only if native capture is demonstrated to be a core requirement.
+Keep the core runtime cross-platform. If native capture becomes necessary,
+introduce a platform-specific module or process boundary: for example, a C# /
+.NET helper candidate for Windows/WASAPI or a Swift/native helper candidate for
+macOS/ScreenCaptureKit. These are candidates, not selected implementations.
 Keep the provider, MCP transport, persistence, cloud, and final audio choices
 open for later Technical Spikes.
 
