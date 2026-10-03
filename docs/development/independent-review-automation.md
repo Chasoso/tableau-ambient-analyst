@@ -118,6 +118,13 @@ this spike because the implementation itself required several corrective
 reviews; the bound remains explicit and easy to revise after pilot evidence.
 Remaining blocking findings then become `HUMAN_DECISION_REQUIRED`.
 
+Cycle state is reserved only after the deterministic validation succeeds and
+the Issue context has been retrieved, immediately before the Codex process is
+started. A validation failure or Issue retrieval failure therefore returns a
+closed result without consuming a review cycle. Each runner invocation
+reserves at most one cycle; the cycle-limit result is returned before Codex is
+started.
+
 ## Gate result contract
 
 The smallest machine-readable result is:

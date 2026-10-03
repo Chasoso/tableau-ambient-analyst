@@ -25,6 +25,20 @@ type IssueContext = {
   url: string;
 };
 
+export type ReviewRunnerDependencies = {
+  validateScope: (cwd: string, base: string) => string | undefined;
+  runValidation: (cwd: string) => boolean;
+  readIssue: (cwd: string, issue: string) => IssueContext | undefined;
+  reserveCycle: (cwd: string, base: string) => string | undefined;
+  invokeReviewer: (
+    input: IndependentReviewInput,
+    issue: IssueContext,
+    validation: string[],
+    branch: string,
+  ) => ReviewGateResult;
+  currentBranch: (cwd: string) => string;
+};
+
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
   issue: IssueContext,
@@ -61,33 +75,58 @@ inspect the reported validation evidence instead.
 }
 
 export function runIndependentReview(input: IndependentReviewInput): ReviewGateResult {
-  const preflightError = validateReviewScope(input.cwd, input.base);
+  return runReviewControlFlow(input, defaultRunnerDependencies());
+}
+
+export function runReviewControlFlow(
+  input: IndependentReviewInput,
+  dependencies: ReviewRunnerDependencies,
+): ReviewGateResult {
+  const preflightError = dependencies.validateScope(input.cwd, input.base);
 
   if (preflightError) {
     return reviewerInvocationFailure(preflightError);
   }
 
-  const cycleError = reserveReviewCycle(input.cwd, input.base);
-
-  if (cycleError) {
-    return reviewerInvocationFailure(cycleError);
-  }
-
-  const validation = runDeterministicValidation(input.cwd);
-
-  if (!validation.passed) {
+  if (!dependencies.runValidation(input.cwd)) {
     return validationFailure('rerun the repository validation and fix the failure.');
   }
 
-  const issue = readIssueContext(input.cwd, input.issue);
+  const issue = dependencies.readIssue(input.cwd, input.issue);
 
   if (!issue) {
     return reviewerInvocationFailure('Issue body could not be retrieved.');
   }
 
-  const branch = currentBranch(input.cwd);
+  const cycleError = dependencies.reserveCycle(input.cwd, input.base);
+
+  if (cycleError) {
+    return reviewerInvocationFailure(cycleError);
+  }
+
+  const branch = dependencies.currentBranch(input.cwd);
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
 
+  return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+}
+
+function defaultRunnerDependencies(): ReviewRunnerDependencies {
+  return {
+    validateScope: validateReviewScope,
+    runValidation: (cwd) => runDeterministicValidation(cwd).passed,
+    readIssue: readIssueContext,
+    reserveCycle: reserveReviewCycle,
+    invokeReviewer: invokeCodexReviewer,
+    currentBranch,
+  };
+}
+
+function invokeCodexReviewer(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  validationEvidence: string[],
+  branch: string,
+): ReviewGateResult {
   const schemaPath = resolve(input.cwd, 'src/review/review-result.schema.json');
 
   try {
