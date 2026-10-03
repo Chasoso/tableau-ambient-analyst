@@ -10,12 +10,11 @@ export const requiredEvaluationCaseIds = [
   'insufficient-evidence',
 ] as const;
 
-export const evaluationCases = [
+export const evaluationCases: readonly EvaluationCase[] = [
   {
     id: 'one-call-sufficient',
     title: 'One tool call is sufficient',
-    analysisGoal: 'Determine the current value of a single metric.',
-    initialHypothesis: 'The current metric value is above the stated threshold.',
+    analysisGoal: 'Obtain the current value of a single metric.',
     requiredEvidence: [
       { id: 'current-metric', description: 'Metric value for the current period.' },
     ],
@@ -28,7 +27,7 @@ export const evaluationCases = [
         {
           action: 'get-metric',
           description: 'Read the current metric value.',
-          result: 'The current metric value is above the stated threshold.',
+          result: 'The current metric value is 120.',
           evidence: ['current-metric'],
           status: 'available',
         },
@@ -496,4 +495,4 @@ export const evaluationCases = [
       ],
     },
   },
-] as const satisfies readonly EvaluationCase[];
+];

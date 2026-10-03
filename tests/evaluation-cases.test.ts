@@ -39,6 +39,80 @@ describe('domain-neutral evaluation cases', () => {
     }
   });
 
+  it('uses only allowed actions in fixture responses', () => {
+    for (const evaluationCase of evaluationCases) {
+      const allowedActions = new Set(evaluationCase.allowedToolBehavior);
+
+      for (const response of evaluationCase.fixture.responses) {
+        expect(allowedActions.has(response.action)).toBe(true);
+      }
+    }
+  });
+
+  it('declares every evidence ID emitted by fixtures', () => {
+    for (const evaluationCase of evaluationCases) {
+      const declaredEvidence = new Set([
+        ...evaluationCase.requiredEvidence.map(({ id }) => id),
+        ...(evaluationCase.optionalEvidence?.map(({ id }) => id) ?? []),
+      ]);
+
+      for (const response of evaluationCase.fixture.responses) {
+        for (const evidenceId of response.evidence) {
+          expect(declaredEvidence.has(evidenceId)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('does not duplicate evidence IDs within a case', () => {
+    for (const evaluationCase of evaluationCases) {
+      const evidenceIds = [
+        ...evaluationCase.requiredEvidence.map(({ id }) => id),
+        ...(evaluationCase.optionalEvidence?.map(({ id }) => id) ?? []),
+      ];
+
+      expect(new Set(evidenceIds).size).toBe(evidenceIds.length);
+    }
+  });
+
+  it('makes required evidence available for conclusive outcomes', () => {
+    const conclusiveOutcomes = new Set(['supported', 'revised', 'rejected']);
+    const evidenceStatuses = new Set(['available', 'conflicting']);
+
+    for (const evaluationCase of evaluationCases) {
+      if (!conclusiveOutcomes.has(evaluationCase.expectedOutcomeType)) {
+        continue;
+      }
+
+      const observedEvidence = new Set(
+        evaluationCase.fixture.responses
+          .filter(({ status }) => evidenceStatuses.has(status))
+          .flatMap(({ evidence }) => evidence),
+      );
+
+      for (const { id } of evaluationCase.requiredEvidence) {
+        expect(observedEvidence.has(id)).toBe(true);
+      }
+    }
+  });
+
+  it('keeps insufficient-evidence cases incomplete', () => {
+    for (const evaluationCase of evaluationCases) {
+      if (evaluationCase.expectedOutcomeType !== 'insufficient-evidence') {
+        continue;
+      }
+
+      const observedEvidence = new Set(
+        evaluationCase.fixture.responses.flatMap(({ evidence }) => evidence),
+      );
+      const requiredEvidenceIsComplete = evaluationCase.requiredEvidence.every(({ id }) =>
+        observedEvidence.has(id),
+      );
+
+      expect(requiredEvidenceIsComplete).toBe(false);
+    }
+  });
+
   it('represents all expected outcome types without provider-specific contracts', () => {
     const outcomes = new Set(
       evaluationCases.map((evaluationCase) => evaluationCase.expectedOutcomeType),
