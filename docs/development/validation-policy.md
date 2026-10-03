@@ -102,6 +102,17 @@ baseline CI runs `npm ci` followed by the same `npm run validate`, and runs
 Gitleaks as the repository's primary secret-scan gate. Neither path performs
 live LLM, MCP, Tableau, cloud, database, tunnel, or paid integration calls.
 
+## Main branch enforcement
+
+Changes to `main` are required to go through a pull request. The repository's
+active Ruleset requires the existing `validation` and `secret-scan` checks;
+live or paid integration checks are not merge requirements. The Ruleset is the
+source of truth for enforcement details. It does not require an approving
+review count, so the human merge decision remains explicit without making a
+single-maintainer workflow unusable. The repository owner retains an
+always-available Ruleset bypass capability. Repository policy reserves that
+bypass for CI or repository-configuration recovery rather than normal merges.
+
 External LLM, Hosted Tableau MCP, Tableau Cloud, live auth, tunnel, and paid
 API tests must not be normal CI requirements. A live test may be an explicit
 manual check or an opt-in job when a later Issue defines its credentials,
