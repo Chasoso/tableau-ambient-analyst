@@ -4,7 +4,9 @@
 
 ## Related Issue(s)
 
-- Closes #
+- Related: #
+
+<!-- Use Closes #<issue> only when this PR fully completes the Issue. -->
 
 ## What changed
 
@@ -42,6 +44,6 @@
 
 -
 
-References: [validation policy](../docs/development/validation-policy.md),
-[external-integration safety](../docs/development/external-integration-safety.md),
-and [ADR guidance](../docs/adr/README.md) when applicable.
+References: [validation policy](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/validation-policy.md),
+[external-integration safety](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/external-integration-safety.md),
+and [ADR guidance](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/adr/README.md) when applicable.

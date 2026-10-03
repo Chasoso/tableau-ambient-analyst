@@ -9,9 +9,9 @@ assignees: ''
 Use this template when uncertainty reduction is the primary goal, rather than
 delivery of an already-decided implementation.
 
-See the [Issue authoring guide](../../docs/development/issue-authoring-guide.md),
-[validation policy](../../docs/development/validation-policy.md), and
-[external-integration safety policy](../../docs/development/external-integration-safety.md)
+See the [Issue authoring guide](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/issue-authoring-guide.md),
+[validation policy](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/validation-policy.md), and
+[external-integration safety policy](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/external-integration-safety.md)
 for detailed guidance. Use the latter two when Layer 3 or live integration is
 explicitly required.
 
@@ -57,4 +57,4 @@ explicitly required.
 
 <!-- Agent may organize evidence and recommend. Human confirmation closes the learning cycle. -->
 
-<!-- A material architecture decision may need an ADR after human confirmation: ../../docs/adr/README.md -->
+<!-- A material architecture decision may need an ADR after human confirmation: https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/adr/README.md -->

@@ -8,9 +8,10 @@ assignees: ''
 
 Use this template when the product and architecture direction are already
 decided. If reducing uncertainty is the main goal, use the
-[Technical Spike template](technical-spike.md) instead.
+[Technical Spike template](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/.github/ISSUE_TEMPLATE/technical-spike.md)
+instead.
 
-See the [Issue authoring guide](../../docs/development/issue-authoring-guide.md)
+See the [Issue authoring guide](https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/issue-authoring-guide.md)
 for the distinction and detailed guidance.
 
 ## Purpose
@@ -37,7 +38,7 @@ for the distinction and detailed guidance.
 
 -
 
-<!-- Use the validation policy for external or live checks when applicable. -->
+<!-- For external or live checks, see: https://github.com/Chasoso/tableau-ambient-analyst/blob/main/docs/development/validation-policy.md -->
 
 ## Human review / experience checks
 
