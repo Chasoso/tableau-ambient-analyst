@@ -96,7 +96,11 @@ following boundaries:
 Before opening a PR, review the full diff, scope, acceptance criteria,
 secrets, debug or temporary files, unfinished TODOs, unintended file changes,
 and documentation consistency. Report checks that do not exist or were not
-run; do not claim runtime validation that was not performed.
+run; do not claim runtime validation that was not performed. After self-review
+and deterministic validation pass, obtain an independent review in a fresh,
+minimal context before creating the PR. Do not create the PR while blocking
+findings or unresolved human escalations remain. Follow the detailed
+[`independent review gate`](docs/development/independent-review-gate.md).
 
 Stop and report when satisfying the Issue requires a material human-owned
 decision, a destructive or irreversible operation, production credentials, or
