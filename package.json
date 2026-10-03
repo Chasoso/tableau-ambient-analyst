@@ -1,0 +1,28 @@
+{
+  "name": "tableau-ambient-analyst",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tableau Ambient Analyst PoC",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "format": "prettier --write src/**/*.ts tests/**/*.ts package.json tsconfig.json eslint.config.mjs vitest.config.mjs .prettierrc.json",
+    "format:check": "prettier --check src/**/*.ts tests/**/*.ts package.json tsconfig.json eslint.config.mjs vitest.config.mjs .prettierrc.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc",
+    "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.6.2",
+    "eslint": "10.12.0",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3"
+  }
+}
