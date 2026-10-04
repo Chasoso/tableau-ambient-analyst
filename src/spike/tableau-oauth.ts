@@ -13,12 +13,17 @@ import {
   type UsageTelemetry,
 } from './response-telemetry.js';
 import { measuredCaseSetups } from './measured-case-setup.js';
+import {
+  buildOpenAiMcpToolConfiguration,
+  tableauMcpAllowedTools,
+  tableauMcpServerUrl,
+} from './openai-mcp-request.js';
 
-const tableauMcpUrl = 'https://mcp.tableau.com';
+const tableauMcpUrl = tableauMcpServerUrl;
 const tableauPodUrl = 'https://10ax.online.tableau.com';
 const protectedResourceMetadataUrl = `${tableauMcpUrl}/.well-known/oauth-protected-resource`;
 const datasourceLuid = '14f3ac6d-1171-4065-baac-c63bdce1470f';
-const allowedTools = ['list-datasources', 'get-datasource-metadata', 'query-datasource'] as const;
+const allowedTools = tableauMcpAllowedTools;
 // Temporary Issue #17 exception: Hosted Tableau MCP currently advertises this
 // full catalog scope set during initialization. The effective safety boundary
 // remains the dedicated Viewer identity, approved datasource, allowed_tools,
@@ -283,11 +288,7 @@ type OpenAiRunSummary = {
   elapsedMs: number;
 };
 
-async function runOpenAiMcpRequest(
-  accessToken: string,
-  input: string,
-  tools: readonly string[],
-): Promise<OpenAiRunSummary> {
+async function runOpenAiMcpRequest(accessToken: string, input: string): Promise<OpenAiRunSummary> {
   const startedAt = Date.now();
   const apiKey = readOpenAiKey();
   const response = await fetch('https://api.openai.com/v1/responses', {
@@ -300,16 +301,7 @@ async function runOpenAiMcpRequest(
       model: 'gpt-5.6-luna',
       input,
       max_output_tokens: 256,
-      tools: [
-        {
-          type: 'mcp',
-          server_label: 'tableau-hosted',
-          server_url: tableauMcpUrl,
-          authorization: accessToken,
-          allowed_tools: tools,
-          require_approval: 'never',
-        },
-      ],
+      tools: [buildOpenAiMcpToolConfiguration(accessToken)],
     }),
   });
   if (!response.ok) {
@@ -365,14 +357,7 @@ async function runRelayDiagnostic(
 ): Promise<void> {
   const startedAt = Date.now();
   const apiKey = readOpenAiKey();
-  const toolConfiguration = {
-    type: 'mcp',
-    server_label: 'tableau-hosted',
-    server_url: tableauMcpUrl,
-    authorization: '<redacted>',
-    allowed_tools: allowedTools,
-    require_approval: 'never',
-  };
+  const toolConfiguration = buildOpenAiMcpToolConfiguration(accessToken);
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
@@ -383,12 +368,7 @@ async function runRelayDiagnostic(
       model: 'gpt-5.6-luna',
       input: `Use list-datasources only to confirm that datasource ${datasourceLuid} is visible. Return a short confirmation.`,
       max_output_tokens: 64,
-      tools: [
-        {
-          ...toolConfiguration,
-          authorization: accessToken,
-        },
-      ],
+      tools: [toolConfiguration],
     }),
   });
   const requestId = safeRequestId(response);
@@ -453,22 +433,19 @@ async function runApprovedChecks(accessToken: string): Promise<boolean> {
   const checks = [
     {
       name: 'list-datasources',
-      tools: [allowedTools[0]],
       input: `Use list-datasources only to confirm that datasource ${datasourceLuid} is visible. Do not inspect or return unrelated datasource data. Return only a short confirmation.`,
     },
     {
       name: 'get-datasource-metadata',
-      tools: [allowedTools[1]],
       input: `Use get-datasource-metadata for datasource ${datasourceLuid} only. Do not query rows or access another datasource. Return only a short confirmation.`,
     },
     {
       name: 'query-datasource',
-      tools: [allowedTools[1], allowedTools[2]],
       input: `First use get-datasource-metadata for datasource ${datasourceLuid} only. Then use query-datasource once with an actual numeric measure or other valid field returned by that metadata. Use one minimal aggregation-first query with at most 100 result rows. Do not retrieve bulk row-level data, use unrestricted SQL/code, or access another datasource. Return only a short confirmation.`,
     },
   ] as const;
   for (const check of checks) {
-    const summary = await runOpenAiMcpRequest(accessToken, check.input, check.tools);
+    const summary = await runOpenAiMcpRequest(accessToken, check.input);
     const failed = summary.calls.some((call) => call.error !== null);
     console.log(
       JSON.stringify({
@@ -490,7 +467,7 @@ async function runApprovedChecks(accessToken: string): Promise<boolean> {
 async function runLiveCases(accessToken: string): Promise<void> {
   for (const evaluationCase of measuredCaseSetups) {
     const input = `Case ${evaluationCase.id}. ${evaluationCase.initialPrompt} Datasource is fixed to ${datasourceLuid}. Use only the approved read-only tools: list-datasources, get-datasource-metadata, query-datasource. Maximum 6 MCP calls, maximum 1 recoverable retry, aggregation-first, maximum 100 result rows, no writes, no other datasource. Return a concise answer followed by exactly one JSON object with keys outcome, summary, evidence_complete, missing_evidence, hypothesis_state, and stop_reason. Use outcome values supported, revised, rejected, or insufficient-evidence; use hypothesis_state values maintained, revised, rejected, or not-applicable; use stop_reason values sufficient-evidence, insufficient-evidence, tool-error, limit-reached, or other. Do not reproduce raw rows, tokens, headers, or credentials.`;
-    const summary = await runOpenAiMcpRequest(accessToken, input, allowedTools);
+    const summary = await runOpenAiMcpRequest(accessToken, input);
     console.log(
       JSON.stringify({
         status: 'live_evaluation_case',

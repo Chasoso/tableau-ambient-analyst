@@ -678,6 +678,68 @@ No further measured run or retry is authorized by this record. Human review is
 required before deciding whether to spend additional live budget or escalate
 the Hosted MCP reliability issue.
 
+## Responses API remote MCP request-construction audit
+
+This audit was deterministic only; it made no OAuth, OpenAI, or Hosted MCP
+request.
+
+### Call-site inventory
+
+| Call site | Purpose | Builder | Authorization source |
+| --- | --- | --- | --- |
+| `runOpenAiMcpRequest` | approved preflight checks and measured cases | shared `buildOpenAiMcpToolConfiguration` | current function argument from OAuth access token |
+| `runRelayDiagnostic` | opt-in relay diagnostic | shared `buildOpenAiMcpToolConfiguration` | current function argument from OAuth access token |
+
+There are no other `responses` API invocation sites and no `previous_response_id`
+usage. Preflight checks and measured cases each create an independent request;
+no MCP tool list or authorization state is cached in the application.
+
+### MCP configuration contract
+
+The shared builder now emits every request with:
+
+```text
+type: mcp
+server_label: tableau-hosted
+server_url: https://mcp.tableau.com
+authorization: current OAuth access token (raw value, never logged)
+allowed_tools: list-datasources, get-datasource-metadata, query-datasource
+require_approval: never
+```
+
+The builder rejects missing, empty, or whitespace-only authorization before the
+Responses API call. It does not add a `Bearer` prefix to the `authorization`
+field; the field is the raw OAuth access token as specified by OpenAI. The
+OpenAI API key remains a separate header credential and is obtained through the
+existing Keychain boundary.
+
+### Findings
+
+- All current Responses API call sites use the same builder.
+- Authorization is explicitly supplied on every independent request.
+- Each request uses the current access-token argument; refresh-token values are
+  not accepted by the builder as a separate path.
+- `allowed_tools` is fixed to the approved three tools for every request.
+- `server_label`, `server_url`, and `require_approval` are fixed consistently.
+- No `previous_response_id` is used, so there is no implicit credential or MCP
+  session inheritance assumption.
+- The code does not cache `mcp_list_tools` output across requests.
+
+Classification: **NO_REQUEST_CONSTRUCTION_BUG_FOUND**. The previous HTTP 424
+remains more consistent with an external OpenAI remote-MCP connector / Hosted
+MCP interaction failure than with omitted authorization in this repository.
+
+### Deterministic regression coverage
+
+`tests/openai-mcp-request.test.ts` verifies complete configurations for
+preflight and four independent case-shaped requests, token replacement between
+requests, and fail-closed behavior for empty/whitespace authorization. The
+tests contain only synthetic token strings and no credential material.
+
+The audit is aligned with the current [OpenAI remote MCP API reference](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal):
+the application supplies the OAuth token in `authorization`, selects tools with
+`allowed_tools`, supplies `server_url`, and explicitly sets the approval policy.
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
