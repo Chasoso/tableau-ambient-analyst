@@ -783,6 +783,56 @@ Because the token was emitted to the session output, human review should decide
 whether the temporary Site Admin token must be revoked or otherwise invalidated
 before any further use. No additional live retry was performed.
 
+## Final measured batch after token abandonment
+
+The previously exposed Site Admin token was not reused. It was no longer
+available to the process and is recorded as compromised/abandoned. A fresh
+Site Admin OAuth flow was completed after the redaction test passed.
+
+Preflight succeeded with the fresh token:
+
+- Direct Hosted MCP `initialize`: HTTP 200.
+- Direct Hosted MCP `tools/list`: HTTP 200.
+- Approved tools, metadata, and minimal aggregated query checks: successful.
+- OpenAI MCP checks: all three successful.
+
+The final four-case batch then ran once per case. No automatic retry occurred.
+
+| Case | Execution | MCP calls | Final answer | Structured outcome | Result |
+| --- | --- | ---: | --- | --- | --- |
+| `incomplete-first-result` | reached | 2 | empty | unavailable | inconclusive |
+| `empty-result-recovery` | reached | 1 | empty | unavailable | inconclusive |
+| `hypothesis-disproved` | reached | 1 | empty | unavailable | inconclusive |
+| `insufficient-evidence` | reached | 2 | empty | unavailable | inconclusive |
+
+There was no HTTP connector failure during this batch. However, the provider did
+not return a final answer or structured outcome in any case. The tool traces did
+not establish the required behaviors: no confirmed workbook follow-up, no
+confirmed empty-result recovery, no hypothesis state, and no
+insufficient-evidence classification. The cases therefore remain evidence of
+an instrumentation/provider-output limitation, not successful agentic
+behavior. The agentic feasibility classification is **INCONCLUSIVE**.
+
+Known OpenAI usage for this continuation:
+
+- Three preflight checks: approximately `$0.00833454`.
+- Four measured cases: approximately `$0.00521552`.
+- Total known continuation cost: approximately `$0.01355006`.
+- No model fallback was used; all calls used `gpt-5.6-luna`.
+
+Security status:
+
+- Old exposed token: not reused; abandoned.
+- Fresh token: used for this continuation only.
+- Logger redaction test: passed before live calls.
+- Raw token exposure during this continuation: none observed.
+- Model-visible tools: the approved three read-only tools only.
+- Write calls, site-setting changes, permission changes, and datasource
+  expansion: none.
+
+The dedicated Viewer least-privilege path remains unresolved and is not changed
+by the temporary Site Admin feasibility run.
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
