@@ -589,6 +589,95 @@ The four cases now exercise distinct behaviors: evidence-gap continuation,
 empty-result recovery, hypothesis revision, and stopping at the evidence
 boundary.
 
+## Temporary privileged feasibility configuration
+
+This section records the approved technical-spike exception that temporarily
+used a Tableau Site Admin OAuth identity to separate agentic feasibility from
+the unresolved least-privilege Hosted MCP authentication problem. This is not
+a production recommendation and does not resolve the dedicated Viewer path.
+
+Safety boundaries remained unchanged:
+
+- OpenAI model: `gpt-5.6-luna`, with no fallback.
+- Model-visible tools: `list-datasources`, `get-datasource-metadata`, and
+  `query-datasource` only.
+- Datasource: `14f3ac6d-1171-4065-baac-c63bdce1470f` only.
+- Read-only, aggregation-first, maximum 100 rows, no write calls.
+- Site-level MCP settings were not changed.
+
+### Site Admin preflight
+
+The fresh Site Admin OAuth flow issued a token with approximately 3599 seconds
+of lifetime. Token value was not logged. The underlying VDS read-metadata check
+returned HTTP 200. The following direct Hosted MCP checks also succeeded:
+
+- `initialize`: HTTP 200; protocol `2025-06-18`.
+- `tools/list`: HTTP 200; all three approved tools were present.
+- `get-datasource-metadata`: successful through the approved OpenAI MCP check.
+- Minimal aggregated `query-datasource`: successful, one result row.
+- Target datasource remained fixed to the approved LUID.
+
+The Hosted MCP returned a larger catalog to direct `tools/list`, but the OpenAI
+requests used `allowed_tools` for only the approved three tools. No write-capable
+tool was called. The token `iss`/`aud` metadata was not emitted by this run's
+sanitized harness output, so it is recorded as unavailable rather than inferred.
+
+### Viewer versus Site Admin interpretation
+
+| Property | Dedicated Viewer path | Temporary Site Admin path | Assessment |
+| --- | --- | --- | --- |
+| Token issuance | Succeeds | Succeeds | Same observed issuance behavior |
+| `aud` | CIMD URL | Not captured in this run | No causal comparison available |
+| Hosted `initialize` | Repeated/intermittent 401 `invalid_token` | HTTP 200 | Privileged path improved feasibility, but does not prove role causation |
+| `tools/list` | Previously successful in an earlier run; current Viewer reproducibility unresolved | HTTP 200 | Site Admin path is operational for this attempt |
+| Least-privilege readiness | Blocked/unresolved | Not evaluated | Site Admin is only a temporary feasibility configuration |
+
+### Measured batch result
+
+The first measured case started only after the full preflight passed:
+
+`incomplete-first-result` produced two MCP calls (metadata followed by one
+aggregated query), but no final answer or structured outcome was captured. It
+therefore did not demonstrate the required follow-up workbook exploration and
+is recorded as **inconclusive / criterion not met**, not as a successful agentic
+result.
+
+Before the second case could start, the OpenAI remote MCP connector failed while
+retrieving the Hosted MCP tool list:
+
+```text
+HTTP 424
+type: external_connector_error
+code: http_error
+message: Error retrieving tool list from MCP server: 'tableau-hosted'
+param: tools
+```
+
+The remaining three cases were not run. No retry was performed, so the final
+four-case allowance is only partially consumed by this interrupted batch and
+the unused cases are not valid evidence of agentic behavior.
+
+Known cost for this attempt was approximately `$0.00634` for the three approved
+preflight checks plus the first case request; the failed connector request did
+not return usage in the harness output. This remains below the approximately
+`$0.50` spike target, but the batch is not considered complete.
+
+### Feasibility interpretation
+
+- Agentic feasibility: **INCONCLUSIVE**. The Site Admin path reached the
+  required preflight, but the measured run did not capture a final outcome and
+  the connector failed before the remaining cases.
+- Least-privilege readiness: **NOT READY / BLOCKED**. Site Admin success does
+  not resolve the dedicated Viewer `invalid_token` reproducibility issue.
+- Privileged identity changed the observed preflight outcome in this attempt:
+  **YES, operationally**, but role causation is not proven because the Site
+  Admin token audience was not captured and the Hosted connector can fail
+  independently with HTTP 424.
+
+No further measured run or retry is authorized by this record. Human review is
+required before deciding whether to spend additional live budget or escalate
+the Hosted MCP reliability issue.
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
