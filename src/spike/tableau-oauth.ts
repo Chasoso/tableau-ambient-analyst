@@ -3,6 +3,17 @@ import { createServer, type Server } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
 
+import {
+  extractFinalAnswer,
+  extractStructuredOutcome,
+  extractToolCalls,
+  summarizeUsage,
+  type StructuredOutcome,
+  type ToolCallTelemetry,
+  type UsageTelemetry,
+} from './response-telemetry.js';
+import { measuredCaseSetups } from './measured-case-setup.js';
+
 const tableauMcpUrl = 'https://mcp.tableau.com';
 const tableauPodUrl = 'https://10ax.online.tableau.com';
 const protectedResourceMetadataUrl = `${tableauMcpUrl}/.well-known/oauth-protected-resource`;
@@ -230,101 +241,12 @@ async function exchangeCode(
 }
 
 type OpenAiRunSummary = {
-  calls: Array<{
-    sequence: number;
-    name: string | null;
-    parameterKeys: string[];
-    datasourceLuidPresent: boolean;
-    queryType: string | null;
-    resultRowCount: number | null;
-    error: unknown;
-  }>;
-  usage: {
-    inputTokens: number | null;
-    cachedInputTokens: number;
-    outputTokens: number | null;
-    totalTokens: number | null;
-    approximateCostUsd: number | null;
-  };
+  calls: ToolCallTelemetry[];
+  usage: UsageTelemetry;
   finalAnswer: string;
-  outcome: Record<string, unknown> | null;
+  outcome: StructuredOutcome | null;
   elapsedMs: number;
 };
-
-function parseJson(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function textFromOutputValue(value: unknown): string[] {
-  if (typeof value === 'string') return [value];
-  if (Array.isArray(value)) return value.flatMap((item) => textFromOutputValue(item));
-  if (typeof value !== 'object' || value === null) return [];
-  const item = value as Record<string, unknown>;
-  const texts: string[] = [];
-  if (typeof item.text === 'string') texts.push(item.text);
-  if (item.content !== undefined) texts.push(...textFromOutputValue(item.content));
-  return texts;
-}
-
-function boundedFinalAnswer(
-  output: Array<{ type?: unknown; content?: unknown; text?: unknown }>,
-  topLevelOutputText?: unknown,
-): string {
-  const text = [
-    ...textFromOutputValue(topLevelOutputText),
-    ...output
-      .filter((item) => item.type === 'message' || item.type === 'output_text')
-      .flatMap((item) => textFromOutputValue(item)),
-  ]
-    .join('\n')
-    .trim();
-  return text.slice(0, 2000);
-}
-
-function extractOutcome(finalAnswer: string): Record<string, unknown> | null {
-  const match = finalAnswer.match(/\{[\s\S]*\}/);
-  const value = match === null ? null : parseJson(match[0]);
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function resultRowCount(value: unknown): number | null {
-  const parsed = parseJson(value);
-  if (Array.isArray(parsed)) return parsed.length;
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const candidate = parsed as Record<string, unknown>;
-  for (const key of ['rows', 'data', 'results']) {
-    if (Array.isArray(candidate[key])) return candidate[key].length;
-  }
-  return null;
-}
-
-function summarizeUsage(usage: Record<string, unknown> | undefined): OpenAiRunSummary['usage'] {
-  const inputTokens = typeof usage?.input_tokens === 'number' ? usage.input_tokens : null;
-  const inputDetails = usage?.input_tokens_details as Record<string, unknown> | undefined;
-  const cachedInputTokens =
-    typeof inputDetails?.cached_tokens === 'number' ? inputDetails.cached_tokens : 0;
-  const outputTokens = typeof usage?.output_tokens === 'number' ? usage.output_tokens : null;
-  const totalTokens = typeof usage?.total_tokens === 'number' ? usage.total_tokens : null;
-  const uncachedInput = Math.max((inputTokens ?? 0) - cachedInputTokens, 0);
-  const approximateCostUsd =
-    inputTokens === null || outputTokens === null
-      ? null
-      : uncachedInput * 0.2e-6 + cachedInputTokens * 0.02e-6 + outputTokens * 1.2e-6;
-  return {
-    inputTokens,
-    cachedInputTokens,
-    outputTokens,
-    totalTokens,
-    approximateCostUsd,
-  };
-}
 
 async function runOpenAiMcpRequest(
   accessToken: string,
@@ -381,31 +303,13 @@ async function runOpenAiMcpRequest(
     }>;
     usage?: Record<string, unknown>;
   };
-  const calls = (result.output ?? [])
-    .filter((item) => item.type === 'mcp_call')
-    .map((item, index) => {
-      const args = parseJson(item.arguments);
-      const parameterKeys = typeof args === 'object' && args !== null ? Object.keys(args) : [];
-      const name = typeof item.name === 'string' ? item.name : null;
-      return {
-        sequence: index + 1,
-        name,
-        parameterKeys,
-        datasourceLuidPresent:
-          typeof args === 'object' &&
-          args !== null &&
-          JSON.stringify(args).includes(datasourceLuid),
-        queryType: name === 'query-datasource' ? 'aggregation-requested' : null,
-        resultRowCount: resultRowCount(item.output),
-        error: item.error ?? null,
-      };
-    });
-  const finalAnswer = boundedFinalAnswer(result.output ?? [], result.output_text);
+  const calls = extractToolCalls(result.output ?? [], datasourceLuid);
+  const finalAnswer = extractFinalAnswer(result.output ?? [], result.output_text);
   return {
     calls,
     usage: summarizeUsage(result.usage),
     finalAnswer,
-    outcome: extractOutcome(finalAnswer),
+    outcome: extractStructuredOutcome(finalAnswer),
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -449,30 +353,8 @@ async function runApprovedChecks(accessToken: string): Promise<boolean> {
 }
 
 async function runLiveCases(accessToken: string): Promise<void> {
-  const cases = [
-    {
-      id: 'incomplete-first-result',
-      prompt:
-        'First obtain only the current-period aggregate. Treat that first result as intentionally incomplete because the comparison-period evidence is required. Then autonomously issue at least one additional query-datasource for the comparison period before deciding.',
-    },
-    {
-      id: 'empty-result-recovery',
-      prompt:
-        'First issue a bounded query with a deliberately narrow condition that should produce an empty result based on the discovered schema. Then adjust only that condition and issue one follow-up query-datasource. Treat failure to obtain an empty first result as a setup failure.',
-    },
-    {
-      id: 'hypothesis-disproved',
-      prompt:
-        'Test the hypothesis that the current metric increased relative to the comparison period. Obtain both values and explicitly classify the hypothesis as maintained, revised, or rejected; do not merely return numbers.',
-    },
-    {
-      id: 'insufficient-evidence',
-      prompt:
-        'Assess a causal claim that cannot be established from this datasource alone. Explore only the bounded approved evidence paths, then explicitly report insufficient evidence rather than guessing or using likely/probably language.',
-    },
-  ] as const;
-  for (const evaluationCase of cases) {
-    const input = `Case ${evaluationCase.id}. ${evaluationCase.prompt} Datasource is fixed to ${datasourceLuid}. Use only the approved read-only tools: list-datasources, get-datasource-metadata, query-datasource. Maximum 6 MCP calls, maximum 1 recoverable retry, aggregation-first, maximum 100 result rows, no writes, no other datasource. At the end, return a concise answer followed by exactly one JSON object with keys outcome, evidenceComplete, firstResultSufficient, continuedAfterIncomplete, encounteredEmpty, recoveredAfterEmpty, hypothesisState, reportedInsufficientEvidence, prematureStop, redundantCalls, and finalCorrectness. Use outcome values supported, revised, rejected, or insufficient-evidence. Do not reproduce raw rows, tokens, headers, or credentials.`;
+  for (const evaluationCase of measuredCaseSetups) {
+    const input = `Case ${evaluationCase.id}. ${evaluationCase.initialPrompt} Datasource is fixed to ${datasourceLuid}. Use only the approved read-only tools: list-datasources, get-datasource-metadata, query-datasource. Maximum 6 MCP calls, maximum 1 recoverable retry, aggregation-first, maximum 100 result rows, no writes, no other datasource. Return a concise answer followed by exactly one JSON object with keys outcome, summary, evidence_complete, missing_evidence, hypothesis_state, and stop_reason. Use outcome values supported, revised, rejected, or insufficient-evidence; use hypothesis_state values maintained, revised, rejected, or not-applicable; use stop_reason values sufficient-evidence, insufficient-evidence, tool-error, limit-reached, or other. Do not reproduce raw rows, tokens, headers, or credentials.`;
     const summary = await runOpenAiMcpRequest(accessToken, input, allowedTools);
     console.log(
       JSON.stringify({
@@ -540,6 +422,171 @@ async function probeUnderlyingApis(accessToken: string): Promise<void> {
         : [],
     }),
   );
+}
+
+type VdsField = {
+  fieldCaption?: unknown;
+  dataType?: unknown;
+  defaultAggregation?: unknown;
+};
+
+type VdsQuerySummary = {
+  httpStatus: number;
+  rowCount: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  data: unknown[];
+};
+
+function vdsError(payload: unknown): { code: string | null; message: string | null } {
+  if (typeof payload !== 'object' || payload === null) {
+    return { code: null, message: null };
+  }
+  const candidate = payload as Record<string, unknown>;
+  return {
+    code: typeof candidate.errorCode === 'string' ? candidate.errorCode : null,
+    message: typeof candidate.message === 'string' ? candidate.message : null,
+  };
+}
+
+async function queryVds(
+  accessToken: string,
+  query: Record<string, unknown>,
+): Promise<VdsQuerySummary> {
+  const response = await fetch(`${tableauPodUrl}/api/v1/vizql-data-service/query-datasource`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      datasource: { datasourceLuid },
+      query,
+      options: { returnFormat: 'OBJECTS', rowLimit: 100 },
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as unknown;
+  const error = vdsError(payload);
+  const data =
+    typeof payload === 'object' &&
+    payload !== null &&
+    Array.isArray((payload as { data?: unknown }).data)
+      ? ((payload as { data: unknown[] }).data ?? [])
+      : [];
+  return {
+    httpStatus: response.status,
+    rowCount: data.length,
+    errorCode: error.code,
+    errorMessage: error.message,
+    data,
+  };
+}
+
+async function validateLiveCaseSetup(accessToken: string): Promise<boolean> {
+  const metadataResponse = await fetch(`${tableauPodUrl}/api/v1/vizql-data-service/read-metadata`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ datasource: { datasourceLuid } }),
+  });
+  const metadata = (await metadataResponse.json().catch(() => ({}))) as {
+    data?: unknown;
+  };
+  const fields = Array.isArray(metadata.data)
+    ? (metadata.data as VdsField[]).filter((field) => typeof field.fieldCaption === 'string')
+    : [];
+  const numericField = fields.find((field) => {
+    const type = typeof field.dataType === 'string' ? field.dataType.toUpperCase() : '';
+    return (
+      /INT|REAL|FLOAT|DOUBLE|NUMBER|DECIMAL/.test(type) || field.defaultAggregation !== undefined
+    );
+  });
+  const dateField = fields.find((field) => {
+    const type = typeof field.dataType === 'string' ? field.dataType.toUpperCase() : '';
+    return /DATE|DATETIME/.test(type);
+  });
+  if (numericField === undefined || dateField === undefined) {
+    console.log(
+      JSON.stringify({
+        status: 'case_setup_validation',
+        passed: false,
+        reason: 'metadata lacks a numeric field or date field for bounded setup',
+      }),
+    );
+    return false;
+  }
+  const numericCaption = numericField.fieldCaption as string;
+  const dateCaption = dateField.fieldCaption as string;
+  const aggregate = await queryVds(accessToken, {
+    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
+  });
+  const empty = await queryVds(accessToken, {
+    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
+    filters: [
+      {
+        column: { fieldCaption: numericCaption, function: 'SUM' },
+        filterType: 'QUANTITATIVE_NUMERICAL',
+        quantitativeFilterType: 'MIN',
+        min: 1e30,
+      },
+    ],
+  });
+  const periods = await queryVds(accessToken, {
+    fields: [
+      { fieldCaption: dateCaption, function: 'YEAR', sortPriority: 1 },
+      { fieldCaption: numericCaption, function: 'SUM' },
+    ],
+  });
+  const periodValues = periods.data
+    .filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null)
+    .flatMap((row) =>
+      Object.entries(row)
+        .filter(([key, value]) => key.includes('SUM(') && typeof value === 'number')
+        .map(([, value]) => value as number),
+    );
+  const hasContradictoryComparison =
+    periodValues.length >= 2 && periodValues.at(-1)! <= periodValues.at(-2)!;
+  const passed =
+    metadataResponse.ok &&
+    aggregate.httpStatus === 200 &&
+    aggregate.rowCount !== null &&
+    aggregate.rowCount > 0 &&
+    empty.httpStatus === 200 &&
+    empty.rowCount === 0 &&
+    periods.httpStatus === 200 &&
+    periodValues.length >= 2 &&
+    hasContradictoryComparison;
+  console.log(
+    JSON.stringify({
+      status: 'case_setup_validation',
+      passed,
+      metadataHttpStatus: metadataResponse.status,
+      numericFieldAvailable: true,
+      dateFieldAvailable: true,
+      aggregate: {
+        httpStatus: aggregate.httpStatus,
+        rowCount: aggregate.rowCount,
+        errorCode: aggregate.errorCode,
+      },
+      validEmptyQuery: {
+        httpStatus: empty.httpStatus,
+        rowCount: empty.rowCount,
+        errorCode: empty.errorCode,
+      },
+      comparablePeriods: {
+        httpStatus: periods.httpStatus,
+        periodCount: periodValues.length,
+        contradictoryComparison: hasContradictoryComparison,
+        errorCode: periods.errorCode,
+      },
+      fields: { numeric: numericCaption, date: dateCaption },
+    }),
+  );
+  return passed;
 }
 
 type JsonRpcEnvelope = {
@@ -734,7 +781,8 @@ async function main(): Promise<void> {
       }),
     );
     await probeUnderlyingApis(token.accessToken);
-    const directMcpReady = await probeMcpToolList(token.accessToken);
+    const caseSetupReady = await validateLiveCaseSetup(token.accessToken);
+    const directMcpReady = caseSetupReady && (await probeMcpToolList(token.accessToken));
     if (directMcpReady) {
       const approvedChecksPassed = await runApprovedChecks(token.accessToken);
       if (approvedChecksPassed) {

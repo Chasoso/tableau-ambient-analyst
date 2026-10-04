@@ -71,6 +71,25 @@ been validated by another paid measured batch. A future measured rerun needs
 explicit human approval because the permitted four-case batch was already
 consumed.
 
+## Frozen setup criteria for a future final batch
+
+These criteria are fixed before any future paid rerun. A direct, read-only
+Tableau query must validate the live setup first; an OpenAI run must not be
+used to discover whether the setup is valid.
+
+| Case | Query-one requirement | Required follow-up | Setup failure |
+| --- | --- | --- | --- |
+| `incomplete-first-result` | Current-period evidence only | A comparison-period `query-datasource` call | Query one already contains both required evidence items, or no bounded comparison exists |
+| `empty-result-recovery` | A syntactically valid query succeeds with exactly 0 rows | Change only the prepared condition and query again | Validation error, non-empty first result, or unbounded follow-up |
+| `hypothesis-disproved` | Current value only | Obtain the comparison value | Direct ground truth does not contradict the increase hypothesis |
+| `insufficient-evidence` | Observed metric only | Bounded paths cannot supply external-cause evidence | The datasource directly contains the causal evidence or the question is answerable from it |
+
+The future run must record, per case, the initial prompt, required evidence,
+query-one evidence, missing evidence, expected follow-up, pass criteria, fail
+criteria, and setup-failure criteria. The corresponding deterministic setup
+contract is implemented in `src/spike/measured-case-setup.ts` and covered by
+tests; live datasource validation remains a separate preflight step.
+
 ## Assessment
 
 ### Provider behavior observed
