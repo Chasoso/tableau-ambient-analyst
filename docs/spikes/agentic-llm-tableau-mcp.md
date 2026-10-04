@@ -2,7 +2,7 @@
 
 ## Status
 
-**Inconclusive — OpenAI smoke passed; Tableau boundary approval is pending.**
+**Inconclusive — OpenAI smoke passed; Tableau OAuth client/site setup is pending.**
 
 This document records the experiment boundary and the current stopping point
 for Issue #17. It does not select a production provider, create an ADR, add a
@@ -69,20 +69,22 @@ The following is a bounded proposal, not an authorization to connect:
 | Common benchmark | #16 `EvaluationCase` definitions and completion conditions |
 | Provider configurations | OpenAI Responses API with `gpt-5.6-luna` for the first bounded experiment; other providers remain unapproved candidates |
 | Cases | First batch after approval: `incomplete-first-result`, `empty-result-recovery`, `hypothesis-disproved`, `insufficient-evidence`; one run each |
-| Tableau datasource | One human-approved synthetic or neutral evaluation datasource; final demo data is excluded |
+| Tableau datasource | Approved: `Tableau Public Per Day(2025/04-)`, LUID `14f3ac6d-1171-4065-baac-c63bdce1470f`; final demo data is excluded |
 | MCP endpoint | Hosted Tableau MCP at `https://mcp.tableau.com`, subject to OAuth and site approval |
-| Tools | Candidate minimum: bounded `list-datasources` for discovery, `get-datasource-metadata`, and `query-datasource`; exact names/scope require authenticated discovery and approval |
+| Tools | Approved allowlist: `list-datasources`, `get-datasource-metadata`, and `query-datasource`; `list-datasources` is connection/target verification only |
 | Writes | No persistent Tableau writes; no inferred permission expansion |
 | Tool calls | Initial maximum: 6 per run |
 | Retries | Initial maximum: 1 recoverable retry per run; no auth/permission retry |
 | Timeout | Proposed maximum: 10 minutes per run |
-| Result size | Bounded semantic summaries/evidence IDs only; no raw transport dump or unbounded row-level data |
+| Result size | Maximum 100 rows; aggregation-first, bounded semantic summaries/evidence IDs preferred; no raw transport dump or bulk row-level data |
 | Logs | Provider, case, timings, tool names, statuses, evidence IDs, token/cost metadata when available |
 | Cost | A human-approved per-provider and total spend cap is still required before execution |
 
-The OpenAI model and endpoint candidate are now human-approved for the first
-experiment, but the Tableau site, datasource, tool allowlist, OAuth scope,
-result boundary, and final spend boundary remain human-owned decisions.
+The OpenAI model and endpoint candidate, Tableau datasource, tool allowlist,
+read-only boundary, and 100-row result limit are approved for the first
+experiment. The Tableau Cloud site, OAuth client identity/registration path,
+redirect URI, exact OAuth scope negotiation, and final spend boundary remain
+human-owned prerequisites.
 
 ## Hosted Tableau MCP boundary check
 
@@ -96,59 +98,119 @@ read-only boundary.
 
 No Tableau OAuth session was available to this process. Consequently, no site
 was selected, no datasource was enumerated, no tool list was retrieved, and no
-Tableau data or write operation was attempted.
+Tableau data or write operation was attempted. The approved datasource and
+allowlist below are configuration decisions, not evidence that they are
+currently accessible through this process.
 
 Hosted Tableau MCP documentation describes per-user OAuth and Tableau Cloud
 permissions. Site selection is part of the OAuth connection, particularly for
 multi-site users. The hosted service's catalog is still constrained by the
 user's Tableau permissions and any site-level tool exclusions.
 
-### Candidate neutral datasource boundary
+## OAuth feasibility check
 
-There is currently no authenticated datasource candidate to name. The next
-safe discovery step is a bounded `list-datasources` call after a human selects
-the Tableau Cloud site and approves discovery. A candidate must be synthetic or
-otherwise neutral, support current metric/period/segment/filter behavior, and
-have sensitivity and permissions explicitly confirmed. Documentation examples
-are not datasource selection evidence.
+The live protected-resource metadata and authorization-server metadata were
+checked without sending credentials or starting a browser authorization:
+
+| Item | Observed value |
+| --- | --- |
+| OAuth version | OAuth 2.1 for Hosted Tableau MCP |
+| Authorization endpoint | `https://sso.online.tableau.com/oauth2/authorize` |
+| Token endpoint | `https://sso.online.tableau.com/oauth2/token` |
+| Revocation endpoint | `https://sso.online.tableau.com/oauth2/revoke` |
+| Grant types advertised | `authorization_code`, `refresh_token`, and a Salesforce cloud-to-cloud grant |
+| Response type | `code` |
+| PKCE | `S256` advertised |
+| Token endpoint authentication | `none` advertised; no client secret was requested or supplied |
+| Dynamic registration | No `registration_endpoint` was advertised in the authorization-server metadata |
+| Redirect URI / client ID | Not supplied by the hosted metadata; not selected locally |
+
+The result is sufficient to implement the protocol shape only after a
+supported public-client registration/identity and redirect URI are established.
+The current official Hosted Tableau Cloud documentation says custom clients
+point at `https://mcp.tableau.com` and complete OAuth when prompted, but it does
+not provide a repository-specific client ID or a discoverable dynamic
+registration endpoint. The local harness must not invent either value.
+
+### Tableau OAuth human action required
+
+Before a local callback flow can be started, a human must confirm the supported
+client registration path for this custom local harness and the exact Tableau
+Cloud site. No token, authorization code, cookie, or Authorization header
+should be pasted into chat.
+
+Required human inputs are limited to non-secret configuration:
+
+1. Confirm or provide the approved public OAuth client identity/registration
+   mechanism for a local custom MCP client.
+2. Approve a loopback redirect URI and its port/path, or approve the provider's
+   documented redirect URI for that client.
+3. Confirm the Tableau Cloud site/content URL to target. Site selection is
+   OAuth-scoped for multi-site users.
+4. Confirm the minimum read scopes for the fixed datasource and three-tool
+   allowlist.
+
+Only after those values are confirmed can the harness generate an authorization
+URL with state and PKCE. The human would then sign in and approve access in a
+browser; the local callback would receive the code directly and exchange it in
+memory. The access and refresh tokens must not be persisted by this spike.
+
+Until then:
+
+```text
+HUMAN_ACTION_REQUIRED — OAuth client identity, redirect URI, and Tableau site
+```
+
+### Approved evaluation datasource boundary
+
+The fixed neutral evaluation target is:
+
+- Name: `Tableau Public Per Day(2025/04-)`
+- Datasource LUID: `14f3ac6d-1171-4065-baac-c63bdce1470f`
+- Use: #16 evaluation cases only; not a final conference/demo dataset
+
+After OAuth, `list-datasources` may verify that this LUID is visible, but it
+must not be used to browse unrelated datasources. The harness must then use the
+fixed LUID for metadata and query calls.
 
 ### Candidate minimum tool allowlist
 
-After datasource approval, the smallest proposed read-only set is:
+The approved minimum read-only set is:
 
 | Tool | Purpose | Write behavior | Why needed / alternative |
 | --- | --- | --- | --- |
-| `list-datasources` | Bounded discovery before a datasource is selected | Read | Needed only for discovery; remove from the evaluation run after selection if the datasource identifier is fixed |
+| `list-datasources` | Confirm the approved LUID is visible | Read | Connection/target verification only; do not browse unrelated datasources |
 | `get-datasource-metadata` | Confirm fields/parameters needed by the neutral cases | Read | Needed to map evidence requirements without embedding Tableau fields in #16 cases |
 | `query-datasource` | Retrieve bounded metric, period, segment, and filter evidence | Read | Core analysis capability; unrestricted SQL/code execution is not required |
 
 `get-view-data` and tools that create, upload, download, modify, or otherwise
-persist Tableau content are excluded from the initial proposal. Any exact
-tool name, datasource identifier, result limit, and OAuth scope must be
-rechecked after authenticated discovery and human approval.
+persist Tableau content are excluded. Unrestricted SQL/code execution is also
+outside the boundary. OAuth must still be checked after authentication to
+confirm that the approved calls are actually permitted.
 
 Result limits should be configured at the Tableau boundary and kept to bounded
 semantic summaries/evidence IDs for the run record. The hosted endpoint's
 available scope and tool catalog must not be treated as authorization to
-expand this allowlist.
+expand this allowlist. The application must enforce the 100-row maximum even
+if the remote tool exposes a larger limit.
 
 ## Required live prerequisites
 
 The following minimum actions are required before the live portion can run:
 
-1. Human approves the OpenAI remote-MCP request configuration, including the
+1. Human confirms the OpenAI remote-MCP request configuration, including the
    approval behavior and credential handoff boundary.
-2. Human completes OAuth for one approved Tableau Cloud site through the
-   hosted MCP endpoint.
-3. Human selects a synthetic or neutral datasource and approves its sensitivity,
-   permissions, and use for #16 evaluation cases.
-4. Human approves the exact read-only tool allowlist, result-size limit, and
-   no-write boundary.
+2. Human confirms the supported public OAuth client identity/registration path,
+   loopback redirect URI, and target Tableau Cloud site.
+3. Human completes OAuth for that site through the hosted MCP endpoint.
+4. The harness verifies the approved datasource LUID and three-tool allowlist,
+   then confirms the 100-row/no-write boundary.
 5. Human confirms the data-flow, retention/logging boundary, and remaining
    experiment spend cap.
 
-The local environment now has approved OpenAI smoke access, but no Tableau
-OAuth session, approved site, datasource, tool allowlist, or data-flow boundary.
+The local environment now has approved OpenAI smoke access and an approved
+datasource/tool/data boundary, but no Tableau OAuth session, OAuth client
+identity, redirect URI, or selected site.
 The live Tableau experiment is therefore classified as:
 
 ```text
@@ -217,7 +279,7 @@ These are the proposed evaluation dimensions, not an accepted architecture.
 - `npm run validate`: passed on the feature branch (41 tests).
 - `git diff --check`: passed on the feature branch before the latest commit.
 - OpenAI smoke: passed; not an evaluation run.
-- live Tableau MCP runs: `NOT RUN — Tableau boundary approval missing`.
+- live Tableau MCP runs: `NOT RUN — Tableau OAuth setup pending`.
 - normal CI remains deterministic and has no live provider/MCP dependency.
 
 ## Tableau MCP human decision required
@@ -228,17 +290,16 @@ These are the proposed evaluation dimensions, not an accepted architecture.
   protected-resource challenge. No OAuth token was available to this process.
 - **Connection result:** server reachable; authenticated MCP connection not
   established.
-- **Candidate datasource:** none selected because authenticated enumeration has
-  not been approved.
-- **Candidate tools:** bounded `list-datasources` for discovery,
-  `get-datasource-metadata`, and `query-datasource`; read-only proposal only.
-- **Recommended minimum boundary:** one human-selected neutral datasource,
-  those read-only tools only, bounded result size, no persistent writes, and no
-  unrestricted SQL/code execution.
+- **Approved datasource:** `Tableau Public Per Day(2025/04-)`, LUID
+  `14f3ac6d-1171-4065-baac-c63bdce1470f`.
+- **Approved tools:** `list-datasources` for fixed-target verification,
+  `get-datasource-metadata`, and `query-datasource`.
+- **Approved boundary:** read-only, aggregation-first, maximum 100 rows, no
+  persistent writes, and no unrestricted SQL/code execution.
 - **Exact human decisions requested:**
-  1. approve one Tableau Cloud site and complete the hosted OAuth connection;
-  2. select one synthetic/neutral datasource for #16 evaluation;
-  3. approve the exact read-only tool allowlist and result limit; and
+  1. confirm the public OAuth client identity/registration mechanism;
+  2. confirm the loopback redirect URI and target Tableau Cloud site;
+  3. complete the browser OAuth authorization; and
   4. approve the data-flow, logging/retention, and remaining spend boundary.
 
 OpenAI smoke connectivity, official remote-MCP request semantics, and the
@@ -248,7 +309,7 @@ implementation gaps.
 
 ## Recommendation
 
-**DEFER live execution pending Tableau human prerequisites.** Do not mark Issue #17
+**DEFER live execution pending Tableau OAuth prerequisites.** Do not mark Issue #17
 complete or accept a provider/architecture decision from this documentation
 alone. After a bounded live run, issue a separate human-reviewed
 `KEEP`/`REVISE`/`REJECT`/`DEFER` recommendation.
