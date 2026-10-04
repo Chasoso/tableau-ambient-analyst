@@ -189,6 +189,56 @@ The issue remains `HUMAN_DECISION_REQUIRED` because the single authorized
 diagnostic retry did not reach the relay and no further OAuth or relay retries
 are authorized by this record.
 
+## OAuth token timing diagnosis
+
+The next bounded diagnostic tested whether a newly issued token became
+acceptable to Hosted Tableau MCP after a short propagation delay. No OpenAI
+request or measured case was made.
+
+### Same-token test
+
+The same fresh token was reused for all three direct `initialize` attempts.
+The recorded elapsed times include the preceding HTTP request latency, so the
+observed ages were approximately 0.5, 3.0, and 6.4 seconds rather than exact
+wall-clock targets.
+
+| Attempt | Target | Observed token age | Initialize | Error |
+| --- | ---: | ---: | --- | --- |
+| T+0 | 0s | 0.5s | HTTP 401 | `invalid_token` |
+| T+2 | 2s | 3.0s | HTTP 401 | `invalid_token` |
+| T+5 | 5s | 6.4s | HTTP 401 | `invalid_token` |
+
+### Fresh-token bounded retry
+
+A second fresh OAuth exchange was then performed, as permitted by the human
+decision. The same token was tested once after an intentional two-second wait
+and once after an additional three-second wait. Both attempts returned HTTP
+401 `invalid_token` (observed ages approximately 2.6 and 6.1 seconds).
+
+The timing hypothesis is therefore **not supported by this bounded evidence**:
+neither token became valid within approximately six seconds. This does not
+identify the root cause of token rejection. OAuth issuance succeeded and
+reported a 3,599-second lifetime, but Hosted MCP token acceptance remained
+unreliable in these attempts. No additional OAuth exchange or retry is
+authorized by this record.
+
+### Sequencing assessment
+
+The harness awaits the callback, completes the authorization-code exchange,
+fully parses the token response, selects `access_token`, and only then starts
+the direct MCP request. No stale-token, refresh-token, concurrent-state, or
+token-response parsing race was found in the inspected code path. The token is
+never written to logs or files.
+
+Classification for this continuation:
+
+- OAuth issuance: `SUPPORTED` for issuance only.
+- Hosted MCP token acceptance: `FAILED / NOT REPRODUCIBLY WORKING`.
+- Direct Hosted MCP reliability: previously successful, currently
+  intermittent/inconclusive.
+- OpenAI remote MCP relay: not evaluated in this continuation.
+- Agentic behavior: not evaluated.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with

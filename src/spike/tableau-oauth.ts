@@ -751,6 +751,144 @@ async function readJsonRpc(response: Response): Promise<JsonRpcEnvelope> {
   }
 }
 
+async function probeMcpInitialize(
+  accessToken: string,
+  tokenObtainedAt: number,
+  attempt: string,
+): Promise<{ ok: boolean; sessionId: string | null }> {
+  const startedAt = Date.now();
+  const headers = {
+    accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${accessToken}`,
+    'content-type': 'application/json',
+    'MCP-Protocol-Version': '2025-06-18',
+  };
+  const response = await fetch(tableauMcpUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'tableau-ambient-analyst-spike', version: '0.1.0' },
+      },
+    }),
+  });
+  const body = await readJsonRpc(response);
+  console.log(
+    JSON.stringify({
+      status: 'same_token_initialize_attempt',
+      attempt,
+      tokenAgeSeconds: Math.round((Date.now() - tokenObtainedAt) / 1000),
+      elapsedMs: Date.now() - tokenObtainedAt,
+      httpStatus: response.status,
+      errorCode:
+        typeof body.error?.code === 'string' ? body.error.code : (body.error?.code ?? null),
+      errorMessage:
+        typeof body.error?.message === 'string'
+          ? body.error.message
+          : (body.error?.message ?? null),
+      sessionPresent: response.headers.get('mcp-session-id') !== null,
+      latencyMs: Date.now() - startedAt,
+    }),
+  );
+  return { ok: response.ok, sessionId: response.headers.get('mcp-session-id') };
+}
+
+async function runTokenTimingDiagnostic(
+  accessToken: string,
+  tokenObtainedAt: number,
+): Promise<boolean> {
+  const targetTimes = [0, 2000, 5000];
+  for (const targetTime of targetTimes) {
+    const waitMs = targetTime - (Date.now() - tokenObtainedAt);
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    const result = await probeMcpInitialize(
+      accessToken,
+      tokenObtainedAt,
+      `T+${targetTime / 1000}s`,
+    );
+    if (result.ok) {
+      const headers = {
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+        'MCP-Protocol-Version': '2025-06-18',
+        ...(result.sessionId === null ? {} : { 'mcp-session-id': result.sessionId }),
+      };
+      const toolsResponse = await fetch(tableauMcpUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+      });
+      const toolsBody = await readJsonRpc(toolsResponse);
+      const toolNames = (toolsBody.result?.tools ?? [])
+        .map((tool) => (typeof tool.name === 'string' ? tool.name : null))
+        .filter((name): name is string => name !== null);
+      console.log(
+        JSON.stringify({
+          status: 'same_token_tools_list_after_initialize',
+          tokenAgeSeconds: Math.round((Date.now() - tokenObtainedAt) / 1000),
+          httpStatus: toolsResponse.status,
+          approvedToolsAvailable: allowedTools.every((name) => toolNames.includes(name)),
+          approvedTools: allowedTools,
+          toolCount: toolNames.length,
+          errorCode:
+            typeof toolsBody.error?.code === 'string'
+              ? toolsBody.error.code
+              : (toolsBody.error?.code ?? null),
+          errorMessage:
+            typeof toolsBody.error?.message === 'string'
+              ? toolsBody.error.message
+              : (toolsBody.error?.message ?? null),
+        }),
+      );
+      return toolsResponse.ok;
+    }
+  }
+  console.log(
+    JSON.stringify({
+      status: 'same_token_timing_diagnostic_complete',
+      result: 'failed',
+      conclusion:
+        'No HTTP 200 initialize observed by T+5s; short propagation delay not established',
+    }),
+  );
+  return false;
+}
+
+async function runFreshTokenTimingDiagnostic(
+  accessToken: string,
+  tokenObtainedAt: number,
+): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  const first = await probeMcpInitialize(accessToken, tokenObtainedAt, 'fresh-T+2s');
+  if (first.ok) {
+    console.log(
+      JSON.stringify({ status: 'fresh_token_timing_diagnostic', result: 'initialize_succeeded' }),
+    );
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const second = await probeMcpInitialize(accessToken, tokenObtainedAt, 'fresh-T+5s');
+  if (second.ok) {
+    console.log(
+      JSON.stringify({ status: 'fresh_token_timing_diagnostic', result: 'initialize_succeeded' }),
+    );
+    return;
+  }
+  console.log(
+    JSON.stringify({
+      status: 'fresh_token_timing_diagnostic',
+      result: 'failed',
+      conclusion: 'Fresh token remained invalid through T+5s',
+    }),
+  );
+}
+
 async function probeMcpToolList(accessToken: string): Promise<boolean> {
   const headers = {
     accept: 'application/json, text/event-stream',
@@ -918,6 +1056,14 @@ async function main(): Promise<void> {
         scope: token.scope,
       }),
     );
+    if (process.argv.includes('--timing-diagnostic')) {
+      await runTokenTimingDiagnostic(token.accessToken, tokenObtainedAt);
+      return;
+    }
+    if (process.argv.includes('--fresh-timing-diagnostic')) {
+      await runFreshTokenTimingDiagnostic(token.accessToken, tokenObtainedAt);
+      return;
+    }
     await probeUnderlyingApis(token.accessToken);
     const caseSetupReady = await validateLiveCaseSetup(token.accessToken);
     if (process.argv.includes('--setup-only')) {
