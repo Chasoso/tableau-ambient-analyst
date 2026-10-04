@@ -492,6 +492,151 @@ async function runLiveCases(accessToken: string): Promise<void> {
   }
 }
 
+async function sleepMs(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function probeDirectTimingSession(
+  accessToken: string,
+  trial: string,
+  side: 'A' | 'B',
+): Promise<{ initialize: boolean; toolsList: boolean; timestamp: number }> {
+  const timestamp = Date.now();
+  const startedAt = Date.now();
+  const headers = {
+    accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${accessToken}`,
+    'content-type': 'application/json',
+    'MCP-Protocol-Version': '2025-06-18',
+  };
+  const initializeResponse = await fetch(tableauMcpUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'tableau-ambient-analyst-reliability', version: '0.1.0' },
+      },
+    }),
+  });
+  const initializeBody = await readJsonRpc(initializeResponse);
+  const sessionId = initializeResponse.headers.get('mcp-session-id');
+  let toolsList = false;
+  let approvedTools = false;
+  let toolsStatus: number | null = null;
+  let toolsError: unknown = null;
+  if (initializeResponse.ok) {
+    const toolsResponse = await fetch(tableauMcpUrl, {
+      method: 'POST',
+      headers: sessionId === null ? headers : { ...headers, 'mcp-session-id': sessionId },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    });
+    const toolsBody = await readJsonRpc(toolsResponse);
+    toolsList = toolsResponse.ok;
+    const toolNames = (toolsBody.result?.tools ?? [])
+      .map((tool) => (typeof tool.name === 'string' ? tool.name : null))
+      .filter((name): name is string => name !== null);
+    approvedTools = allowedTools.every((tool) => toolNames.includes(tool));
+    toolsStatus = toolsResponse.status;
+    toolsError = toolsBody.error ?? null;
+  }
+  console.log(
+    JSON.stringify({
+      status: 'direct_reliability_timing_session',
+      trial,
+      side,
+      timestamp,
+      initializeHttpStatus: initializeResponse.status,
+      initializeError: initializeBody.error ?? null,
+      toolsList,
+      approvedTools,
+      toolsHttpStatus: toolsStatus,
+      toolsError,
+      sessionPresent: sessionId !== null,
+      latencyMs: Date.now() - startedAt,
+    }),
+  );
+  return { initialize: initializeResponse.ok, toolsList: toolsList && approvedTools, timestamp };
+}
+
+async function runHostedReliabilityTimingExperiment(accessToken: string): Promise<void> {
+  for (const [trial, gapMs] of [
+    ['D0', 0],
+    ['D5', 5000],
+    ['D15', 15000],
+  ] as const) {
+    const first = await probeDirectTimingSession(accessToken, trial, 'A');
+    await sleepMs(gapMs);
+    const second = await probeDirectTimingSession(accessToken, trial, 'B');
+    console.log(
+      JSON.stringify({
+        status: 'direct_reliability_timing_pair',
+        trial,
+        requestedGapMs: gapMs,
+        actualGapMs: second.timestamp - first.timestamp,
+        sessionA: { initialize: first.initialize, toolsList: first.toolsList },
+        sessionB: { initialize: second.initialize, toolsList: second.toolsList },
+      }),
+    );
+  }
+
+  for (const [trial, gapMs] of [
+    ['R0', 0],
+    ['R5', 5000],
+    ['R15', 15000],
+  ] as const) {
+    let first: OpenAiRunSummary | null = null;
+    let firstError: string | null = null;
+    const firstTimestamp = Date.now();
+    try {
+      first = await runOpenAiMcpRequest(
+        accessToken,
+        'Use list-datasources only to confirm the approved datasource is visible. Return a concise structured result.',
+      );
+    } catch (error) {
+      firstError = error instanceof Error ? error.message : 'OpenAI request failed';
+    }
+    await sleepMs(gapMs);
+    let second: OpenAiRunSummary | null = null;
+    let secondError: string | null = null;
+    const secondTimestamp = Date.now();
+    try {
+      second = await runOpenAiMcpRequest(
+        accessToken,
+        'Use list-datasources only to confirm the approved datasource is visible. Return a concise structured result.',
+      );
+    } catch (error) {
+      secondError = error instanceof Error ? error.message : 'OpenAI request failed';
+    }
+    console.log(
+      JSON.stringify({
+        status: 'remote_reliability_timing_pair',
+        trial,
+        requestedGapMs: gapMs,
+        actualGapMs: secondTimestamp - firstTimestamp,
+        requestA: {
+          ok: first !== null,
+          error: firstError,
+          response: first?.response ?? null,
+          calls: first?.calls ?? [],
+          usage: first?.usage ?? null,
+        },
+        requestB: {
+          ok: second !== null,
+          error: secondError,
+          response: second?.response ?? null,
+          calls: second?.calls ?? [],
+          usage: second?.usage ?? null,
+        },
+      }),
+    );
+  }
+}
+
 async function probeUnderlyingApis(accessToken: string): Promise<void> {
   const safeError = (payload: unknown): Record<string, string> => {
     if (typeof payload !== 'object' || payload === null) return {};
@@ -1197,6 +1342,10 @@ async function main(): Promise<void> {
     }
     if (process.argv.includes('--fresh-timing-diagnostic')) {
       await runFreshTokenTimingDiagnostic(token.accessToken, tokenObtainedAt);
+      return;
+    }
+    if (process.argv.includes('--hosted-reliability-timing')) {
+      await runHostedReliabilityTimingExperiment(token.accessToken);
       return;
     }
     await probeUnderlyingApis(token.accessToken);
