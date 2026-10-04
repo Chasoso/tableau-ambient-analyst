@@ -1318,3 +1318,30 @@ call, tool-list output, and a completed final message. Validation passed after
 the correction. The fresh token was not reused after the process ended, and no
 additional OAuth or paid retry was performed. A human decision is required
 before starting another fresh OAuth flow for the four-case batch.
+
+## Finalization preflight after gate correction
+
+A fresh Site Admin OAuth flow was authorized after the local gate correction.
+Direct checks and fixed setup validation passed:
+
+- VDS metadata: HTTP 200
+- fixed four-case setup: valid
+- Hosted MCP initialize: HTTP 200
+- Hosted MCP `tools/list`: HTTP 200; approved tools visible
+
+The corrected OpenAI minimal-preflight gate was then exercised. The request
+was not rejected by the local gate; the OpenAI Remote MCP connector returned:
+
+```text
+HTTP 424
+error.type = external_connector_error
+error.code = http_error
+error.param = tools
+message = Error retrieving tool list from MCP server: 'tableau-hosted'
+```
+
+No measured case was started and no retry was performed. The final four-case
+slots remain unconsumed. This is a real preflight/connector failure, distinct
+from the corrected local gate bug. The Hosted conclusion remains
+`VIABLE_WITH_CAVEATS`; final agentic evaluation remains `INCONCLUSIVE` and
+requires a separate human decision before another live attempt.
