@@ -1415,3 +1415,44 @@ classification would measure missing authentication rather than LLM behavior.
 Hosted findings remain historical evidence: `HOSTED_REMOTE_PATH =
 VIABLE_WITH_CAVEATS`, with unresolved intermittent 424s and Viewer
 least-privilege authentication as follow-up topics.
+
+## Application-managed stdio bridge smoke
+
+Phase B added a thin application-managed bridge using the official
+`@modelcontextprotocol/sdk` stdio client. The bridge exposes only three OpenAI
+function tools, maps them explicitly to the approved Tableau MCP tools,
+rejects unknown tools and non-target datasource LUIDs, enforces a 1--100 row
+limit and aggregation-first query shape, and returns bounded MCP results as
+`function_call_output`. It does not choose follow-up queries or interpret
+evidence.
+
+Deterministic tests cover tool mapping, disallowed tools, datasource rejection,
+aggregation and row limits, function-output conversion, the four-call loop
+guard, and synthetic secret redaction. `npm run validate` passed with 71 tests.
+
+The one authorized live smoke was **not completed**:
+
+1. OpenAI returned a completed `function_call` for `list_datasources`; the
+   stdio MCP call succeeded with 15 rows.
+2. OpenAI returned a completed `function_call` for
+   `get_datasource_metadata`; the stdio MCP call succeeded for the approved
+   datasource.
+3. OpenAI returned a query tool call whose `query` object did not contain an
+   aggregation field. The bridge rejected it fail-closed before MCP execution
+   with `Query must declare at least one aggregation field.`
+
+No final OpenAI message was produced, no `query-datasource` call was made, and
+no retry was performed. Classification:
+
+```text
+APP_MANAGED_STDIO_SMOKE = FAIL
+failure category = DATASOURCE_POLICY_FAILED / TOOL_SCHEMA_CONTRACT_MISMATCH
+READY_FOR_AGENTIC_4_CASE_BATCH = no
+```
+
+This result demonstrates that the transport bridge, Keychain isolation, MCP
+process, initialization, tool discovery, and two approved tool calls work,
+but the OpenAI function schema/prompt and the local aggregation validator do
+not yet agree on the query argument shape. It is not evidence of agentic case
+failure. The four cases remain unconsumed and require a human-approved fix and
+one new smoke run before any agentic batch.
