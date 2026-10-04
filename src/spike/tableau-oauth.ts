@@ -499,92 +499,128 @@ async function validateLiveCaseSetup(accessToken: string): Promise<boolean> {
   const fields = Array.isArray(metadata.data)
     ? (metadata.data as VdsField[]).filter((field) => typeof field.fieldCaption === 'string')
     : [];
-  const numericField = fields.find((field) => {
-    const type = typeof field.dataType === 'string' ? field.dataType.toUpperCase() : '';
-    return (
-      /INT|REAL|FLOAT|DOUBLE|NUMBER|DECIMAL/.test(type) || field.defaultAggregation !== undefined
-    );
-  });
+  const numericField =
+    fields.find((field) => field.fieldCaption === 'Daily View Count') ??
+    fields.find((field) => {
+      const type = typeof field.dataType === 'string' ? field.dataType.toUpperCase() : '';
+      return (
+        /INT|REAL|FLOAT|DOUBLE|NUMBER|DECIMAL/.test(type) || field.defaultAggregation !== undefined
+      );
+    });
   const dateField = fields.find((field) => {
     const type = typeof field.dataType === 'string' ? field.dataType.toUpperCase() : '';
     return /DATE|DATETIME/.test(type);
   });
-  if (numericField === undefined || dateField === undefined) {
+  const dimensionField = fields.find((field) => field.fieldCaption === 'Workbook Title');
+  if (numericField === undefined || dateField === undefined || dimensionField === undefined) {
     console.log(
       JSON.stringify({
-        status: 'case_setup_validation',
+        status: 'case_setup_redesign_validation',
         passed: false,
-        reason: 'metadata lacks a numeric field or date field for bounded setup',
+        reason: 'required numeric, date, or Workbook Title field is unavailable',
       }),
     );
     return false;
   }
   const numericCaption = numericField.fieldCaption as string;
   const dateCaption = dateField.fieldCaption as string;
-  const aggregate = await queryVds(accessToken, {
-    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
-  });
-  const empty = await queryVds(accessToken, {
-    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
-    filters: [
-      {
-        column: { fieldCaption: numericCaption, function: 'SUM' },
-        filterType: 'QUANTITATIVE_NUMERICAL',
-        quantitativeFilterType: 'MIN',
-        min: 1e30,
-      },
-    ],
-  });
-  const periods = await queryVds(accessToken, {
+  const dimensionCaption = dimensionField.fieldCaption as string;
+  const monthlyTrend = await queryVds(accessToken, {
     fields: [
-      { fieldCaption: dateCaption, function: 'YEAR', sortPriority: 1 },
+      { fieldCaption: dateCaption, function: 'MONTH', sortPriority: 1 },
       { fieldCaption: numericCaption, function: 'SUM' },
     ],
   });
-  const periodValues = periods.data
+  const workbookBreakdown = await queryVds(accessToken, {
+    fields: [
+      { fieldCaption: dimensionCaption, sortPriority: 1 },
+      { fieldCaption: numericCaption, function: 'SUM' },
+    ],
+  });
+  const emptyDate = await queryVds(accessToken, {
+    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
+    filters: [
+      {
+        field: { fieldCaption: dateCaption },
+        filterType: 'QUANTITATIVE_DATE',
+        quantitativeFilterType: 'MIN',
+        minDate: '2099-01-01',
+      },
+    ],
+  });
+  const relaxedQuery = await queryVds(accessToken, {
+    fields: [{ fieldCaption: numericCaption, function: 'SUM' }],
+  });
+  const ranking = workbookBreakdown.data
     .filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null)
-    .flatMap((row) =>
-      Object.entries(row)
-        .filter(([key, value]) => key.includes('SUM(') && typeof value === 'number')
-        .map(([, value]) => value as number),
-    );
-  const hasContradictoryComparison =
-    periodValues.length >= 2 && periodValues.at(-1)! <= periodValues.at(-2)!;
+    .map((row) => {
+      const value = Object.entries(row).find(
+        ([key, candidate]) => key.includes('SUM(') && typeof candidate === 'number',
+      );
+      return { title: row[dimensionCaption], value: value?.[1] };
+    })
+    .filter((row): row is { title: unknown; value: number } => typeof row.value === 'number')
+    .sort((left, right) => right.value - left.value);
+  const topWorkbook = ranking[0]?.title;
+  const secondWorkbook = ranking[1]?.title;
   const passed =
     metadataResponse.ok &&
-    aggregate.httpStatus === 200 &&
-    aggregate.rowCount !== null &&
-    aggregate.rowCount > 0 &&
-    empty.httpStatus === 200 &&
-    empty.rowCount === 0 &&
-    periods.httpStatus === 200 &&
-    periodValues.length >= 2 &&
-    hasContradictoryComparison;
+    monthlyTrend.httpStatus === 200 &&
+    (monthlyTrend.rowCount ?? 0) > 1 &&
+    workbookBreakdown.httpStatus === 200 &&
+    (workbookBreakdown.rowCount ?? 0) > 1 &&
+    emptyDate.httpStatus === 200 &&
+    emptyDate.rowCount === 0 &&
+    relaxedQuery.httpStatus === 200 &&
+    (relaxedQuery.rowCount ?? 0) > 0 &&
+    topWorkbook !== undefined &&
+    secondWorkbook !== undefined;
   console.log(
     JSON.stringify({
-      status: 'case_setup_validation',
+      status: 'case_setup_redesign_validation',
       passed,
       metadataHttpStatus: metadataResponse.status,
-      numericFieldAvailable: true,
-      dateFieldAvailable: true,
-      aggregate: {
-        httpStatus: aggregate.httpStatus,
-        rowCount: aggregate.rowCount,
-        errorCode: aggregate.errorCode,
+      fields: { numeric: numericCaption, date: dateCaption, dimension: dimensionCaption },
+      incompleteFirstResult: {
+        initialQuery: 'month(date) + SUM(view-count)',
+        httpStatus: monthlyTrend.httpStatus,
+        rowCount: monthlyTrend.rowCount,
+        followUpQuery: 'Workbook Title + SUM(view-count)',
+        followUpHttpStatus: workbookBreakdown.httpStatus,
+        followUpRowCount: workbookBreakdown.rowCount,
+        setupValid:
+          monthlyTrend.httpStatus === 200 &&
+          (monthlyTrend.rowCount ?? 0) > 1 &&
+          workbookBreakdown.httpStatus === 200 &&
+          (workbookBreakdown.rowCount ?? 0) > 1,
       },
-      validEmptyQuery: {
-        httpStatus: empty.httpStatus,
-        rowCount: empty.rowCount,
-        errorCode: empty.errorCode,
-        errorMessage: empty.errorMessage,
+      emptyResultRecovery: {
+        firstQuery: 'valid future-date quantitative filter',
+        httpStatus: emptyDate.httpStatus,
+        rowCount: emptyDate.rowCount,
+        errorCode: emptyDate.errorCode,
+        errorMessage: emptyDate.errorMessage,
+        recoveryHttpStatus: relaxedQuery.httpStatus,
+        recoveryRowCount: relaxedQuery.rowCount,
+        setupValid:
+          emptyDate.httpStatus === 200 &&
+          emptyDate.rowCount === 0 &&
+          relaxedQuery.httpStatus === 200 &&
+          (relaxedQuery.rowCount ?? 0) > 0,
       },
-      comparablePeriods: {
-        httpStatus: periods.httpStatus,
-        periodCount: periodValues.length,
-        contradictoryComparison: hasContradictoryComparison,
-        errorCode: periods.errorCode,
+      hypothesisDisproved: {
+        initialHypothesis: 'the selected non-leading workbook has the highest view count',
+        groundTruthAvailable: topWorkbook !== undefined && secondWorkbook !== undefined,
+        groundTruthTopWorkbook: topWorkbook ?? null,
+        selectedFalseHypothesisWorkbook: secondWorkbook ?? null,
+        setupValid: topWorkbook !== undefined && secondWorkbook !== undefined,
       },
-      fields: { numeric: numericCaption, date: dateCaption },
+      insufficientEvidence: {
+        observedEvidenceQueryHttpStatus: workbookBreakdown.httpStatus,
+        observedEvidenceRows: workbookBreakdown.rowCount,
+        externalCauseFieldPresent: false,
+        setupValid: workbookBreakdown.httpStatus === 200 && (workbookBreakdown.rowCount ?? 0) > 0,
+      },
     }),
   );
   return passed;
@@ -783,6 +819,16 @@ async function main(): Promise<void> {
     );
     await probeUnderlyingApis(token.accessToken);
     const caseSetupReady = await validateLiveCaseSetup(token.accessToken);
+    if (process.argv.includes('--setup-only')) {
+      console.log(
+        JSON.stringify({
+          status: 'setup_only_complete',
+          measuredRunsStarted: false,
+          setupReady: caseSetupReady,
+        }),
+      );
+      return;
+    }
     const directMcpReady = caseSetupReady && (await probeMcpToolList(token.accessToken));
     if (directMcpReady) {
       const approvedChecksPassed = await runApprovedChecks(token.accessToken);

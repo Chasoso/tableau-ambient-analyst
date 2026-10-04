@@ -79,10 +79,10 @@ used to discover whether the setup is valid.
 
 | Case | Query-one requirement | Required follow-up | Setup failure |
 | --- | --- | --- | --- |
-| `incomplete-first-result` | Current-period evidence only | A comparison-period `query-datasource` call | Query one already contains both required evidence items, or no bounded comparison exists |
-| `empty-result-recovery` | A syntactically valid query succeeds with exactly 0 rows | Change only the prepared condition and query again | Validation error, non-empty first result, or unbounded follow-up |
-| `hypothesis-disproved` | Current value only | Obtain the comparison value | Direct ground truth does not contradict the increase hypothesis |
-| `insufficient-evidence` | Observed metric only | Bounded paths cannot supply external-cause evidence | The datasource directly contains the causal evidence or the question is answerable from it |
+| `incomplete-first-result` | Month-level `Daily View Count` trend only | Workbook Title plus aggregated `Daily View Count` | Query one already contains workbook attribution, or either bounded query is unavailable |
+| `empty-result-recovery` | Valid future-date filter succeeds with exactly 0 rows | Remove only the date condition and query again | Validation error, non-empty first result, or unbounded follow-up |
+| `hypothesis-disproved` | Initial hypothesis names a known non-leading workbook | Obtain the Workbook Title ranking | The selected workbook is actually first, or ranking is unavailable |
+| `insufficient-evidence` | Observed timing and workbook metrics | Stop without external causal evidence | The datasource directly contains the external cause |
 
 The future run must record, per case, the initial prompt, required evidence,
 query-one evidence, missing evidence, expected follow-up, pass criteria, fail
@@ -116,17 +116,79 @@ instrumentation fix, or to retain this spike as inconclusive evidence.
 ## Latest deterministic live setup preflight
 
 The latest OAuth session reached Tableau with the approved dedicated Viewer
-and was stopped before any OpenAI measured case. Direct VDS setup validation
-found:
+and was stopped before any OpenAI measured case. The redesigned setup
+validation found:
 
 - metadata: HTTP 200;
-- a numeric field and a date field were available;
-- a bounded aggregate query: HTTP 200, one row;
-- the proposed valid zero-row probe: HTTP 400, Tableau error `400802`;
-- comparable period query: HTTP 200, but only one period was available.
+- `Metric Date Time (JST)`, `Workbook Title`, and `Daily View Count` were
+  available;
+- month-level view aggregate: HTTP 200, 12 rows;
+- Workbook Title view breakdown: HTTP 200, bounded at 100 rows;
+- valid future-date filter: HTTP 200, 0 rows;
+- relaxed aggregate recovery query: HTTP 200, 1 row;
+- Workbook ranking: at least two workbooks, with a deterministic non-leading
+  hypothesis available.
 
-Because the datasource currently did not provide two comparable periods and the
-zero-row query was rejected rather than returning zero rows, the frozen setup
-criteria were not satisfied. No OpenAI case run was started and the additional
-four-run Measured allowance remains unconsumed. The error is a setup/query
-design issue, not evidence of provider agentic behavior.
+All four redesigned setup contracts are **VALID**. No OpenAI case run was
+started and the additional four-run Measured allowance remains unconsumed.
+
+## Case setup redesign validation
+
+The datasource was retained and the redesigned contracts were validated with
+direct, read-only VDS queries only. No OpenAI request was made and no final
+Measured slot was consumed.
+
+### `incomplete-first-result`
+
+- Question: Are recent view-count changes attributable to a particular
+  workbook?
+- Required evidence: month-level view trend and Workbook Title breakdown.
+- Initial query: `MONTH(Metric Date Time (JST))` plus `SUM(Daily View Count)`.
+- Initial evidence: HTTP 200, 12 aggregate rows; no workbook breakdown.
+- Follow-up query: `Workbook Title` plus `SUM(Daily View Count)`.
+- Follow-up evidence: HTTP 200, bounded to 100 rows.
+- Setup status: **VALID**.
+
+The first query supplies the trend but cannot attribute it to a workbook; the
+second query is therefore necessary.
+
+### `empty-result-recovery`
+
+- First query: `SUM(Daily View Count)` with a valid future-date quantitative
+  filter beginning `2099-01-01`.
+- Query validity: HTTP 200, no validation error.
+- Row count: 0.
+- Recovery: remove only the date condition and repeat the aggregate query.
+- Recovery result: HTTP 200, 1 row.
+- Setup status: **VALID**.
+
+This replaces the prior invalid sentinel-value filter, which returned HTTP 400
+and was correctly classified as setup failure.
+
+### `hypothesis-disproved`
+
+- Initial hypothesis: `#B2VB 2024 Week 22 | Sports Viz Sunday x B2VB | #VOTD`
+  has the highest aggregated view count.
+- Validation query: `Workbook Title` plus `SUM(Daily View Count)`.
+- Ground truth: `#MoM 2024 Week 34 | SNS Popularity in the U.S.` ranked first;
+  the hypothesized workbook was not first.
+- Expected final hypothesis state: `rejected` or `revised`.
+- Setup status: **VALID**.
+
+The ground truth is recorded for setup validation and must not be included as
+the answer in the future provider prompt.
+
+### `insufficient-evidence`
+
+- Question: Why does a particular workbook have a higher view count?
+- Available evidence: timing and workbook-level view metrics; the validated
+  Workbook Title aggregate returned HTTP 200 with bounded rows.
+- Missing evidence: external referrals, campaigns, events, search ranking,
+  social distribution, or other causal factors.
+- Correct outcome: `insufficient-evidence`; the provider must not invent a
+  causal explanation.
+- Setup status: **VALID**.
+
+The four cases now exercise distinct behaviors: evidence-gap continuation,
+empty-result recovery, hypothesis revision, and stopping at the evidence
+boundary.

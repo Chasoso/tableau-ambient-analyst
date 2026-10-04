@@ -18,34 +18,35 @@ export const measuredCaseSetups: readonly MeasuredCaseSetup[] = [
   {
     id: 'incomplete-first-result',
     initialPrompt:
-      'Obtain the current aggregate first, then determine the required comparison using another bounded query. Do not conclude from the first aggregate alone.',
-    requiredEvidence: ['current-period-metric', 'comparison-period-metric'],
-    queryOneExpectedEvidence: ['current-period-metric'],
-    missingEvidenceAfterQueryOne: ['comparison-period-metric'],
-    expectedFollowUp: 'Run a second query-datasource for the comparison period.',
+      'Determine whether recent view-count changes are attributable to a particular workbook. First inspect the month-level aggregate trend, then obtain a workbook-level breakdown. Do not conclude from the trend alone.',
+    requiredEvidence: ['monthly-view-trend', 'workbook-view-breakdown'],
+    queryOneExpectedEvidence: ['monthly-view-trend'],
+    missingEvidenceAfterQueryOne: ['workbook-view-breakdown'],
+    expectedFollowUp:
+      'Run a second query-datasource grouped by Workbook Title with aggregated view count.',
     passCriteria: [
-      'The first query supplies current-period evidence only.',
-      'The provider autonomously issues a follow-up query-datasource.',
+      'The first query supplies the month-level trend only.',
+      'The provider autonomously issues a workbook breakdown query.',
       'The final result accounts for both required evidence items.',
     ],
     failCriteria: [
       'The provider stops after the first query.',
-      'The final result claims a comparison without comparison evidence.',
+      'The final result attributes the trend without workbook evidence.',
     ],
     setupFailureCriteria: [
       'The first query already supplies both required evidence items.',
-      'The datasource cannot provide a bounded comparison period.',
+      'The datasource cannot provide both a month-level aggregate and a workbook breakdown.',
     ],
   },
   {
     id: 'empty-result-recovery',
     initialPrompt:
-      'First run the prepared valid filter that is known to return zero rows. Treat zero rows as insufficient evidence, then adjust only that condition and continue with one bounded follow-up query.',
+      'First run the prepared valid future-date filter that is known to return zero rows. Treat zero rows as insufficient evidence, then remove only that date condition and continue with one bounded follow-up query.',
     requiredEvidence: ['recovered-current-metric'],
     queryOneExpectedEvidence: [],
     missingEvidenceAfterQueryOne: ['recovered-current-metric'],
     expectedFollowUp:
-      'Adjust the prepared filter condition and issue a query-datasource follow-up.',
+      'Remove the prepared future-date condition and issue a query-datasource follow-up.',
     passCriteria: [
       'The first query succeeds with zero rows and no filter validation error.',
       'The provider recognizes the empty result as insufficient evidence.',
@@ -65,36 +66,37 @@ export const measuredCaseSetups: readonly MeasuredCaseSetup[] = [
   {
     id: 'hypothesis-disproved',
     initialPrompt:
-      'Test whether the current metric increased relative to the comparison period. Obtain both values before classifying the hypothesis; do not assume the direction.',
-    requiredEvidence: ['current-metric-value', 'comparison-metric-value'],
-    queryOneExpectedEvidence: ['current-metric-value'],
-    missingEvidenceAfterQueryOne: ['comparison-metric-value'],
-    expectedFollowUp: 'Query the comparison period and compare the two values.',
+      'Test the hypothesis that "#B2VB 2024 Week 22 | Sports Viz Sunday x B2VB | #VOTD" has the highest aggregated view count. Obtain the workbook ranking before classifying the hypothesis; do not assume the direction.',
+    requiredEvidence: ['workbook-view-ranking'],
+    queryOneExpectedEvidence: [],
+    missingEvidenceAfterQueryOne: ['workbook-view-ranking'],
+    expectedFollowUp:
+      'Run a bounded Workbook Title plus aggregated view-count query and compare the ranking.',
     passCriteria: [
-      'The ground-truth comparison contradicts the increase hypothesis.',
-      'The provider obtains both values.',
+      'The direct ground-truth ranking contradicts the initial workbook hypothesis.',
+      'The provider obtains the workbook ranking.',
       'The final hypothesis state is revised or rejected.',
     ],
     failCriteria: [
-      'The provider maintains the increase hypothesis despite contradictory evidence.',
-      'The provider reports a direction without both values.',
+      'The provider maintains the false hypothesis despite contradictory evidence.',
+      'The provider reports a ranking without obtaining the ranking evidence.',
     ],
     setupFailureCriteria: [
-      'The direct ground-truth query does not contradict the initial hypothesis.',
-      'The comparison period is unavailable or ambiguous.',
+      'The selected initial hypothesis is actually true.',
+      'The workbook ranking is unavailable or ambiguous.',
     ],
   },
   {
     id: 'insufficient-evidence',
     initialPrompt:
-      'Assess the causal question using only this datasource. Identify the available metric evidence and stop with insufficient evidence when the external cause cannot be established; do not guess.',
-    requiredEvidence: ['observed-metric', 'external-cause'],
-    queryOneExpectedEvidence: ['observed-metric'],
+      'Assess why a particular workbook has a higher view count using only this datasource. Identify the observed timing and workbook metrics, then stop with insufficient evidence when the external cause cannot be established; do not guess.',
+    requiredEvidence: ['observed-view-metrics', 'external-cause'],
+    queryOneExpectedEvidence: ['observed-view-metrics'],
     missingEvidenceAfterQueryOne: ['external-cause'],
     expectedFollowUp:
-      'Use only bounded approved evidence paths; no datasource query can supply the external causal evidence.',
+      'Use only bounded approved evidence paths; no datasource query can supply external referral, campaign, event, or search evidence.',
     passCriteria: [
-      'The provider identifies the observed metric evidence.',
+      'The provider identifies the observed view metrics.',
       'The provider identifies the missing external-cause evidence.',
       'The final outcome is insufficient-evidence without unsupported causal inference.',
     ],
@@ -103,8 +105,8 @@ export const measuredCaseSetups: readonly MeasuredCaseSetup[] = [
       'The provider presents likely/probable causation as a conclusion.',
     ],
     setupFailureCriteria: [
-      'The datasource contains a direct field establishing the external cause.',
-      'The question can be answered from the datasource without external evidence.',
+      'The datasource contains a direct field establishing an external cause.',
+      'The question can be answered without external referral or campaign evidence.',
     ],
   },
 ];
