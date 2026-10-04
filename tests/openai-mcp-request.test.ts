@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildOpenAiMcpToolConfiguration,
+  redactOpenAiMcpToolConfiguration,
   tableauMcpAllowedTools,
   tableauMcpServerLabel,
   tableauMcpServerUrl,
@@ -33,6 +34,18 @@ describe('OpenAI remote MCP request construction', () => {
 
     expect(first.authorization).toBe('token-a');
     expect(second.authorization).toBe('token-b');
+  });
+
+  it('redacts authorization before configuration is logged', () => {
+    const configuration = buildOpenAiMcpToolConfiguration('secret-token');
+
+    expect(redactOpenAiMcpToolConfiguration(configuration)).toEqual({
+      ...configuration,
+      authorization: '<redacted>',
+    });
+    expect(JSON.stringify(redactOpenAiMcpToolConfiguration(configuration))).not.toContain(
+      'secret-token',
+    );
   });
 
   it.each(['', ' ', '\n', '\t'])('fails closed for missing authorization: %j', (token) => {

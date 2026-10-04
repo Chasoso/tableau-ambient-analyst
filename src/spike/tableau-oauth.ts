@@ -15,6 +15,7 @@ import {
 import { measuredCaseSetups } from './measured-case-setup.js';
 import {
   buildOpenAiMcpToolConfiguration,
+  redactOpenAiMcpToolConfiguration,
   tableauMcpAllowedTools,
   tableauMcpServerUrl,
 } from './openai-mcp-request.js';
@@ -358,6 +359,7 @@ async function runRelayDiagnostic(
   const startedAt = Date.now();
   const apiKey = readOpenAiKey();
   const toolConfiguration = buildOpenAiMcpToolConfiguration(accessToken);
+  const safeToolConfiguration = redactOpenAiMcpToolConfiguration(toolConfiguration);
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
@@ -388,7 +390,7 @@ async function runRelayDiagnostic(
         issuedScope,
         directAuthorizationScheme: 'Bearer token used for direct MCP HTTP requests',
         openAiAuthorizationField: 'raw OAuth access token, redacted; no explicit Bearer prefix',
-        requestConfiguration: toolConfiguration,
+        requestConfiguration: safeToolConfiguration,
         httpStatus: response.status,
         errorType: typeof error.type === 'string' ? error.type : null,
         errorCode: typeof error.code === 'string' ? error.code : null,
@@ -418,7 +420,7 @@ async function runRelayDiagnostic(
       tokenAgeSeconds,
       expiresIn,
       issuedScope,
-      requestConfiguration: toolConfiguration,
+      requestConfiguration: safeToolConfiguration,
       httpStatus: response.status,
       outputTypes,
       mcpListToolsPresent: outputTypes.includes('mcp_list_tools'),

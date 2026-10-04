@@ -28,3 +28,9 @@ export function buildOpenAiMcpToolConfiguration(accessToken: string): OpenAiMcpT
     require_approval: 'never',
   };
 }
+
+export function redactOpenAiMcpToolConfiguration(
+  configuration: OpenAiMcpToolConfiguration,
+): Omit<OpenAiMcpToolConfiguration, 'authorization'> & { authorization: '<redacted>' } {
+  return { ...configuration, authorization: '<redacted>' };
+}

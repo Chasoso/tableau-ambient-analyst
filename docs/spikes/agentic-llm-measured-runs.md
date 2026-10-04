@@ -740,6 +740,49 @@ The audit is aligned with the current [OpenAI remote MCP API reference](https://
 the application supplies the OAuth token in `authorization`, selects tools with
 `allowed_tools`, supplies `server_url`, and explicitly sets the approval policy.
 
+## Hardened relay preflight
+
+One fresh Site Admin OAuth flow was completed using the hardened request
+builder. No measured case was started.
+
+Direct baseline:
+
+- Hosted MCP `initialize`: HTTP 200.
+- Hosted MCP `tools/list`: HTTP 200.
+- Approved tools were present.
+- Underlying VDS metadata and bounded setup queries succeeded.
+
+OpenAI relay preflight:
+
+- HTTP status: 200.
+- `mcp_list_tools`: present.
+- Approved tools: visible through the restricted request configuration.
+- MCP interaction: `mcp_call` present.
+- Response request ID: `req_b119c2dc8e924753ba62faf29b772d04`.
+- Token age at relay: approximately 11 seconds.
+- Usage: 6,536 input tokens, 64 output tokens, 6,600 total.
+- Approximate cost: `$0.001384`.
+- Measured cases: 0.
+
+Classification: **HARDENED_RELAY_PREFLIGHT = PASS**. This confirms that one
+fresh Site Admin token and the normalized request builder can complete the
+OpenAI remote MCP relay. It does not prove that the previous HTTP 424 was caused
+by the builder change; transient or service-side causes remain possible.
+
+### Diagnostic logging correction
+
+The preflight also exposed a pre-existing defect: the relay diagnostic logger
+serialized the live MCP configuration including its `authorization` value.
+The value was not committed, but it appeared in the process output. The logger
+was corrected immediately to use a redacted configuration object, and a
+deterministic test now asserts that a synthetic authorization value cannot
+appear in logged configuration. No token value is retained in repository
+artifacts.
+
+Because the token was emitted to the session output, human review should decide
+whether the temporary Site Admin token must be revoked or otherwise invalidated
+before any further use. No additional live retry was performed.
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
