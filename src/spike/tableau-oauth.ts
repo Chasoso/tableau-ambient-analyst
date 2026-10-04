@@ -16,6 +16,7 @@ import {
 import { measuredCaseSetups } from './measured-case-setup.js';
 import {
   buildOpenAiMcpToolConfiguration,
+  structuredOutcomeTextFormat,
   redactOpenAiMcpToolConfiguration,
   tableauMcpAllowedTools,
   tableauMcpServerUrl,
@@ -303,7 +304,8 @@ async function runOpenAiMcpRequest(accessToken: string, input: string): Promise<
     body: JSON.stringify({
       model: 'gpt-5.6-luna',
       input,
-      max_output_tokens: 256,
+      max_output_tokens: 1024,
+      text: { format: structuredOutcomeTextFormat },
       tools: [buildOpenAiMcpToolConfiguration(accessToken)],
     }),
   });
@@ -472,7 +474,7 @@ async function runApprovedChecks(accessToken: string): Promise<boolean> {
 
 async function runLiveCases(accessToken: string): Promise<void> {
   for (const evaluationCase of measuredCaseSetups) {
-    const input = `Case ${evaluationCase.id}. ${evaluationCase.initialPrompt} Datasource is fixed to ${datasourceLuid}. Use only the approved read-only tools: list-datasources, get-datasource-metadata, query-datasource. Maximum 6 MCP calls, maximum 1 recoverable retry, aggregation-first, maximum 100 result rows, no writes, no other datasource. Return a concise answer followed by exactly one JSON object with keys outcome, summary, evidence_complete, missing_evidence, hypothesis_state, and stop_reason. Use outcome values supported, revised, rejected, or insufficient-evidence; use hypothesis_state values maintained, revised, rejected, or not-applicable; use stop_reason values sufficient-evidence, insufficient-evidence, tool-error, limit-reached, or other. Do not reproduce raw rows, tokens, headers, or credentials.`;
+    const input = `Case ${evaluationCase.id}. ${evaluationCase.initialPrompt} Datasource is fixed to ${datasourceLuid}. Use only the approved read-only tools: list-datasources, get-datasource-metadata, query-datasource. Maximum 6 MCP calls, maximum 1 recoverable retry, aggregation-first, maximum 100 result rows, no writes, no other datasource. Return the required structured evaluation outcome. Use the summary field for a concise human-readable conclusion. Do not reproduce raw rows, tokens, headers, or credentials.`;
     const summary = await runOpenAiMcpRequest(accessToken, input);
     console.log(
       JSON.stringify({

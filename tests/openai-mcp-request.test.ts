@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildOpenAiMcpToolConfiguration,
+  structuredOutcomeTextFormat,
   redactOpenAiMcpToolConfiguration,
   tableauMcpAllowedTools,
   tableauMcpServerLabel,
@@ -46,6 +47,20 @@ describe('OpenAI remote MCP request construction', () => {
     expect(JSON.stringify(redactOpenAiMcpToolConfiguration(configuration))).not.toContain(
       'secret-token',
     );
+  });
+
+  it('defines the minimal strict structured outcome schema', () => {
+    expect(structuredOutcomeTextFormat.type).toBe('json_schema');
+    expect(structuredOutcomeTextFormat.strict).toBe(true);
+    expect(structuredOutcomeTextFormat.schema.required).toEqual([
+      'outcome',
+      'summary',
+      'evidence_complete',
+      'missing_evidence',
+      'hypothesis_state',
+      'stop_reason',
+    ]);
+    expect(structuredOutcomeTextFormat.schema.additionalProperties).toBe(false);
   });
 
   it.each(['', ' ', '\n', '\t'])('fails closed for missing authorization: %j', (token) => {

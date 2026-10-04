@@ -6,6 +6,47 @@ export const tableauMcpAllowedTools = [
   'query-datasource',
 ] as const;
 
+export const structuredOutcomeTextFormat = {
+  type: 'json_schema',
+  name: 'tableau_evaluation_outcome',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      outcome: {
+        type: 'string',
+        enum: ['supported', 'revised', 'rejected', 'insufficient-evidence'],
+      },
+      summary: { type: 'string' },
+      evidence_complete: { type: 'boolean' },
+      missing_evidence: { type: 'array', items: { type: 'string' } },
+      hypothesis_state: {
+        type: 'string',
+        enum: ['maintained', 'revised', 'rejected', 'not-applicable'],
+      },
+      stop_reason: {
+        type: 'string',
+        enum: [
+          'sufficient-evidence',
+          'insufficient-evidence',
+          'tool-error',
+          'limit-reached',
+          'other',
+        ],
+      },
+    },
+    required: [
+      'outcome',
+      'summary',
+      'evidence_complete',
+      'missing_evidence',
+      'hypothesis_state',
+      'stop_reason',
+    ],
+  },
+} as const;
+
 export type OpenAiMcpToolConfiguration = {
   type: 'mcp';
   server_label: typeof tableauMcpServerLabel;
