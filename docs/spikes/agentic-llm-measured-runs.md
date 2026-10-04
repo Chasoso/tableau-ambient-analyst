@@ -588,3 +588,255 @@ the answer in the future provider prompt.
 The four cases now exercise distinct behaviors: evidence-gap continuation,
 empty-result recovery, hypothesis revision, and stopping at the evidence
 boundary.
+
+## Escalation preparation: Hosted MCP authentication
+
+This section is a sanitized reproduction package. It contains no real CIMD
+URL, token, authorization code, site, user, datasource, request ID, or secret.
+No new OAuth, MCP, or OpenAI request was made while preparing it.
+
+### Minimal reproduction
+
+1. Publish a non-secret CIMD document at an HTTPS URL and use that URL as
+   `client_id`.
+2. Use an authorization-code flow with PKCE S256 and a loopback redirect URI.
+3. Send `resource=https://mcp.tableau.com` in the authorization request.
+4. Complete Tableau Cloud authorization as a user allowed to access the
+   target site.
+5. Exchange the code at `https://sso.online.tableau.com/oauth2/token`, sending
+   the same resource value and the PKCE verifier.
+6. Observe successful Bearer/JWT-like token issuance and record only sanitized
+   metadata.
+7. Send the Bearer token to the Hosted MCP `initialize` endpoint.
+8. Observe HTTP 401 `invalid_token`.
+
+### Sanitized CIMD example
+
+```json
+{
+  "client_id": "https://example.invalid/cimd.json",
+  "redirect_uris": ["http://127.0.0.1:PORT/oauth/callback"],
+  "client_name": "Hosted Tableau MCP OAuth reproduction",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}
+```
+
+The placeholder document follows the fields used by the spike harness; the
+actual ephemeral URL and port must be supplied only by the person reproducing
+the issue.
+
+### Sanitized authorization request
+
+```text
+GET https://sso.online.tableau.com/oauth2/authorize
+
+client_id=<CIMD URL>
+redirect_uri=http://127.0.0.1:<PORT>/oauth/callback
+response_type=code
+code_challenge=<redacted>
+code_challenge_method=S256
+resource=https://mcp.tableau.com
+scope=<Hosted MCP scope summary>
+state=<redacted>
+```
+
+### Sanitized token request
+
+```text
+POST https://sso.online.tableau.com/oauth2/token
+
+grant_type=authorization_code
+client_id=<CIMD URL>
+redirect_uri=http://127.0.0.1:<PORT>/oauth/callback
+code=<redacted>
+code_verifier=<redacted>
+resource=https://mcp.tableau.com
+```
+
+### Sanitized token metadata and MCP response
+
+```json
+{
+  "token_type": "Bearer",
+  "expires_in": 3599,
+  "iss": "https://sso.online.tableau.com",
+  "aud": "<CIMD URL>",
+  "scope": "<sanitized Hosted MCP scope summary>"
+}
+```
+
+The observed token's `iat`/`nbf`/`exp` relationship appeared valid. The token
+itself was never retained in this package.
+
+```text
+POST https://mcp.tableau.com
+Authorization: Bearer <redacted>
+Content-Type: application/json
+
+<JSON-RPC initialize body with protocolVersion and clientInfo; no secret>
+```
+
+Observed response:
+
+```text
+HTTP 401
+error: invalid_token
+WWW-Authenticate: not observed
+MCP session: not established
+```
+
+### Previous successful behavior
+
+An earlier run with the same broad architecture reached Hosted MCP initialize
+with HTTP 200 and completed `tools/list`. The successful token's audience was
+not retained, so `previous successful token audience: UNKNOWN`. This is not
+evidence of permanent incompatibility; it shows that authentication behavior
+has not been reproducible.
+
+### Checks already completed
+
+- Token issuance succeeded.
+- `resource=https://mcp.tableau.com` was sent in both authorization and token
+  requests.
+- The same fresh token remained invalid after several seconds.
+- Access and refresh tokens were not confused.
+- Token truncation and Bearer formatting were checked.
+- The CIMD endpoint remained reachable.
+- The dedicated Viewer was explicitly logged into the target Tableau site.
+- Requested scopes were unchanged.
+
+### Upstream overlap check
+
+| Reference | Relevance | New issue still needed |
+| --- | --- | --- |
+| [tableau-mcp#772](https://github.com/tableau/tableau-mcp/issues/772) | Hosted metadata, CIMD support, and no DCR endpoint; does not resolve audience validation | Yes, unless maintainers direct this report there |
+| [tableau-mcp#718](https://github.com/tableau/tableau-mcp/issues/718) | Hosted service failure after successful OAuth; different HTTP 502 symptom | Yes |
+| [tableau-mcp#225](https://github.com/tableau/tableau-mcp/issues/225) | Site-scoped OAuth/session behavior; not this invalid-token symptom | Yes |
+
+The repository's public issue list also indicates that Hosted MCP OAuth and
+site/session behavior are active topics, but no matching resolved issue was
+found for `aud=<CIMD URL>` followed by Hosted MCP 401 `invalid_token`.
+
+### Recommended escalation channel
+
+**Tableau/Salesforce support** is recommended first. The failure is in a
+managed Hosted service and may require private tenant/site routing or request
+correlation data that should not be published. A sanitized upstream GitHub
+issue can be considered if Tableau directs the report there or confirms that
+the public repository is the correct channel.
+
+### Public GitHub issue draft
+
+**Title:** Hosted Tableau MCP rejects a CIMD OAuth token with `invalid_token`
+when the requested resource is `https://mcp.tableau.com`
+
+```markdown
+## Environment
+
+- Hosted Tableau MCP: https://mcp.tableau.com
+- Authorization server: https://sso.online.tableau.com
+- OAuth client: HTTPS CIMD document used as client_id
+- Client flow: authorization code + PKCE S256
+
+## Summary
+
+The authorization and token requests both include
+`resource=https://mcp.tableau.com`. Token issuance succeeds, but Hosted MCP
+rejects the resulting Bearer token during `initialize` with HTTP 401
+`invalid_token`.
+
+## Expected behavior
+
+The access token issued for the Hosted MCP resource should be accepted by
+`https://mcp.tableau.com`.
+
+## Actual behavior
+
+Token issuance succeeds. Sanitized metadata shows issuer
+`https://sso.online.tableau.com` and audience `<CIMD URL>`. Hosted MCP
+`initialize` returns HTTP 401 `invalid_token`. No `WWW-Authenticate` value was
+observed.
+
+## OAuth configuration
+
+- Authorization request resource: `https://mcp.tableau.com`
+- Token request resource: `https://mcp.tableau.com`
+- Client authentication: `none`, via CIMD
+- Redirect: loopback URI
+- PKCE: S256
+
+## Reproduction steps
+
+1. Publish a non-secret CIMD document over HTTPS.
+2. Use its URL as `client_id`.
+3. Complete authorization-code + PKCE authorization.
+4. Send the resource indicator in both authorization and token requests.
+5. Confirm successful token issuance.
+6. Send the Bearer token to Hosted MCP `initialize`.
+7. Observe HTTP 401 `invalid_token`.
+
+## What we already checked
+
+- Same fresh token remained invalid after several seconds.
+- Access/refresh token selection, truncation, and Bearer formatting were checked.
+- CIMD remained reachable.
+- A dedicated Viewer was logged into the intended Tableau site.
+
+## Previous successful behavior
+
+An earlier run reached initialize HTTP 200 and completed `tools/list`, but the
+previous token audience was not retained.
+
+## Questions
+
+1. Is `aud=<CIMD client URL>` expected when both requests use
+   `resource=https://mcp.tableau.com`?
+2. What audience value or mapping does Hosted MCP validate?
+3. Does Hosted MCP use the public self-hosted resource-based audience
+   validation semantics?
+4. Are there known Hosted MCP/CIMD token-validation issues?
+5. Is additional site-binding/resource information required for CIMD clients?
+```
+
+### Tableau/Salesforce support draft
+
+```markdown
+## Managed Hosted Tableau MCP OAuth validation failure
+
+Environment:
+- Hosted endpoint: https://mcp.tableau.com
+- Authorization server: https://sso.online.tableau.com
+- Tenant/site: <redacted; provide privately to support>
+- User/identity: <dedicated test identity; provide privately>
+- Timestamp UTC: <insert>
+- Request/correlation ID: <insert if available>
+
+Observed:
+- CIMD URL used as client_id.
+- `resource=https://mcp.tableau.com` sent in authorization and token requests.
+- Token issuance succeeded, approximately one-hour lifetime.
+- Sanitized issuer: `https://sso.online.tableau.com`.
+- Sanitized audience: `<CIMD URL>`.
+- Hosted MCP initialize returned HTTP 401 `invalid_token`.
+- `WWW-Authenticate`: not observed.
+
+Questions:
+1. Is the observed audience expected for this resource/client combination?
+2. Which audience mapping does the Hosted MCP validator require?
+3. Are there known Hosted MCP/CIMD validation regressions or routing issues?
+4. Is any additional private site-binding information required?
+
+No token, authorization code, cookie, Authorization header, or secret is
+included. Private tenant and correlation details can be supplied through the
+support channel only.
+```
+
+### Issue #17 status recommendation
+
+`BLOCKED_EXTERNAL` is recommended for the Hosted MCP portion of the spike:
+the managed authentication path is not reproducible and public information is
+insufficient to explain the 401. The agentic evaluation remains unevaluated;
+Issue #17 must remain open and must not use `Closes #17` until that dependency
+and the four measured cases are resolved.
