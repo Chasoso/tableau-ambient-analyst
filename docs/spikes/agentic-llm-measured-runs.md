@@ -132,6 +132,23 @@ validation found:
 All four redesigned setup contracts are **VALID**. No OpenAI case run was
 started and the additional four-run Measured allowance remains unconsumed.
 
+## Final-batch preflight attempt
+
+After the setup contracts passed, direct MCP initialization and `tools/list`
+also succeeded, and the approved tools were visible. The first OpenAI relay
+preflight (`list-datasources`) then failed before any case execution:
+
+- HTTP status: `424`
+- Error type: `external_connector_error`
+- Error code: `http_error`
+- Failure: error retrieving the Hosted Tableau MCP tool list
+- OpenAI preflight calls: 1
+- Measured case calls: 0
+- Measured four-case allowance: unconsumed
+
+This is recorded as an external Hosted MCP relay failure, not as agentic case
+behavior. No case was retried and no additional OpenAI call was made.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with
