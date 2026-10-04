@@ -4,7 +4,7 @@
 
 This note records current official documentation relevant to Issue #17. It is
 capability reconnaissance, not a production-provider decision and not live
-experiment evidence. The review was performed on 2026-10-03.
+experiment evidence. The review was performed on 2026-10-04.
 
 | Capability | OpenAI Responses API | Anthropic Messages / MCP connector | Amazon Bedrock |
 | --- | --- | --- | --- |
@@ -15,6 +15,36 @@ experiment evidence. The review was performed on 2026-10-03.
 | Stateful run | Responses API supports response chaining/state mechanisms | Messages history is supplied by the client; managed-agent sessions are a separate product surface | Converse supports multi-turn messages; application/session state remains a design concern |
 | Private/local MCP | Secure MCP Tunnel is documented for private servers | Connector requires a publicly exposed HTTP server; local stdio is not directly supported | AgentCore Gateway requires provisioned AWS infrastructure; no local/private path was approved here |
 | Observability / limits | Response and MCP lifecycle events are available; approvals, result size, cost, and retention need explicit policy | Tool-use blocks, errors, and MCP connector configuration are observable; limits and billing remain configuration-specific | Converse and AgentCore provide API/gateway metadata; model, gateway, IAM, quota, and cost details require a configured account |
+
+## OpenAI Responses remote MCP request boundary
+
+The current OpenAI Responses API documentation describes a remote MCP server as
+an entry in the request `tools` array. The relevant fields for this spike are:
+
+- `type: "mcp"`;
+- a stable `server_label` for the server;
+- `server_url` for the remote Streamable HTTP or HTTP/SSE endpoint;
+- optional `authorization`, supplied on every request when the server requires
+  an OAuth access token; and
+- optional `allowed_tools` to restrict the tools imported from that server.
+
+MCP approval is not being relaxed by this reconnaissance. The documented
+default requires approval before data is shared with a remote MCP server. An
+explicit `require_approval` policy can be configured later, but the experiment
+must keep approval and the approved data boundary human-owned until the
+Tableau site, datasource, and tool set are approved.
+
+The documented response lifecycle exposes an `mcp_list_tools` item when tools
+are discovered and an `mcp_call` item for a tool invocation. A call carries
+the server label, tool name, arguments, and either output or an error. A later
+request can continue from response state (for example with
+`previous_response_id`) or by supplying the relevant tool results. The
+application must still classify errors, verify evidence and completion, and
+enforce call, timeout, result-size, authorization, and cost bounds.
+
+Usage is available on the Responses result, while tool lifecycle items provide
+the observable call sequence. Raw authorization material, raw MCP payloads,
+and unbounded tool output are not part of the repository's run evidence.
 
 ## Interpretation
 
@@ -41,6 +71,7 @@ must make visible.
 ## Sources
 
 - [OpenAI MCP servers](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
+- [GPT-5.6 Luna model page](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
 - [OpenAI Responses API reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
 - [Anthropic MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)
 - [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)

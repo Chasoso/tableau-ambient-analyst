@@ -2,7 +2,7 @@
 
 ## Status
 
-**Inconclusive — live prerequisites are missing.**
+**Inconclusive — OpenAI smoke passed; Tableau boundary approval is pending.**
 
 This document records the experiment boundary and the current stopping point
 for Issue #17. It does not select a production provider, create an ADR, add a
@@ -29,6 +29,37 @@ AgentCore Gateway, and Bedrock Converse tool use are materially different
 configurations. They must not be hidden behind a false uniform provider
 abstraction before a live run.
 
+## OpenAI smoke evidence
+
+The human-approved first experiment configuration was checked on 2026-10-04:
+
+- `GET /v1/models`: HTTP 200; `gpt-5.6-luna` was present.
+- `POST /v1/responses`: HTTP 200 using `gpt-5.6-luna`.
+- Usage: 13 input tokens, 5 output tokens, 18 total tokens.
+- Approximate smoke cost: `$0.00000860`.
+- The API key was read from the approved macOS Keychain service only for the
+  child process making the request. Its value was not displayed, logged, or
+  stored.
+
+This proves model/API connectivity only. It does not prove remote MCP access
+or any Tableau analysis capability. No fallback model was used.
+
+## OpenAI remote MCP configuration
+
+The current official OpenAI configuration uses a Responses request `tools`
+entry with `type: "mcp"`, `server_label`, and `server_url`. If the remote
+server requires OAuth, the access token is supplied as `authorization` on the
+request and must not be written to repository artifacts. `allowed_tools` can
+restrict the tools imported from the server. The default approval behavior
+requires approval before data is shared; no approval relaxation is authorized
+for this spike yet.
+
+Tool discovery and calls are represented in the Responses result as
+`mcp_list_tools` and `mcp_call` items. Call output or errors are returned as
+tool-result data and remain untrusted evidence. The application must continue
+to enforce evidence completion, time/call/result limits, authorization, and
+stop-on-auth-or-permission-failure behavior.
+
 ## Proposed experiment boundary (human approval required)
 
 The following is a bounded proposal, not an authorization to connect:
@@ -36,43 +67,92 @@ The following is a bounded proposal, not an authorization to connect:
 | Boundary | Proposed value |
 | --- | --- |
 | Common benchmark | #16 `EvaluationCase` definitions and completion conditions |
-| Provider configurations | One current configuration each for OpenAI, Anthropic, and Bedrock only if prerequisites are approved |
-| Cases | Cases A–G, one run per provider/configuration initially |
-| Tableau datasource | One approved synthetic or neutral evaluation datasource; final demo data is excluded |
-| MCP endpoint | One approved Hosted Tableau MCP or explicitly approved self-hosted endpoint |
-| Tools | Read-only metric retrieval, period comparison, breakdown, and bounded filter/condition adjustment only after actual tool discovery |
+| Provider configurations | OpenAI Responses API with `gpt-5.6-luna` for the first bounded experiment; other providers remain unapproved candidates |
+| Cases | First batch after approval: `incomplete-first-result`, `empty-result-recovery`, `hypothesis-disproved`, `insufficient-evidence`; one run each |
+| Tableau datasource | One human-approved synthetic or neutral evaluation datasource; final demo data is excluded |
+| MCP endpoint | Hosted Tableau MCP at `https://mcp.tableau.com`, subject to OAuth and site approval |
+| Tools | Candidate minimum: bounded `list-datasources` for discovery, `get-datasource-metadata`, and `query-datasource`; exact names/scope require authenticated discovery and approval |
 | Writes | No persistent Tableau writes; no inferred permission expansion |
-| Tool calls | Proposed maximum: 8 per run |
-| Retries | Proposed maximum: 2, only for documented transient/recoverable errors; no auth/permission retry |
+| Tool calls | Initial maximum: 6 per run |
+| Retries | Initial maximum: 1 recoverable retry per run; no auth/permission retry |
 | Timeout | Proposed maximum: 10 minutes per run |
 | Result size | Bounded semantic summaries/evidence IDs only; no raw transport dump or unbounded row-level data |
 | Logs | Provider, case, timings, tool names, statuses, evidence IDs, token/cost metadata when available |
 | Cost | A human-approved per-provider and total spend cap is still required before execution |
 
-The actual Tableau tool names, endpoint, datasource, model/configuration,
-authentication mechanism, and cost cap cannot be selected by this spike
-without human-owned service, permission, data-flow, and cost decisions.
+The OpenAI model and endpoint candidate are now human-approved for the first
+experiment, but the Tableau site, datasource, tool allowlist, OAuth scope,
+result boundary, and final spend boundary remain human-owned decisions.
+
+## Hosted Tableau MCP boundary check
+
+The candidate endpoint is `https://mcp.tableau.com`. An unauthenticated HTTPS
+request reached the endpoint and returned HTTP 401 with a Bearer challenge.
+The protected-resource metadata endpoint returned HTTP 200 and identified
+`https://sso.online.tableau.com` as the authorization server. The advertised
+scope set includes read scopes as well as write-capable scopes, so the
+unauthenticated challenge is not evidence that this experiment has a
+read-only boundary.
+
+No Tableau OAuth session was available to this process. Consequently, no site
+was selected, no datasource was enumerated, no tool list was retrieved, and no
+Tableau data or write operation was attempted.
+
+Hosted Tableau MCP documentation describes per-user OAuth and Tableau Cloud
+permissions. Site selection is part of the OAuth connection, particularly for
+multi-site users. The hosted service's catalog is still constrained by the
+user's Tableau permissions and any site-level tool exclusions.
+
+### Candidate neutral datasource boundary
+
+There is currently no authenticated datasource candidate to name. The next
+safe discovery step is a bounded `list-datasources` call after a human selects
+the Tableau Cloud site and approves discovery. A candidate must be synthetic or
+otherwise neutral, support current metric/period/segment/filter behavior, and
+have sensitivity and permissions explicitly confirmed. Documentation examples
+are not datasource selection evidence.
+
+### Candidate minimum tool allowlist
+
+After datasource approval, the smallest proposed read-only set is:
+
+| Tool | Purpose | Write behavior | Why needed / alternative |
+| --- | --- | --- | --- |
+| `list-datasources` | Bounded discovery before a datasource is selected | Read | Needed only for discovery; remove from the evaluation run after selection if the datasource identifier is fixed |
+| `get-datasource-metadata` | Confirm fields/parameters needed by the neutral cases | Read | Needed to map evidence requirements without embedding Tableau fields in #16 cases |
+| `query-datasource` | Retrieve bounded metric, period, segment, and filter evidence | Read | Core analysis capability; unrestricted SQL/code execution is not required |
+
+`get-view-data` and tools that create, upload, download, modify, or otherwise
+persist Tableau content are excluded from the initial proposal. Any exact
+tool name, datasource identifier, result limit, and OAuth scope must be
+rechecked after authenticated discovery and human approval.
+
+Result limits should be configured at the Tableau boundary and kept to bounded
+semantic summaries/evidence IDs for the run record. The hosted endpoint's
+available scope and tool catalog must not be treated as authorization to
+expand this allowlist.
 
 ## Required live prerequisites
 
 The following minimum actions are required before the live portion can run:
 
-1. Human selects at least one provider configuration and approves its cost
-   boundary.
-2. Human supplies access through an approved credential mechanism without
-   placing credential values in the repository, prompt, logs, traces, Issue,
-   or PR.
-3. Human approves a Tableau Cloud/Server site, synthetic or neutral datasource,
-   MCP endpoint, and read-only tool allowlist.
-4. The selected provider can reach the approved MCP boundary using its current
-   supported transport/auth mechanism.
-5. Human confirms the data-flow and retention/logging boundary.
+1. Human approves the OpenAI remote-MCP request configuration, including the
+   approval behavior and credential handoff boundary.
+2. Human completes OAuth for one approved Tableau Cloud site through the
+   hosted MCP endpoint.
+3. Human selects a synthetic or neutral datasource and approves its sensitivity,
+   permissions, and use for #16 evaluation cases.
+4. Human approves the exact read-only tool allowlist, result-size limit, and
+   no-write boundary.
+5. Human confirms the data-flow, retention/logging boundary, and remaining
+   experiment spend cap.
 
-The local environment currently has no provider/Tableau credential or approved
-endpoint configuration. The live experiment is therefore classified as:
+The local environment now has approved OpenAI smoke access, but no Tableau
+OAuth session, approved site, datasource, tool allowlist, or data-flow boundary.
+The live Tableau experiment is therefore classified as:
 
 ```text
-NOT RUN — prerequisite missing
+NOT RUN — Tableau boundary approval missing
 ```
 
 This is not a provider PASS, FAIL, or application defect.
@@ -136,31 +216,39 @@ These are the proposed evaluation dimensions, not an accepted architecture.
 - `npm ci`: passed on the clean `main` baseline and feature branch.
 - `npm run validate`: passed on the feature branch (41 tests).
 - `git diff --check`: passed on the feature branch before the latest commit.
-- live provider runs: `NOT RUN — prerequisite missing`.
-- live Tableau MCP runs: `NOT RUN — prerequisite missing`.
+- OpenAI smoke: passed; not an evaluation run.
+- live Tableau MCP runs: `NOT RUN — Tableau boundary approval missing`.
 - normal CI remains deterministic and has no live provider/MCP dependency.
 
-## Human prerequisite required
+## Tableau MCP human decision required
 
-- **Missing prerequisite:** approved provider credential/configuration, Tableau
-  datasource, MCP endpoint/tool allowlist, and spend/data-flow authorization.
-- **Why required:** Issue #17 explicitly requires Layer 3 live evidence; local
-  fixtures or documentation cannot establish provider-side exploration behavior.
-- **Provider/service:** OpenAI Responses MCP, Anthropic MCP connector, and/or
-  Bedrock AgentCore/Converse, plus Tableau MCP.
-- **Permission/cost implication:** external data leaves the local boundary and
-  provider/Tableau usage may incur account, quota, or paid-service cost.
-- **Exact minimal human action:** choose one provider configuration, approve a
-  read-only neutral datasource and MCP tool boundary, provide access through an
-  approved secret mechanism, and set a spend cap.
-- **Already complete:** current official capability reconnaissance, experiment
-  boundary, safety/logging policy, and deterministic baseline verification.
-- **After prerequisite:** run the bounded #16 cases, record structured evidence,
-  compare orchestration responsibility, and update this document with results.
+- **Endpoint:** `https://mcp.tableau.com`.
+- **Authentication:** Hosted Tableau MCP uses OAuth 2.1 through Tableau SSO;
+  the unauthenticated endpoint returned HTTP 401 and exposed a Bearer
+  protected-resource challenge. No OAuth token was available to this process.
+- **Connection result:** server reachable; authenticated MCP connection not
+  established.
+- **Candidate datasource:** none selected because authenticated enumeration has
+  not been approved.
+- **Candidate tools:** bounded `list-datasources` for discovery,
+  `get-datasource-metadata`, and `query-datasource`; read-only proposal only.
+- **Recommended minimum boundary:** one human-selected neutral datasource,
+  those read-only tools only, bounded result size, no persistent writes, and no
+  unrestricted SQL/code execution.
+- **Exact human decisions requested:**
+  1. approve one Tableau Cloud site and complete the hosted OAuth connection;
+  2. select one synthetic/neutral datasource for #16 evaluation;
+  3. approve the exact read-only tool allowlist and result limit; and
+  4. approve the data-flow, logging/retention, and remaining spend boundary.
+
+OpenAI smoke connectivity, official remote-MCP request semantics, and the
+unauthenticated Tableau boundary check are already complete. The remaining
+actions are material Tableau permission, data, and security decisions, not
+implementation gaps.
 
 ## Recommendation
 
-**DEFER live execution pending human prerequisites.** Do not mark Issue #17
+**DEFER live execution pending Tableau human prerequisites.** Do not mark Issue #17
 complete or accept a provider/architecture decision from this documentation
 alone. After a bounded live run, issue a separate human-reviewed
 `KEEP`/`REVISE`/`REJECT`/`DEFER` recommendation.
