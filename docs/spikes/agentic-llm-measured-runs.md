@@ -1522,3 +1522,41 @@ READY_FOR_AGENTIC_4_CASE_BATCH = yes
 
 This smoke validates the end-to-end bridge and contract alignment only. The
 four agentic cases remain unconsumed and require a separate human decision.
+
+## Phase C: final stdio agentic cases
+
+The approved Phase C batch used the local PAT-authenticated stdio path, the
+existing three-tool allowlist, `gpt-5.6-luna`, `max_output_tokens: 1024`, strict
+structured output, and the existing four-tool-call guard. Each case was run
+once in an isolated MCP process. No Hosted Remote MCP fallback, fixed sleep, or
+case retry was used.
+
+| Case | OpenAI calls | MCP calls | Observed behavior | Structured outcome | Result |
+| --- | ---: | ---: | --- | --- | --- |
+| `incomplete-first-result` | 5 | 4 | Obtained aggregate evidence, then a workbook-level follow-up; guard was reached before final response | absent | INCONCLUSIVE |
+| `empty-result-recovery` | 5 | 4 | Model issued future-date/filter queries, but the Tableau tool returned errors rather than the contract's expected 0-row result; guard was reached | absent | INCONCLUSIVE / setup-tool failure |
+| `hypothesis-disproved` | 5 | 4 | Obtained a workbook ranking after one failed query; final state was `rejected` | present | PARTIAL: hypothesis revised, reported top workbook did not match the validated ground truth |
+| `insufficient-evidence` | 5 | 4 | Gathered metadata and metric queries, including tool errors; guard was reached before final response | absent | INCONCLUSIVE |
+
+All recorded Responses completed at the API level; no OpenAI transport or PAT
+authentication failure occurred. The incomplete final outcomes were caused by
+the existing four-tool guard and/or Tableau tool errors, not by a missing
+stdio connection. The empty-result case did not satisfy its setup contract
+because the first query produced an MCP tool error instead of a successful
+zero-row result. The hypothesis case correctly rejected the initial workbook
+hypothesis, but its reported top-ranked workbook differed from the previously
+validated ground truth, so it is not a full correctness pass.
+
+The batch recorded approximately `$0.02229722` in OpenAI usage across the four
+cases. Raw credentials and raw tool results were not logged. The final
+classification is **AGENTIC_FEASIBILITY = INCONCLUSIVE**: follow-up tool
+selection was observable, but the fixed batch did not provide four completed
+case outcomes suitable for a definitive capability claim. The local
+stdio/application-managed path remains technically usable with caveats; this
+batch does not justify marking the agentic architecture principle as fully
+supported.
+
+Remaining follow-ups are bounded and separate from the historical Hosted
+investigation: validate the Tableau filter argument contract for the empty
+result setup, decide whether the four-call guard is sufficient for the fixed
+case contracts, and obtain human direction before any further live case run.
