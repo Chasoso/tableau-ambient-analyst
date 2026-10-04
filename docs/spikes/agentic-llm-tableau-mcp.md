@@ -172,6 +172,10 @@ Reference material: [OpenAI MCP authentication and client responsibility](https:
 [Tableau OAuth](https://tableau.github.io/tableau-mcp/docs/configuration/mcp-config/authentication/oauth),
 and the [official CIMD authorization implementation](https://github.com/tableau/tableau-mcp/blob/main/src/server/oauth/authorize.ts).
 
+The HTTPS publication options for the local CIMD document are compared in
+[`tableau-cimd-exposure-options.md`](tableau-cimd-exposure-options.md). No
+option has been activated yet.
+
 No token, authorization code, cookie, or Authorization header should be pasted
 into chat. Access and refresh tokens must not be persisted by this spike.
 
