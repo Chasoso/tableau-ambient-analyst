@@ -224,7 +224,10 @@ export const openAiStdioTools = [
             fields: { type: 'array', items: queryFieldSchema },
             // Tableau MCP owns the detailed filter grammar. The bridge forwards it
             // unchanged after validating the fixed datasource and bounded limit.
-            filters: { type: 'object', additionalProperties: true },
+            filters: {
+              type: 'array',
+              items: { type: 'object', additionalProperties: true },
+            },
             parameters: {
               type: 'array',
               items: {
