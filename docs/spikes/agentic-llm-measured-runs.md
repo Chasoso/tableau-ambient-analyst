@@ -1428,7 +1428,7 @@ evidence.
 
 Deterministic tests cover tool mapping, disallowed tools, datasource rejection,
 aggregation and row limits, function-output conversion, the four-call loop
-guard, and synthetic secret redaction. `npm run validate` passed with 71 tests.
+guard, and synthetic secret redaction. `npm run validate` passed with 73 tests.
 
 The one authorized live smoke was **not completed**:
 
@@ -1498,5 +1498,27 @@ Deterministic coverage now includes a valid MCP aggregate field, a
 dimension-plus-aggregate query, the prior missing-aggregation shape, malformed
 fields, an out-of-range limit, fixed-datasource rejection, tool allowlisting,
 and non-secret argument-shape telemetry. Validation passed with 73 tests and
-the secret scan reported no leaks. A single new Phase B smoke remains
-authorized; the four agentic cases remain unconsumed until that smoke passes.
+the secret scan reported no leaks.
+
+The authorized contract-corrected Phase B smoke then passed once:
+
+1. OpenAI returned `list_datasources`; the stdio call returned 15 rows.
+2. OpenAI returned `get_datasource_metadata` for the fixed datasource; the
+   stdio call succeeded.
+3. OpenAI returned `query_datasource` with a valid MCP-shaped field,
+   `function: "SUM"`, and `limit: 1`; the Tableau MCP call returned one
+   non-empty aggregate row.
+4. The continuation returned `status: completed` with a final message.
+
+Telemetry for the four Responses calls was 31,590 input tokens (20,032 cached),
+244 output tokens, and 0 reasoning tokens in the final response; the recorded
+approximate cost was `$0.00300504`. No raw arguments, field values, PAT, or API
+key were logged. Classification:
+
+```text
+APP_MANAGED_STDIO_SMOKE = PASS
+READY_FOR_AGENTIC_4_CASE_BATCH = yes
+```
+
+This smoke validates the end-to-end bridge and contract alignment only. The
+four agentic cases remain unconsumed and require a separate human decision.
