@@ -239,6 +239,104 @@ Classification for this continuation:
 - OpenAI remote MCP relay: not evaluated in this continuation.
 - Agentic behavior: not evaluated.
 
+## OAuth context diagnosis
+
+One additional fresh OAuth flow was completed from the human-confirmed
+dedicated Viewer session. OpenAI was not called and no measured case was
+started.
+
+### Observed OAuth context
+
+- Authorization endpoint:
+  `https://sso.online.tableau.com/oauth2/authorize`
+- Token endpoint: `https://sso.online.tableau.com/oauth2/token`
+- Authorization server / issuer: `https://sso.online.tableau.com`
+- Client ID and CIMD URL: the same ephemeral Quick Tunnel `/cimd.json` URL
+- Redirect URI: loopback callback on `127.0.0.1`; exact port was ephemeral
+- Response type: `code`
+- PKCE: `S256`
+- Requested resource: `https://mcp.tableau.com`
+- Requested audience: not specified
+- Protected-resource advertised resource: `https://mcp.tableau.com`
+- Protected-resource authorization server: `https://sso.online.tableau.com`
+- Authorization metadata: CIMD supported; `S256` supported; scopes-supported
+  was not advertised in the retrieved metadata.
+
+The CIMD endpoint was reachable with HTTP 200 immediately before the direct
+Hosted MCP initialize. There is no evidence in this run that Hosted MCP
+requires a CIMD refetch during initialize; the endpoint was nevertheless
+still alive.
+
+### Token metadata
+
+- Token type: `Bearer`
+- Format: JWT-like
+- Length: 2,579 characters
+- Lifetime: 3,599 seconds
+- Refresh token: present (value not logged or persisted)
+- Issued scopes: the approved broad Hosted MCP scope set; no additions
+- `iss`: `https://sso.online.tableau.com`
+- `aud`: the ephemeral CIMD URL
+- `iat` / `nbf` / `exp`: internally consistent with the reported lifetime
+- `scope`: matched the issued scope string
+
+The token's observed audience is the CIMD client ID URL, while the requested
+and advertised resource is `https://mcp.tableau.com`. This is an observed
+resource/audience difference and a remaining diagnostic hypothesis, not a
+confirmed cause: the correct audience behavior for this Hosted MCP OAuth flow
+must be established from Tableau's current implementation or documentation
+before changing the request.
+
+### Direct initialize and site context
+
+- Direct Hosted MCP `initialize`: HTTP 401
+- Sanitized error body: no JSON-RPC error code or message observed
+- `WWW-Authenticate`: not present
+- MCP session ID: absent
+- Token age: approximately 2 seconds
+- Target datasource visibility: not tested in this run because initialize
+  failed
+- Wrong-site routing: no positive evidence; site context could not be
+  independently verified at the MCP layer
+
+The harness path was verified from code as: callback state validation → code
+extraction → awaited token exchange and JSON parsing → `access_token` field
+selection → `Bearer` authorization header → initialize. The refresh token is
+not used as the access token, no truncation or whitespace manipulation is
+performed, and no concurrent OAuth state is shared. These observations weaken
+the stale-token and token-response sequencing hypotheses, but cannot explain
+the server-side `invalid_token` response by themselves.
+
+### Previous-run comparison
+
+The repository evidence does not contain complete sanitized OAuth metadata for
+the earlier successful direct MCP run. Therefore client ID, CIMD URL,
+redirect URI, token type, audience, and site context for that run are
+`UNKNOWN`; the endpoint and general resource value are known to have been the
+same Hosted Tableau MCP path. The current run must not be treated as proof of
+a permanent audience mismatch without comparable success-run token metadata.
+
+### Current diagnosis
+
+Observed:
+
+- OAuth authorization and token issuance succeed.
+- The token is a short-lived Bearer JWT-like token.
+- CIMD remains reachable after token exchange.
+- The token audience is the CIMD URL, not the Hosted MCP resource URL.
+- Hosted MCP rejects the token at initialize with HTTP 401.
+
+Not yet proven:
+
+- Whether Hosted MCP requires `aud = https://mcp.tableau.com`.
+- Whether the authorization server intentionally uses the CIMD client ID as
+  audience for this flow.
+- Whether the dedicated Viewer/site context contributes to this rejection.
+
+The most likely failure layer remains Hosted MCP token acceptance or an OAuth
+resource/audience compatibility issue. No OAuth request, scope, site role, or
+security boundary was changed. The issue remains `HUMAN_DECISION_REQUIRED`.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with

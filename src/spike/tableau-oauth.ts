@@ -34,8 +34,11 @@ const requestedScopes =
 
 type OAuthMetadata = {
   authorization_servers?: unknown;
+  resource?: unknown;
+  issuer?: unknown;
   authorization_endpoint?: unknown;
   token_endpoint?: unknown;
+  scopes_supported?: unknown;
   code_challenge_methods_supported?: unknown;
   client_id_metadata_document_supported?: unknown;
 };
@@ -45,6 +48,7 @@ type TokenResponse = {
   token_type?: unknown;
   expires_in?: unknown;
   scope?: unknown;
+  refresh_token?: unknown;
 };
 
 type CimdMetadata = {
@@ -202,7 +206,15 @@ async function exchangeCode(
   redirectUri: string,
   verifier: string,
   resource: string,
-): Promise<{ accessToken: string; expiresIn: number | null; scope: string | null }> {
+): Promise<{
+  accessToken: string;
+  expiresIn: number | null;
+  scope: string | null;
+  tokenType: string | null;
+  refreshTokenPresent: boolean;
+  accessTokenFormat: 'JWT-like' | 'opaque' | 'unknown';
+  jwtMetadata: Record<string, unknown> | null;
+}> {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: clientId,
@@ -233,10 +245,33 @@ async function exchangeCode(
   }
   const token = (await response.json()) as TokenResponse;
   const accessToken = assertString(token.access_token, 'OAuth access token');
+  const tokenParts = accessToken.split('.');
+  let jwtMetadata: Record<string, unknown> | null = null;
+  if (tokenParts.length === 3 && tokenParts[1] !== undefined) {
+    try {
+      const payload = JSON.parse(
+        Buffer.from(tokenParts[1], 'base64url').toString('utf8'),
+      ) as unknown;
+      if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+        const source = payload as Record<string, unknown>;
+        jwtMetadata = Object.fromEntries(
+          ['iss', 'aud', 'iat', 'nbf', 'exp', 'scope', 'scp']
+            .filter((key) => source[key] !== undefined)
+            .map((key) => [key, source[key]]),
+        );
+      }
+    } catch {
+      jwtMetadata = null;
+    }
+  }
   return {
     accessToken,
     expiresIn: typeof token.expires_in === 'number' ? token.expires_in : null,
     scope: typeof token.scope === 'string' ? token.scope : null,
+    tokenType: typeof token.token_type === 'string' ? token.token_type : null,
+    refreshTokenPresent: typeof token.refresh_token === 'string' && token.refresh_token.length > 0,
+    accessTokenFormat: tokenParts.length === 3 ? 'JWT-like' : 'opaque',
+    jwtMetadata,
   };
 }
 
@@ -751,6 +786,18 @@ async function readJsonRpc(response: Response): Promise<JsonRpcEnvelope> {
   }
 }
 
+function sanitizeWwwAuthenticate(value: string | null): Record<string, string> | null {
+  if (value === null) return null;
+  const result: Record<string, string> = {};
+  for (const name of ['resource', 'scope', 'error', 'error_description']) {
+    const match = value.match(new RegExp(`${name}="([^"]*)"`));
+    if (match !== null && match[1] !== undefined) result[name] = match[1];
+  }
+  return Object.keys(result).length === 0
+    ? { scheme: value.split(' ', 1)[0] ?? 'unknown' }
+    : result;
+}
+
 async function probeMcpInitialize(
   accessToken: string,
   tokenObtainedAt: number,
@@ -791,6 +838,7 @@ async function probeMcpInitialize(
         typeof body.error?.message === 'string'
           ? body.error.message
           : (body.error?.message ?? null),
+      wwwAuthenticate: sanitizeWwwAuthenticate(response.headers.get('www-authenticate')),
       sessionPresent: response.headers.get('mcp-session-id') !== null,
       latencyMs: Date.now() - startedAt,
     }),
@@ -885,6 +933,90 @@ async function runFreshTokenTimingDiagnostic(
       status: 'fresh_token_timing_diagnostic',
       result: 'failed',
       conclusion: 'Fresh token remained invalid through T+5s',
+    }),
+  );
+}
+
+async function runOAuthContextDiagnostic(args: {
+  accessToken: string;
+  tokenObtainedAt: number;
+  token: Awaited<ReturnType<typeof exchangeCode>>;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  authorizationServer: string;
+  clientId: string;
+  redirectUri: string;
+  requestedResource: string;
+  cimdUrl: string;
+  resourceMetadata: OAuthMetadata;
+  oauthMetadata: OAuthMetadata;
+}): Promise<void> {
+  const cimdResponse = await fetch(args.cimdUrl, { headers: { accept: 'application/json' } });
+  console.log(
+    JSON.stringify({
+      status: 'oauth_context',
+      authorizationEndpoint: args.authorizationEndpoint,
+      tokenEndpoint: args.tokenEndpoint,
+      authorizationServer: args.authorizationServer,
+      clientId: args.clientId,
+      cimdUrl: args.cimdUrl,
+      redirectUri: args.redirectUri,
+      requestedScopes,
+      resource: args.requestedResource,
+      audience: null,
+      responseType: 'code',
+      pkce: 'S256',
+      protectedResourceAuthorizationServers: args.resourceMetadata.authorization_servers ?? null,
+      advertisedResource: args.resourceMetadata.resource ?? null,
+      oauthIssuer: args.oauthMetadata.issuer ?? null,
+      oauthScopesSupported: args.oauthMetadata.scopes_supported ?? null,
+      oauthCodeChallengeMethods: args.oauthMetadata.code_challenge_methods_supported ?? null,
+      cimdSupported: args.oauthMetadata.client_id_metadata_document_supported ?? null,
+      cimdReachableAtInitialize: cimdResponse.ok,
+      cimdHttpStatus: cimdResponse.status,
+      tokenType: args.token.tokenType,
+      tokenFormat: args.token.accessTokenFormat,
+      tokenLength: args.accessToken.length,
+      expiresIn: args.token.expiresIn,
+      issuedScopes: args.token.scope,
+      refreshTokenPresent: args.token.refreshTokenPresent,
+      jwtMetadata: args.token.jwtMetadata,
+    }),
+  );
+  const initialized = await probeMcpInitialize(
+    args.accessToken,
+    args.tokenObtainedAt,
+    'context-diagnostic',
+  );
+  if (!initialized.ok) {
+    console.log(
+      JSON.stringify({ status: 'oauth_context_diagnostic_complete', initialize: 'failed' }),
+    );
+    return;
+  }
+  const headers = {
+    accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${args.accessToken}`,
+    'content-type': 'application/json',
+    'MCP-Protocol-Version': '2025-06-18',
+    ...(initialized.sessionId === null ? {} : { 'mcp-session-id': initialized.sessionId }),
+  };
+  const toolsResponse = await fetch(tableauMcpUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+  });
+  const toolsBody = await readJsonRpc(toolsResponse);
+  const toolNames = (toolsBody.result?.tools ?? [])
+    .map((tool) => (typeof tool.name === 'string' ? tool.name : null))
+    .filter((name): name is string => name !== null);
+  console.log(
+    JSON.stringify({
+      status: 'oauth_context_tools_list',
+      httpStatus: toolsResponse.status,
+      approvedToolsAvailable: allowedTools.every((name) => toolNames.includes(name)),
+      approvedTools: allowedTools,
+      toolCount: toolNames.length,
     }),
   );
 }
@@ -1056,6 +1188,23 @@ async function main(): Promise<void> {
         scope: token.scope,
       }),
     );
+    if (process.argv.includes('--context-diagnostic')) {
+      await runOAuthContextDiagnostic({
+        accessToken: token.accessToken,
+        tokenObtainedAt,
+        token,
+        authorizationEndpoint,
+        tokenEndpoint,
+        authorizationServer,
+        clientId,
+        redirectUri,
+        requestedResource: tableauMcpUrl,
+        cimdUrl: clientId,
+        resourceMetadata,
+        oauthMetadata,
+      });
+      return;
+    }
     if (process.argv.includes('--timing-diagnostic')) {
       await runTokenTimingDiagnostic(token.accessToken, tokenObtainedAt);
       return;
