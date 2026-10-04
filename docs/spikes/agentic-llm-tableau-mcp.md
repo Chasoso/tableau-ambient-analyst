@@ -122,43 +122,63 @@ checked without sending credentials or starting a browser authorization:
 | Response type | `code` |
 | PKCE | `S256` advertised |
 | Token endpoint authentication | `none` advertised; no client secret was requested or supplied |
+| CIMD | `client_id_metadata_document_supported: true` |
 | Dynamic registration | No `registration_endpoint` was advertised in the authorization-server metadata |
-| Redirect URI / client ID | Not supplied by the hosted metadata; not selected locally |
+| Redirect URI / client ID | Supplied by the MCP client; not selected locally |
 
-The result is sufficient to implement the protocol shape only after a
-supported public-client registration/identity and redirect URI are established.
-The current official Hosted Tableau Cloud documentation says custom clients
-point at `https://mcp.tableau.com` and complete OAuth when prompted, but it does
-not provide a repository-specific client ID or a discoverable dynamic
-registration endpoint. The local harness must not invent either value.
+The important distinction is that the Hosted Tableau path advertises CIMD, not
+RFC 7591 Dynamic Client Registration. With CIMD, the MCP client's `client_id`
+is an HTTPS URL for a client metadata document; it is not a Tableau Connected
+App client ID. The official Tableau MCP authorization implementation fetches
+and validates that document, including its redirect URI list, when the
+`client_id` is a URL. The document must be reachable by the Hosted service and
+must identify itself with the same URL.
 
-### Tableau OAuth human action required
+Therefore, the absence of `registration_endpoint` does not imply that a human
+must create a client ID. It means the local harness must implement the MCP
+CIMD client path (including hosting the metadata document at an HTTPS URL).
+No Tableau Connected App or manual pre-registration is required by the evidence
+currently available. The exact hosting mechanism for a temporary CIMD document
+is still an implementation choice and must not expose secrets.
 
-Before a local callback flow can be started, a human must confirm the supported
-client registration path for this custom local harness and the exact Tableau
-Cloud site. No token, authorization code, cookie, or Authorization header
-should be pasted into chat.
+### Minimal local OAuth bootstrap proposal
 
-Required human inputs are limited to non-secret configuration:
+The smallest supported path for this spike is:
 
-1. Confirm or provide the approved public OAuth client identity/registration
-   mechanism for a local custom MCP client.
-2. Approve a loopback redirect URI and its port/path, or approve the provider's
-   documented redirect URI for that client.
-3. Confirm the Tableau Cloud site/content URL to target. Site selection is
-   OAuth-scoped for multi-site users.
-4. Confirm the minimum read scopes for the fixed datasource and three-tool
-   allowlist.
+1. Start a local harness with an ephemeral loopback callback and state/PKCE.
+2. Serve a minimal HTTPS CIMD document whose `client_id` is its own URL and
+   whose redirect URI list contains the harness callback.
+3. Build the Tableau authorization URL using that CIMD URL as `client_id`,
+   `response_type=code`, and `code_challenge_method=S256`.
+4. Open the URL for human Tableau sign-in/consent; receive the callback locally
+   and exchange the code in memory.
+5. Pass the resulting Tableau access token only in each OpenAI Responses MCP
+   request's `authorization` field.
 
-Only after those values are confirmed can the harness generate an authorization
-URL with state and PKCE. The human would then sign in and approve access in a
-browser; the local callback would receive the code directly and exchange it in
-memory. The access and refresh tokens must not be persisted by this spike.
+The OpenAI API does not perform this bootstrap. Its current documentation says
+OAuth client registration and authorization are handled separately by the
+application; the application supplies the resulting access token in
+`tools[type="mcp"].authorization` on every request. OpenAI does not store or
+return that token.
+
+The Hosted Tableau MCP docs explain why clients such as Claude Code can add the
+endpoint and then authenticate in the client UI: the MCP client owns the OAuth
+discovery, CIMD/bootstrap, browser authorization, and token handling. The docs
+do not indicate that Tableau requires a manually created Connected App for this
+hosted flow.
+
+Reference material: [OpenAI MCP authentication and client responsibility](https://developers.openai.com/api/docs/guides/tools-connectors-mcp),
+[Hosted Tableau MCP](https://tableau.github.io/tableau-mcp/docs/hosted-tableau-mcp),
+[Tableau OAuth](https://tableau.github.io/tableau-mcp/docs/configuration/mcp-config/authentication/oauth),
+and the [official CIMD authorization implementation](https://github.com/tableau/tableau-mcp/blob/main/src/server/oauth/authorize.ts).
+
+No token, authorization code, cookie, or Authorization header should be pasted
+into chat. Access and refresh tokens must not be persisted by this spike.
 
 Until then:
 
 ```text
-HUMAN_ACTION_REQUIRED — OAuth client identity, redirect URI, and Tableau site
+HUMAN_ACTION_REQUIRED — browser sign-in/consent only when the CIMD bootstrap is ready
 ```
 
 ### Approved evaluation datasource boundary
@@ -173,7 +193,7 @@ After OAuth, `list-datasources` may verify that this LUID is visible, but it
 must not be used to browse unrelated datasources. The harness must then use the
 fixed LUID for metadata and query calls.
 
-### Candidate minimum tool allowlist
+### Approved minimum tool allowlist
 
 The approved minimum read-only set is:
 
@@ -198,19 +218,19 @@ if the remote tool exposes a larger limit.
 
 The following minimum actions are required before the live portion can run:
 
-1. Human confirms the OpenAI remote-MCP request configuration, including the
-   approval behavior and credential handoff boundary.
-2. Human confirms the supported public OAuth client identity/registration path,
-   loopback redirect URI, and target Tableau Cloud site.
-3. Human completes OAuth for that site through the hosted MCP endpoint.
-4. The harness verifies the approved datasource LUID and three-tool allowlist,
+1. The harness implements the CIMD document and local state/PKCE callback path.
+2. Human completes OAuth for the target Tableau Cloud site through the hosted
+   MCP endpoint when the harness presents the authorization URL.
+3. The harness verifies the approved datasource LUID and three-tool allowlist,
    then confirms the 100-row/no-write boundary.
+4. The harness passes the access token only to OpenAI's MCP authorization
+   field and keeps it in memory.
 5. Human confirms the data-flow, retention/logging boundary, and remaining
    experiment spend cap.
 
 The local environment now has approved OpenAI smoke access and an approved
-datasource/tool/data boundary, but no Tableau OAuth session, OAuth client
-identity, redirect URI, or selected site.
+datasource/tool/data boundary, but the CIMD/bootstrap implementation and
+Tableau OAuth session have not yet been run.
 The live Tableau experiment is therefore classified as:
 
 ```text
@@ -296,11 +316,10 @@ These are the proposed evaluation dimensions, not an accepted architecture.
   `get-datasource-metadata`, and `query-datasource`.
 - **Approved boundary:** read-only, aggregation-first, maximum 100 rows, no
   persistent writes, and no unrestricted SQL/code execution.
-- **Exact human decisions requested:**
-  1. confirm the public OAuth client identity/registration mechanism;
-  2. confirm the loopback redirect URI and target Tableau Cloud site;
-  3. complete the browser OAuth authorization; and
-  4. approve the data-flow, logging/retention, and remaining spend boundary.
+- **Exact human action later required:** complete browser sign-in/consent and
+  select the intended Tableau Cloud site when the local harness opens the
+  CIMD-based authorization URL. No client ID, Connected App, token, or code
+  should be supplied manually.
 
 OpenAI smoke connectivity, official remote-MCP request semantics, and the
 unauthenticated Tableau boundary check are already complete. The remaining
@@ -309,7 +328,8 @@ implementation gaps.
 
 ## Recommendation
 
-**DEFER live execution pending Tableau OAuth prerequisites.** Do not mark Issue #17
+**DEFER live execution pending the local CIMD bootstrap and Tableau OAuth
+human action.** Do not mark Issue #17
 complete or accept a provider/architecture decision from this documentation
 alone. After a bounded live run, issue a separate human-reviewed
 `KEEP`/`REVISE`/`REJECT`/`DEFER` recommendation.
