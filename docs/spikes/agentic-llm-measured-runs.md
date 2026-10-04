@@ -899,6 +899,43 @@ statuses, `output_text` as an SDK convenience property, and reasoning-token
 accounting. It also documents `tool_choice` default behavior and
 `max_tool_calls` separately. See the [Responses API reference](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal).
 
+## 1024-token structured-output rerun preflight
+
+The approved configuration change was implemented and validated before live
+execution:
+
+- Previous `max_output_tokens`: 256.
+- New `max_output_tokens`: 1024.
+- Structured output: strict JSON Schema matching the Issue #16 outcome
+  contract.
+- Completion telemetry: enabled.
+- Fresh Site Admin OAuth: used; previous token was not reused.
+
+Direct Hosted MCP preflight succeeded, including initialize, tools/list, target
+metadata, and bounded query/setup checks. The OpenAI preflight then behaved as
+follows:
+
+1. The `list-datasources` request completed successfully:
+   - response status: `completed`
+   - incomplete reason: none
+   - output types: `mcp_list_tools`, `reasoning`, `mcp_call`, `message`
+   - message/output text: present
+   - output tokens: 203 of 1024
+   - reasoning tokens: 99
+   - approximate cost: `$0.00725660`
+2. The next metadata preflight request failed with HTTP 424
+   `external_connector_error` / `http_error` while retrieving the Hosted MCP
+   tool list.
+
+Classification: **OPENAI_RELAY_PREFLIGHT_FAILED**. The final 4-case batch was
+not started and no measured rerun slot was consumed.
+
+This single completed preflight response is evidence that the 1024-token limit
+can produce a final message and structured-response-compatible completion in at
+least one request. It does not establish that the previous 256-token ceiling
+was the sole cause of the historical four-case failures, because the new
+measured batch could not begin. No retry was performed.
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
