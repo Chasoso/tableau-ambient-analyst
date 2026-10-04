@@ -1300,3 +1300,21 @@ public-limit, capacity, Cloudflare, direct-vs-remote, and timing questions were
 checked without an agentic rerun. It is not a root-cause resolution. Agentic
 capability remains **INCONCLUSIVE** because no final four-case batch was run in
 this investigation; the existing historical cases remain unchanged.
+
+## Final batch gate correction
+
+The finalization attempt used one fresh Site Admin OAuth flow. Direct Hosted
+MCP preflight succeeded (VDS metadata/setup validation 200, initialize 200,
+`tools/list` 200, and the approved tools were visible). The single OpenAI
+minimal preflight also returned a completed response with `mcp_list_tools`,
+successful metadata/query MCP calls, and a final message.
+
+The batch was not started because the newly added local gate incorrectly
+required all three approved tool names to appear in that one minimal request.
+The request contract only requires tool-list retrieval plus a successful minimal
+MCP interaction; the model selected metadata and query directly, which met the
+live preflight evidence. The gate was corrected to require a successful MCP
+call, tool-list output, and a completed final message. Validation passed after
+the correction. The fresh token was not reused after the process ended, and no
+additional OAuth or paid retry was performed. A human decision is required
+before starting another fresh OAuth flow for the four-case batch.

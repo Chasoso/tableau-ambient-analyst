@@ -436,40 +436,26 @@ async function runRelayDiagnostic(
   );
 }
 
-async function runApprovedChecks(accessToken: string): Promise<boolean> {
-  const checks = [
-    {
-      name: 'list-datasources',
-      input: `Use list-datasources only to confirm that datasource ${datasourceLuid} is visible. Do not inspect or return unrelated datasource data. Return only a short confirmation.`,
-    },
-    {
-      name: 'get-datasource-metadata',
-      input: `Use get-datasource-metadata for datasource ${datasourceLuid} only. Do not query rows or access another datasource. Return only a short confirmation.`,
-    },
-    {
-      name: 'query-datasource',
-      input: `First use get-datasource-metadata for datasource ${datasourceLuid} only. Then use query-datasource once with an actual numeric measure or other valid field returned by that metadata. Use one minimal aggregation-first query with at most 100 result rows. Do not retrieve bulk row-level data, use unrestricted SQL/code, or access another datasource. Return only a short confirmation.`,
-    },
-  ] as const;
-  for (const check of checks) {
-    const summary = await runOpenAiMcpRequest(accessToken, check.input);
-    const failed = summary.calls.some((call) => call.error !== null);
-    console.log(
-      JSON.stringify({
-        status: 'openai_mcp_check',
-        check: check.name,
-        passed: !failed,
-        calls: summary.calls,
-        usage: summary.usage,
-        elapsedMs: summary.elapsedMs,
-        response: summary.response,
-      }),
-    );
-    if (failed) {
-      return false;
-    }
-  }
-  return true;
+async function runMinimalOpenAiPreflight(accessToken: string): Promise<boolean> {
+  const summary = await runOpenAiMcpRequest(
+    accessToken,
+    `Use only the approved read-only Tableau MCP tools. Confirm that datasource ${datasourceLuid} is visible, inspect its metadata, and perform one minimal aggregation-first query using a valid numeric measure from that metadata. Do not access another datasource, return bulk rows, use unrestricted SQL/code, or perform writes. Return a concise structured result.`,
+  );
+  const failed = summary.calls.some((call) => call.error !== null);
+  const hasToolList = summary.response.outputItemTypes.includes('mcp_list_tools');
+  const hasSuccessfulMcpCall = summary.calls.some((call) => call.error === null);
+  const hasFinalMessage = summary.response.messagePresent && summary.response.outputTextPresent;
+  console.log(
+    JSON.stringify({
+      status: 'openai_mcp_minimal_preflight',
+      passed: !failed && hasToolList && hasSuccessfulMcpCall && hasFinalMessage,
+      calls: summary.calls,
+      usage: summary.usage,
+      elapsedMs: summary.elapsedMs,
+      response: summary.response,
+    }),
+  );
+  return !failed && hasToolList && hasSuccessfulMcpCall && hasFinalMessage;
 }
 
 async function runLiveCases(accessToken: string): Promise<void> {
@@ -1366,7 +1352,7 @@ async function main(): Promise<void> {
         await runRelayDiagnostic(token.accessToken, tokenObtainedAt, token.expiresIn, token.scope);
         return;
       }
-      const approvedChecksPassed = await runApprovedChecks(token.accessToken);
+      const approvedChecksPassed = await runMinimalOpenAiPreflight(token.accessToken);
       if (approvedChecksPassed) {
         await runLiveCases(token.accessToken);
       } else {
