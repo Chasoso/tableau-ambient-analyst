@@ -2,11 +2,14 @@
 
 ## Status
 
-**Inconclusive — OpenAI smoke passed; Tableau OAuth client/site setup is pending.**
+**Inconclusive for agentic behavior — authenticated integration passed; the
+first measured batch lacked usable final-answer instrumentation.**
 
 This document records the experiment boundary and the current stopping point
 for Issue #17. It does not select a production provider, create an ADR, add a
-provider abstraction, or claim live evidence.
+provider abstraction, or claim successful agentic behavior. Detailed pilot and
+measured-run results are recorded in
+[`agentic-llm-measured-runs.md`](agentic-llm-measured-runs.md).
 
 ## Question
 
@@ -220,7 +223,8 @@ if the remote tool exposes a larger limit.
 
 ## Required live prerequisites
 
-The following minimum actions are required before the live portion can run:
+The following actions were required before the live portion could run and have
+now been completed for the current bounded batch:
 
 1. The harness implements the CIMD document and local state/PKCE callback path.
 2. Human completes OAuth for the target Tableau Cloud site through the hosted
@@ -232,16 +236,17 @@ The following minimum actions are required before the live portion can run:
 5. Human confirms the data-flow, retention/logging boundary, and remaining
    experiment spend cap.
 
-The local environment now has approved OpenAI smoke access and an approved
-datasource/tool/data boundary, but the CIMD/bootstrap implementation and
-Tableau OAuth session have not yet been run.
-The live Tableau experiment is therefore classified as:
+The local harness completed OAuth with the dedicated Viewer, verified the
+approved datasource and tools, and completed the bounded four-case batch. The
+live integration is therefore classified as:
 
 ```text
-NOT RUN — Tableau boundary approval missing
+PASS for connectivity / integration
+INCONCLUSIVE for agentic behavior
 ```
 
-This is not a provider PASS, FAIL, or application defect.
+The detailed measured-run record explains why transport success is not treated
+as an agentic behavior PASS.
 
 ## Planned run evidence
 
@@ -301,39 +306,40 @@ These are the proposed evaluation dimensions, not an accepted architecture.
 
 - `npm ci`: passed on the clean `main` baseline and feature branch.
 - `npm run validate`: passed on the feature branch (41 tests).
-- `git diff --check`: passed on the feature branch before the latest commit.
+- `git diff --check`: passed on the feature branch after instrumentation changes.
 - OpenAI smoke: passed; not an evaluation run.
-- live Tableau MCP runs: `NOT RUN — Tableau OAuth setup pending`.
+- Hosted Tableau MCP initialize, tools/list, metadata, and bounded query checks:
+  passed with the approved dedicated Viewer boundary.
+- Four measured cases: executed once each; agentic behavior inconclusive because
+  final answers/outcomes were not captured and continuation was not observed.
 - normal CI remains deterministic and has no live provider/MCP dependency.
 
-## Tableau MCP human decision required
+## Tableau MCP boundary result
 
 - **Endpoint:** `https://mcp.tableau.com`.
-- **Authentication:** Hosted Tableau MCP uses OAuth 2.1 through Tableau SSO;
-  the unauthenticated endpoint returned HTTP 401 and exposed a Bearer
-  protected-resource challenge. No OAuth token was available to this process.
-- **Connection result:** server reachable; authenticated MCP connection not
-  established.
+- **Authentication:** Hosted Tableau MCP OAuth 2.1 through Tableau SSO;
+  the dedicated Viewer token was held in memory only.
+- **Connection result:** authenticated MCP initialize and approved read-only
+  calls succeeded.
 - **Approved datasource:** `Tableau Public Per Day(2025/04-)`, LUID
   `14f3ac6d-1171-4065-baac-c63bdce1470f`.
 - **Approved tools:** `list-datasources` for fixed-target verification,
   `get-datasource-metadata`, and `query-datasource`.
 - **Approved boundary:** read-only, aggregation-first, maximum 100 rows, no
   persistent writes, and no unrestricted SQL/code execution.
-- **Exact human action later required:** complete browser sign-in/consent and
-  select the intended Tableau Cloud site when the local harness opens the
-  CIMD-based authorization URL. No client ID, Connected App, token, or code
-  should be supplied manually.
+- **No site-level settings changed:** the broad Hosted MCP OAuth challenge was
+  accepted only for this temporary spike exception; effective safety remained
+  the dedicated Viewer, approved datasource, allowed tools, and application
+  read-only policy.
 
-OpenAI smoke connectivity, official remote-MCP request semantics, and the
-unauthenticated Tableau boundary check are already complete. The remaining
-actions are material Tableau permission, data, and security decisions, not
-implementation gaps.
+OpenAI smoke connectivity, authenticated remote-MCP request semantics, and the
+approved Tableau boundary check are complete. The remaining gap is usable
+behavioral instrumentation; no additional paid measured run is authorized by
+the current record.
 
 ## Recommendation
 
-**DEFER live execution pending the local CIMD bootstrap and Tableau OAuth
-human action.** Do not mark Issue #17
-complete or accept a provider/architecture decision from this documentation
-alone. After a bounded live run, issue a separate human-reviewed
-`KEEP`/`REVISE`/`REJECT`/`DEFER` recommendation.
+**DEFER agentic conclusion pending human decision on another measured batch.**
+Do not mark Issue #17 complete or accept a provider/architecture decision from
+this documentation alone. The current evidence supports connectivity only;
+the agentic classification remains `INCONCLUSIVE`.
