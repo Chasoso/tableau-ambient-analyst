@@ -576,6 +576,7 @@ async function validateLiveCaseSetup(accessToken: string): Promise<boolean> {
         httpStatus: empty.httpStatus,
         rowCount: empty.rowCount,
         errorCode: empty.errorCode,
+        errorMessage: empty.errorMessage,
       },
       comparablePeriods: {
         httpStatus: periods.httpStatus,

@@ -112,3 +112,21 @@ architecture is accepted by this record.
 `HUMAN_DECISION_REQUIRED` before any additional paid case run. The decision
 needed is whether to authorize one new four-case measured batch after the
 instrumentation fix, or to retain this spike as inconclusive evidence.
+
+## Latest deterministic live setup preflight
+
+The latest OAuth session reached Tableau with the approved dedicated Viewer
+and was stopped before any OpenAI measured case. Direct VDS setup validation
+found:
+
+- metadata: HTTP 200;
+- a numeric field and a date field were available;
+- a bounded aggregate query: HTTP 200, one row;
+- the proposed valid zero-row probe: HTTP 400, Tableau error `400802`;
+- comparable period query: HTTP 200, but only one period was available.
+
+Because the datasource currently did not provide two comparable periods and the
+zero-row query was rejected rather than returning zero rows, the frozen setup
+criteria were not satisfied. No OpenAI case run was started and the additional
+four-run Measured allowance remains unconsumed. The error is a setup/query
+design issue, not evidence of provider agentic behavior.
