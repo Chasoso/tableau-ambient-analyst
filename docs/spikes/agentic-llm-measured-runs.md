@@ -1187,3 +1187,116 @@ the managed authentication path is not reproducible and public information is
 insufficient to explain the 401. The agentic evaluation remains unevaluated;
 Issue #17 must remain open and must not use `Closes #17` until that dependency
 and the four measured cases are resolved.
+
+## Hosted MCP reliability investigation closure
+
+This section records the bounded reliability investigation requested after the
+Site Admin feasibility path became available. It is a closure of the Hosted
+transport investigation, not a claim that the intermittent 424 root cause was
+fixed and not an agentic-behavior evaluation.
+
+### Official documentation findings
+
+- The Hosted Tableau MCP documentation describes `https://mcp.tableau.com` as
+  the managed endpoint and documents OAuth, permissions, and tool entitlements,
+  but no public Hosted-specific rate, concurrency, initialize, `tools/list`,
+  or session-churn limit was found. This is **not** evidence that no internal
+  limit exists. See [Hosted Tableau MCP](https://tableau.github.io/tableau-mcp/docs/hosted-tableau-mcp).
+- Tableau documents VizQL Data Service capacity as 100 API calls per Creator
+  license per hour per tenant for the applicable Cloud license models, with
+  capacity managed dynamically and requests potentially rejected when capacity
+  is exceeded. See [Tableau Cloud capacity](https://help.tableau.com/current/online/en-us/to_site_capacity.htm)
+  and [VDS limitations](https://help.tableau.com/current/api/vizql-data-service/en-us/docs/vds_limitations.html).
+- Tableau Cloud Manager can expose capacity consumption, concurrency, and
+  rate-limit usage, but that private tenant view was not available through the
+  existing harness. See [Cloud Manager capacity](https://help.tableau.com/current/online/en-gb/cloud_manager_capacity.htm).
+- No public document was found that maps the observed Hosted MCP 424 from the
+  OpenAI connector to a specific Tableau-side HTTP status. The underlying
+  Tableau status therefore remains unknown.
+
+### Cloudflare assessment
+
+The Quick Tunnel exposed the ephemeral CIMD document only. MCP traffic used
+`https://mcp.tableau.com` directly; it did not traverse the tunnel. OAuth
+issuance succeeded and direct Hosted MCP succeeded with the same fresh token.
+Accordingly, `CLOUDFLARE_PRIMARY_CAUSE_LIKELIHOOD=LOW`. A tunnel outage is not
+supported by the observed path, although this experiment does not prove that
+the authorization server never refetched CIMD metadata.
+
+### Controlled timing experiment
+
+One fresh temporary Site Admin OAuth token was used. No agentic case was run.
+Each direct pair created two independent MCP sessions. Each remote pair used
+two independent Responses API requests with the same hardened configuration;
+424s were recorded without per-request retry. Requested and observed gaps:
+
+| Trial | Requested gap | Actual gap | Direct A | Direct B | Remote A | Remote B |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| D0/R0 | 0s | D: 2.04s; R: 8.75s | initialize/tools 200 | initialize/tools 200 | completed; list+call+message | completed; list+call+message |
+| D5/R5 | 5s | D: 6.80s; R: 12.03s | initialize/tools 200 | initialize/tools 200 | completed; list+call+message | completed; list+call+message |
+| D15/R15 | 15s | D: 16.70s; R: 21.63s | initialize/tools 200 | initialize/tools 200 | completed; list+call+message | completed; list+call+message |
+
+Direct telemetry had no transport or tool-list error. All six remote requests
+were completed, contained `mcp_list_tools`, a successful approved-tool
+`mcp_call`, and a final `message`. No 424 occurred in this bounded matrix.
+Remote approximate costs were `$0.00615570`, `$0.00611538`, `$0.00613098`,
+`$0.00606098`, `$0.00611718`, and `$0.00605038`, for a timing-experiment
+total of approximately **$0.03663060**. No fallback model or extra retry was
+used.
+
+### Assessment
+
+- `SHORT_INTERVAL_SENSITIVITY_NOT_SUPPORTED` in this sample: both requests
+  succeeded at every tested gap. Because each gap has only one pair, this does
+  not establish a rate-limit threshold or prove that the historical 424 cannot
+  correlate with a different load or session state.
+- `SLEEP_MITIGATION=INCONCLUSIVE`: no delay was needed in this matrix, so a
+  fixed sleep is not justified as a mitigation. No retry or backoff was added.
+- `TABLEAU_CAPACITY_HYPOTHESIS=UNLIKELY` for the tested run: the bounded
+  experiment used only 12 remote requests plus 12 direct initialize/tools
+  sessions, far below the documented hourly VDS baseline if a Creator license
+  was available. Exact tenant utilization and license count were not observed,
+  so private capacity pressure and short-term throttling are not fully ruled
+  out.
+- `PUBLIC_HOSTED_MCP_LIMITS=PARTIALLY_DOCUMENTED`: VDS hourly capacity is
+  public, while Hosted MCP session/concurrency limits were not found publicly.
+- `OPENAI_REMOTE_MCP_RELIABILITY=SUPPORTED_WITH_CAVEATS`: the current matrix
+  was fully successful, but historical 424s remain valid evidence and prevent
+  an unconditional reliability claim.
+- `HOSTED_PATH=VIABLE_WITH_CAVEATS`: direct Hosted MCP was stable in this
+  sample and Remote MCP completed all six requests, but the intermittent 424,
+  unresolved Viewer authentication, and undocumented Hosted limits remain
+  material caveats.
+
+### Direct versus Remote interpretation
+
+The direct and remote paths were both stable at 0/5/15-second requested gaps.
+This bounded result weakens a simple short-interval/session-churn explanation
+and does not support attributing the earlier 424 to Cloudflare or documented VDS
+hourly exhaustion. It does not identify the earlier connector failure's cause;
+the OpenAI-side 424 did not expose the underlying Tableau status.
+
+### Remaining unresolved topics
+
+- Viewer least-privilege Hosted MCP authentication remains blocked/unresolved;
+  Site Admin success does not resolve it.
+- Hosted MCP-specific session/concurrency limits are not publicly documented.
+- Historical intermittent OpenAI Remote MCP 424 failures remain unexplained.
+- Production authentication and any retry/readiness policy require a separate
+  decision. A bounded readiness retry is a possible follow-up, not an accepted
+  implementation.
+
+The next architecture comparison may consider local stdio Tableau MCP with an
+application-managed tool loop if Hosted reliability is not acceptable, but no
+stdio implementation was started here. No GitHub issue was created. Suggested
+follow-ups are: investigate least-privilege Hosted MCP/CIMD authentication,
+escalate the sanitized 424 reproduction to Tableau/Salesforce support, and
+review OpenAI Remote MCP connector reliability with request IDs.
+
+### Closure decision
+
+The Hosted investigation is **complete enough for this bounded spike**: the
+public-limit, capacity, Cloudflare, direct-vs-remote, and timing questions were
+checked without an agentic rerun. It is not a root-cause resolution. Agentic
+capability remains **INCONCLUSIVE** because no final four-case batch was run in
+this investigation; the existing historical cases remain unchanged.
