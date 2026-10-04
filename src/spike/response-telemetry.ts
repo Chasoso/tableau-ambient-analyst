@@ -28,7 +28,21 @@ export type UsageTelemetry = {
   cachedInputTokens: number;
   outputTokens: number | null;
   totalTokens: number | null;
+  reasoningTokens: number | null;
   approximateCostUsd: number | null;
+};
+
+export type ResponseEnvelopeTelemetry = {
+  status: string | null;
+  incompleteReason: string | null;
+  responseErrorPresent: boolean;
+  maxOutputTokens: number | null;
+  outputItemTypes: string[];
+  outputItemStatuses: Array<string | null>;
+  messagePresent: boolean;
+  outputTextPresent: boolean;
+  topLevelOutputTextPresent: boolean;
+  reasoningTokens: number | null;
 };
 
 type OutputItem = {
@@ -175,6 +189,9 @@ export function summarizeUsage(usage: Record<string, unknown> | undefined): Usag
   const cachedInputTokens =
     typeof inputDetails?.cached_tokens === 'number' ? inputDetails.cached_tokens : 0;
   const outputTokens = typeof usage?.output_tokens === 'number' ? usage.output_tokens : null;
+  const outputDetails = usage?.output_tokens_details as Record<string, unknown> | undefined;
+  const reasoningTokens =
+    typeof outputDetails?.reasoning_tokens === 'number' ? outputDetails.reasoning_tokens : null;
   const totalTokens = typeof usage?.total_tokens === 'number' ? usage.total_tokens : null;
   const uncachedInput = Math.max((inputTokens ?? 0) - cachedInputTokens, 0);
   const approximateCostUsd =
@@ -186,6 +203,76 @@ export function summarizeUsage(usage: Record<string, unknown> | undefined): Usag
     cachedInputTokens,
     outputTokens,
     totalTokens,
+    reasoningTokens,
     approximateCostUsd,
+  };
+}
+
+export function summarizeResponseEnvelope(response: unknown): ResponseEnvelopeTelemetry {
+  if (typeof response !== 'object' || response === null) {
+    return {
+      status: null,
+      incompleteReason: null,
+      responseErrorPresent: false,
+      maxOutputTokens: null,
+      outputItemTypes: [],
+      outputItemStatuses: [],
+      messagePresent: false,
+      outputTextPresent: false,
+      topLevelOutputTextPresent: false,
+      reasoningTokens: null,
+    };
+  }
+  const record = response as Record<string, unknown>;
+  const incompleteDetails = record.incomplete_details;
+  const incompleteReason =
+    typeof incompleteDetails === 'object' &&
+    incompleteDetails !== null &&
+    typeof (incompleteDetails as Record<string, unknown>).reason === 'string'
+      ? ((incompleteDetails as Record<string, unknown>).reason as string)
+      : null;
+  const output = Array.isArray(record.output) ? record.output : [];
+  const outputItems = output.filter(
+    (item): item is Record<string, unknown> => typeof item === 'object' && item !== null,
+  );
+  const outputItemTypes = outputItems.map((item) =>
+    typeof item.type === 'string' ? item.type : 'unknown',
+  );
+  const outputItemStatuses = outputItems.map((item) =>
+    typeof item.status === 'string' ? item.status : null,
+  );
+  const messageItems = outputItems.filter((item) => item.type === 'message');
+  const outputTextPresent = outputItems.some((item) => {
+    if (item.type === 'output_text') return true;
+    if (!Array.isArray(item.content)) return false;
+    return item.content.some(
+      (content) =>
+        typeof content === 'object' &&
+        content !== null &&
+        (content as Record<string, unknown>).type === 'output_text',
+    );
+  });
+  const usage =
+    typeof record.usage === 'object' && record.usage !== null
+      ? (record.usage as Record<string, unknown>)
+      : undefined;
+  const outputDetails = usage?.output_tokens_details;
+  return {
+    status: typeof record.status === 'string' ? record.status : null,
+    incompleteReason,
+    responseErrorPresent: record.error !== null && record.error !== undefined,
+    maxOutputTokens: typeof record.max_output_tokens === 'number' ? record.max_output_tokens : null,
+    outputItemTypes,
+    outputItemStatuses,
+    messagePresent: messageItems.length > 0,
+    outputTextPresent,
+    topLevelOutputTextPresent:
+      typeof record.output_text === 'string' && record.output_text.length > 0,
+    reasoningTokens:
+      typeof outputDetails === 'object' &&
+      outputDetails !== null &&
+      typeof (outputDetails as Record<string, unknown>).reasoning_tokens === 'number'
+        ? ((outputDetails as Record<string, unknown>).reasoning_tokens as number)
+        : null,
   };
 }

@@ -5,6 +5,7 @@ import {
   extractStructuredOutcome,
   extractToolCalls,
   resultRowCount,
+  summarizeResponseEnvelope,
 } from '../src/spike/response-telemetry.js';
 
 const validOutcome = {
@@ -99,5 +100,67 @@ describe('Responses telemetry extraction', () => {
     expect(resultRowCount(JSON.stringify({ rows: [] }))).toBe(0);
     expect(resultRowCount(JSON.stringify({ unexpected: 'shape' }))).toBeNull();
     expect(resultRowCount('malformed')).toBeNull();
+  });
+
+  it('classifies a completed MCP response with a final message', () => {
+    expect(
+      summarizeResponseEnvelope({
+        status: 'completed',
+        incomplete_details: null,
+        max_output_tokens: 256,
+        output_text: 'done',
+        output: [
+          { type: 'mcp_list_tools', status: 'completed' },
+          { type: 'mcp_call', status: 'completed' },
+          {
+            type: 'message',
+            status: 'completed',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        usage: { output_tokens_details: { reasoning_tokens: 12 } },
+      }),
+    ).toEqual({
+      status: 'completed',
+      incompleteReason: null,
+      responseErrorPresent: false,
+      maxOutputTokens: 256,
+      outputItemTypes: ['mcp_list_tools', 'mcp_call', 'message'],
+      outputItemStatuses: ['completed', 'completed', 'completed'],
+      messagePresent: true,
+      outputTextPresent: true,
+      topLevelOutputTextPresent: true,
+      reasoningTokens: 12,
+    });
+  });
+
+  it('classifies an incomplete max-token response with no message', () => {
+    expect(
+      summarizeResponseEnvelope({
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+        max_output_tokens: 256,
+        output: [{ type: 'mcp_call', status: 'completed' }],
+        usage: { output_tokens_details: { reasoning_tokens: 256 } },
+      }),
+    ).toMatchObject({
+      status: 'incomplete',
+      incompleteReason: 'max_output_tokens',
+      maxOutputTokens: 256,
+      messagePresent: false,
+      outputTextPresent: false,
+      reasoningTokens: 256,
+    });
+  });
+
+  it('distinguishes completed MCP-only output from a parser miss', () => {
+    const telemetry = summarizeResponseEnvelope({
+      status: 'completed',
+      output: [{ type: 'mcp_list_tools', status: 'completed' }],
+    });
+
+    expect(telemetry.status).toBe('completed');
+    expect(telemetry.messagePresent).toBe(false);
+    expect(telemetry.outputTextPresent).toBe(false);
   });
 });

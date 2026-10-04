@@ -7,6 +7,7 @@ import {
   extractFinalAnswer,
   extractStructuredOutcome,
   extractToolCalls,
+  summarizeResponseEnvelope,
   summarizeUsage,
   type StructuredOutcome,
   type ToolCallTelemetry,
@@ -287,6 +288,7 @@ type OpenAiRunSummary = {
   finalAnswer: string;
   outcome: StructuredOutcome | null;
   elapsedMs: number;
+  response: ReturnType<typeof summarizeResponseEnvelope>;
 };
 
 async function runOpenAiMcpRequest(accessToken: string, input: string): Promise<OpenAiRunSummary> {
@@ -339,6 +341,7 @@ async function runOpenAiMcpRequest(accessToken: string, input: string): Promise<
     finalAnswer,
     outcome: extractStructuredOutcome(finalAnswer),
     elapsedMs: Date.now() - startedAt,
+    response: summarizeResponseEnvelope(result),
   };
 }
 
@@ -457,6 +460,7 @@ async function runApprovedChecks(accessToken: string): Promise<boolean> {
         calls: summary.calls,
         usage: summary.usage,
         elapsedMs: summary.elapsedMs,
+        response: summary.response,
       }),
     );
     if (failed) {
@@ -480,6 +484,7 @@ async function runLiveCases(accessToken: string): Promise<void> {
         elapsedMs: summary.elapsedMs,
         finalAnswer: summary.finalAnswer,
         outcome: summary.outcome,
+        response: summary.response,
       }),
     );
   }

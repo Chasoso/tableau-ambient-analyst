@@ -833,6 +833,72 @@ Security status:
 The dedicated Viewer least-privilege path remains unresolved and is not changed
 by the temporary Site Admin feasibility run.
 
+## Final-output diagnosis
+
+No new live request was made for this diagnosis. The four historical Measured
+logs retained tool summaries and usage, but did not retain the response envelope
+fields needed to determine `response.status`, `incomplete_details`, output item
+statuses, or message presence. Therefore the historical status cannot be
+recovered without another live request.
+
+### Historical evidence
+
+All four Measured cases used `max_output_tokens: 256` and reported exactly
+`output_tokens: 256`, while `finalAnswer` and structured `outcome` were empty.
+The logs did not retain reasoning-token detail. This makes output-budget
+exhaustion the leading explanation, but does not prove that the responses were
+`status: incomplete` or that `incomplete_details.reason` was
+`max_output_tokens`.
+
+| Case | Historical status | Incomplete reason | Output tokens | Final message | Assessment |
+| --- | --- | --- | ---: | --- | --- |
+| `incomplete-first-result` | unavailable | unavailable | 256 | unavailable | budget exhaustion likely |
+| `empty-result-recovery` | unavailable | unavailable | 256 | unavailable | budget exhaustion likely |
+| `hypothesis-disproved` | unavailable | unavailable | 256 | unavailable | budget exhaustion likely |
+| `insufficient-evidence` | unavailable | unavailable | 256 | unavailable | budget exhaustion likely |
+
+### Configuration audit
+
+- `max_output_tokens`: 256 for measured requests, identical across cases.
+- `tool_choice`: omitted, therefore not forced; no `required` or forced MCP
+  tool setting was found.
+- `max_tool_calls`: omitted; no application-side tool-call ceiling was found
+  in the Responses request.
+- `reasoning`: omitted explicitly.
+- `text.format`: omitted. The structured outcome was requested in the prompt,
+  but no Responses structured-output JSON schema was configured.
+- `previous_response_id`: not used.
+- Parser: handles top-level `output_text`, `message` items, nested
+  `content[].type=output_text`, and multiple output items. No parser defect was
+  demonstrated by the available evidence.
+
+The absence of a structured-output schema is an independent reliability issue:
+the requested JSON contract was prompt-dependent and not API-enforced. It can
+explain missing structured outcomes, but it does not by itself explain an empty
+final answer.
+
+### Classification
+
+`OUTPUT_BUDGET_EXHAUSTION_LIKELY` — **MEDIUM confidence**, with a secondary
+`STRUCTURED_OUTPUT_CONFIG_BUG` concern. A completed response containing a
+message would be needed to classify a parser bug; a stored `incomplete_details`
+value would be needed to raise budget exhaustion to high confidence.
+
+### Instrumentation improvement
+
+The harness now records secret-free response-envelope telemetry for future
+opt-in runs: status, incomplete reason, response error presence, output limit,
+output item types/statuses, message/output-text presence, and reasoning-token
+count. Deterministic fixtures cover completed message output, incomplete
+max-token output, MCP-only output, nested text extraction, and missing final
+messages. These additions do not re-run or reinterpret the historical cases.
+
+The current OpenAI Responses API documents `status`, `incomplete_details`,
+`max_output_tokens` as including reasoning and visible output, output item
+statuses, `output_text` as an SDK convenience property, and reasoning-token
+accounting. It also documents `tool_choice` default behavior and
+`max_tool_calls` separately. See the [Responses API reference](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal).
+
 ## Escalation preparation: Hosted MCP authentication
 
 This section is a sanitized reproduction package. It contains no real CIMD
