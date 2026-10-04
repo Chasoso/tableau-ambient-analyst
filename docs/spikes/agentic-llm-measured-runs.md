@@ -149,6 +149,46 @@ preflight (`list-datasources`) then failed before any case execution:
 This is recorded as an external Hosted MCP relay failure, not as agentic case
 behavior. No case was retried and no additional OpenAI call was made.
 
+## Relay diagnostic attempt
+
+One bounded diagnostic retry was authorized after the `424` result. The
+diagnostic used a fresh OAuth exchange, then tested the same token directly
+against Hosted Tableau MCP immediately before any OpenAI request. The direct
+MCP baseline failed at initialization with `401 invalid_token`, so the retry
+was stopped before invoking the OpenAI relay. No additional retry was made.
+
+- Token obtained: yes; token value was not logged or persisted.
+- Token age at direct initialization: approximately 0 seconds.
+- Token lifetime reported by Tableau: 3,599 seconds.
+- Issued scope: the previously approved Hosted MCP scope set; no scope was
+  added by this attempt.
+- Direct MCP `initialize`: HTTP 401, `invalid_token`.
+- Direct MCP `tools/list`: not attempted after initialization failure.
+- OpenAI Responses relay: not attempted in this retry.
+- Measured case calls: 0; the four-case allowance remains unconsumed.
+
+The diagnostic harness used the same model, endpoint, server label, raw OAuth
+token field, approved tool allowlist, and `require_approval: "never"` setting
+as the earlier relay attempts. The OpenAI MCP configuration follows the
+official [OpenAI MCP servers guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp):
+the application supplies the OAuth access token in the MCP tool's
+`authorization` field, while `allowed_tools` limits the tools imported from the
+remote server. The token is sent as the raw OAuth token in that field; the
+direct HTTP MCP requests use the `Bearer` scheme.
+
+### Failure-layer assessment
+
+The latest failure is below the OpenAI remote MCP connector: a newly obtained
+token was rejected by the direct Hosted MCP initialize endpoint. This makes
+the latest relay result **inconclusive** rather than evidence of a permanent
+OpenAI/Hosted-MCP incompatibility. The earlier direct MCP success and earlier
+OpenAI relay success remain historical evidence; the earlier `424` remains a
+separate relay diagnostic failure. Agentic behavior was not evaluated.
+
+The issue remains `HUMAN_DECISION_REQUIRED` because the single authorized
+diagnostic retry did not reach the relay and no further OAuth or relay retries
+are authorized by this record.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with

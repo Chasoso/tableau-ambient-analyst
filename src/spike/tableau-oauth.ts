@@ -314,6 +314,106 @@ async function runOpenAiMcpRequest(
   };
 }
 
+function safeRequestId(response: Response): string | null {
+  for (const header of ['x-request-id', 'request-id', 'openai-request-id', 'trace-id']) {
+    const value = response.headers.get(header);
+    if (value !== null && value.length > 0) return value;
+  }
+  return null;
+}
+
+async function runRelayDiagnostic(
+  accessToken: string,
+  tokenObtainedAt: number,
+  expiresIn: number | null,
+  issuedScope: string | null,
+): Promise<void> {
+  const startedAt = Date.now();
+  const apiKey = readOpenAiKey();
+  const toolConfiguration = {
+    type: 'mcp',
+    server_label: 'tableau-hosted',
+    server_url: tableauMcpUrl,
+    authorization: '<redacted>',
+    allowed_tools: allowedTools,
+    require_approval: 'never',
+  };
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-5.6-luna',
+      input: `Use list-datasources only to confirm that datasource ${datasourceLuid} is visible. Return a short confirmation.`,
+      max_output_tokens: 64,
+      tools: [
+        {
+          ...toolConfiguration,
+          authorization: accessToken,
+        },
+      ],
+    }),
+  });
+  const requestId = safeRequestId(response);
+  const tokenAgeSeconds = Math.round((Date.now() - tokenObtainedAt) / 1000);
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: { message?: unknown; type?: unknown; code?: unknown; param?: unknown };
+    };
+    const error = payload.error ?? {};
+    console.log(
+      JSON.stringify({
+        status: 'relay_diagnostic_attempt',
+        attempt: 1,
+        result: 'failed',
+        tokenAgeSeconds,
+        expiresIn,
+        issuedScope,
+        directAuthorizationScheme: 'Bearer token used for direct MCP HTTP requests',
+        openAiAuthorizationField: 'raw OAuth access token, redacted; no explicit Bearer prefix',
+        requestConfiguration: toolConfiguration,
+        httpStatus: response.status,
+        errorType: typeof error.type === 'string' ? error.type : null,
+        errorCode: typeof error.code === 'string' ? error.code : null,
+        errorMessage: typeof error.message === 'string' ? error.message : null,
+        errorParam: typeof error.param === 'string' ? error.param : null,
+        requestId,
+        latencyMs: Date.now() - startedAt,
+      }),
+    );
+    return;
+  }
+  const result = (await response.json()) as { output?: unknown[]; usage?: Record<string, unknown> };
+  const outputTypes = Array.isArray(result.output)
+    ? result.output.flatMap((item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as { type?: unknown }).type === 'string'
+          ? [(item as { type: string }).type]
+          : [],
+      )
+    : [];
+  console.log(
+    JSON.stringify({
+      status: 'relay_diagnostic_attempt',
+      attempt: 1,
+      result: 'success',
+      tokenAgeSeconds,
+      expiresIn,
+      issuedScope,
+      requestConfiguration: toolConfiguration,
+      httpStatus: response.status,
+      outputTypes,
+      mcpListToolsPresent: outputTypes.includes('mcp_list_tools'),
+      requestId,
+      usage: summarizeUsage(result.usage),
+      latencyMs: Date.now() - startedAt,
+    }),
+  );
+}
+
 async function runApprovedChecks(accessToken: string): Promise<boolean> {
   const checks = [
     {
@@ -810,6 +910,7 @@ async function main(): Promise<void> {
       verifier,
       tableauMcpUrl,
     );
+    const tokenObtainedAt = Date.now();
     console.log(
       JSON.stringify({
         status: 'oauth_token_obtained',
@@ -831,6 +932,10 @@ async function main(): Promise<void> {
     }
     const directMcpReady = caseSetupReady && (await probeMcpToolList(token.accessToken));
     if (directMcpReady) {
+      if (process.argv.includes('--relay-diagnostic')) {
+        await runRelayDiagnostic(token.accessToken, tokenObtainedAt, token.expiresIn, token.scope);
+        return;
+      }
       const approvedChecksPassed = await runApprovedChecks(token.accessToken);
       if (approvedChecksPassed) {
         await runLiveCases(token.accessToken);
