@@ -337,6 +337,40 @@ The most likely failure layer remains Hosted MCP token acceptance or an OAuth
 resource/audience compatibility issue. No OAuth request, scope, site role, or
 security boundary was changed. The issue remains `HUMAN_DECISION_REQUIRED`.
 
+## Token-request resource inspection
+
+The OAuth implementation was inspected without starting a new live flow. The
+authorization request and authorization-code token request both carry the
+same resource value, `https://mcp.tableau.com`.
+
+| Parameter | Authorization request | Token request |
+| --- | --- | --- |
+| `client_id` | present | present |
+| `redirect_uri` | present | present |
+| `resource` | `https://mcp.tableau.com` | `https://mcp.tableau.com` |
+| `scope` | present | not separately sent; authorization-code grant uses the issued grant |
+| `code_challenge` / `code_verifier` | `code_challenge` + `S256` | `code_verifier` |
+
+The token request body is constructed with `grant_type`, `client_id`, `code`,
+`redirect_uri`, `code_verifier`, and `resource`. The resource is encoded once
+by `URLSearchParams`; no OAuth behavior was changed in this continuation.
+
+RFC 8707 defines `resource` as an absolute URI identifying the protected
+resource, and specifically states that when it is used on an access-token
+request it identifies the resource where the token will be used. It also notes
+that the authorization server may map the resource value to another audience
+identifier rather than copying it verbatim. See [RFC 8707, sections 2 and
+2.2](https://datatracker.ietf.org/doc/html/rfc8707). The current Tableau
+metadata and prior live evidence establish the protected resource as
+`https://mcp.tableau.com`, but do not establish why the issued token's `aud`
+was the CIMD URL.
+
+Conclusion for the resource-propagation hypothesis: **NOT SUPPORTED**. The
+resource is present in both requests, so no fresh OAuth or initialize retry was
+performed. The remaining diagnosis is the OAuth server's audience semantics or
+Hosted MCP token validation/CIMD interaction, not a missing token-request
+resource parameter.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with
