@@ -1345,3 +1345,73 @@ slots remain unconsumed. This is a real preflight/connector failure, distinct
 from the corrected local gate bug. The Hosted conclusion remains
 `VIABLE_WITH_CAVEATS`; final agentic evaluation remains `INCONCLUSIVE` and
 requires a separate human decision before another live attempt.
+
+## Local stdio path investigation
+
+The Hosted Remote MCP path is not being reopened. A separate local-stdio path
+was inspected to isolate Remote MCP connector reliability from agentic
+behavior.
+
+### Official implementation and startup
+
+The official Tableau MCP implementation documents the following stdio command:
+
+```text
+npx -y @tableau/mcp-server@latest
+```
+
+For Tableau Cloud, the documented configuration requires the Tableau pod URL
+(`SERVER`), the site content URL (`SITE_NAME`), and an authentication method.
+The documented prototype path is PAT authentication using `AUTH=pat`,
+`PAT_NAME`, and `PAT_VALUE`; the official docs warn that PATs are not suitable
+for concurrent clients. Local OAuth configuration is documented for the MCP
+server, but the current official configuration rejects OAuth-enabled stdio and
+requires HTTP for that mode. Sources: [Tableau MCP getting started](https://tableau.github.io/tableau-mcp/docs/getting-started),
+[environment variables](https://tableau.github.io/tableau-mcp/docs/configuration/mcp-config/env-vars),
+and [OAuth configuration](https://tableau.github.io/tableau-mcp/docs/configuration/mcp-config/authentication/oauth).
+
+### Smoke status
+
+The local package was resolved from the official npm package and invoked once
+without credentials. It stopped before connecting because `SERVER` was not
+configured. No Tableau API call, OpenAI call, OAuth flow, or credential
+substitution was performed.
+
+```text
+STDIO_MCP_SMOKE = FAIL
+failure class = AUTH / PROCESS_START
+reason = required local Tableau MCP configuration and credential are absent
+```
+
+The repository has no safe, preconfigured stdio PAT or local OAuth credential
+available for this spike. The Hosted Site Admin OAuth token is not silently
+reused as a local stdio credential. The stdio tool loop and four-case run were
+therefore not started; no hidden application-side orchestration was added.
+
+### Human action required
+
+To continue the stdio branch, a human must provide a dedicated, read-only
+technical-spike credential and site configuration through a secure local
+mechanism, not committed files or logs:
+
+```text
+SERVER=https://<target-tableau-cloud-pod>
+SITE_NAME=<target-site-content-url>
+AUTH=pat
+PAT_NAME=<dedicated-read-only-spike-pat-name>
+PAT_VALUE=<secret supplied outside the repository>
+TRANSPORT=stdio
+```
+
+The human should confirm that the credential is limited to the approved site
+and datasource and has no write use. After that setup is confirmed, a bounded
+stdio smoke test (initialize, tools/list, metadata, one aggregate query, and a
+single OpenAI function-call bridge) can be authorized. Without it, an agentic
+classification would measure missing authentication rather than LLM behavior.
+
+### Current stdio decision
+
+`AUTH_BLOCKED` / `HUMAN_ACTION_REQUIRED`. The four stdio cases are unconsumed.
+Hosted findings remain historical evidence: `HOSTED_REMOTE_PATH =
+VIABLE_WITH_CAVEATS`, with unresolved intermittent 424s and Viewer
+least-privilege authentication as follow-up topics.
