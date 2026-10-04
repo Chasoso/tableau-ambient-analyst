@@ -371,6 +371,163 @@ performed. The remaining diagnosis is the OAuth server's audience semantics or
 Hosted MCP token validation/CIMD interaction, not a missing token-request
 resource parameter.
 
+## Tableau OAuth and Hosted MCP source investigation
+
+This investigation used current Tableau documentation and the public
+`tableau/tableau-mcp` repository. No live OAuth or MCP request was made during
+this investigation.
+
+### Official Hosted MCP facts
+
+Documented facts:
+
+- Hosted Tableau MCP is available at `https://mcp.tableau.com` and uses OAuth
+  2.1 with the signed-in user's Tableau Cloud permissions.
+- The hosted architecture describes a routing layer that inspects the OAuth
+  token and routes an authenticated request to the corresponding Tableau Cloud
+  pod.
+- The protected resource advertised by the live metadata is
+  `https://mcp.tableau.com`.
+- Tableau's public documentation describes a 401 as an authentication failure,
+  but does not publish the Hosted MCP validator's exact audience-validation
+  rule or the internal reason for this run's `invalid_token` response.
+
+Sources: [Hosted Tableau MCP](https://tableau.github.io/tableau-mcp/docs/hosted-tableau-mcp),
+[Hosted MCP architecture](https://tableau.github.io/tableau-mcp/docs/hosted-tableau-mcp/architecture),
+and [auth-error diagnosis](https://tableau.github.io/tableau-mcp/docs/configuration/mcp-config/multiple-servers).
+
+### Public source findings
+
+The current public source contains an explicit audience-validation path in
+`src/server/oauth/accessTokenValidator.ts` and a canonical resource builder in
+`src/server/oauth/resourceIdentifier.ts`:
+
+- `aud` is checked against the MCP resource identifier (and configured global
+  resource URIs), with issuer and expiry checked separately.
+- `client_id` is treated as a distinct token claim; the source comment states
+  that `aud` holds the resource URL and is not the client ID.
+- The source returns `invalid_token` when access-token validation fails.
+- The canonical resource for self-hosted deployments includes the MCP server
+  path (`<resource URI>/tableau-mcp`), while the hosted deployment advertises
+  its own global resource URL.
+
+Source references: [accessTokenValidator.ts](https://github.com/tableau/tableau-mcp/blob/main/src/server/oauth/accessTokenValidator.ts),
+[resourceIdentifier.ts](https://github.com/tableau/tableau-mcp/blob/main/src/server/oauth/resourceIdentifier.ts),
+and [authMiddleware.ts](https://github.com/tableau/tableau-mcp/blob/main/src/server/oauth/authMiddleware.ts).
+
+Applicability:
+
+- The validator/resource behavior is **explicitly implemented in the public
+  self-hosted code**.
+- It is **likely a shared design signal** for the Hosted service because the
+  Hosted service is the same Tableau MCP product family and documents resource
+  based routing.
+- It is **not proof of the Hosted backend's deployment configuration or exact
+  code version**. Hosted internal behavior remains unknown.
+
+### OAuth standard findings
+
+RFC 8707 permits `resource` on both authorization and token requests. It says
+the authorization server should audience-restrict the token to the indicated
+resource, but it may map the resource URI to another audience identifier. The
+standard therefore does not require literal string equality in every deployment;
+it does require the resource server and authorization server to agree on the
+mapping. [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707)
+
+This standard behavior does not explain why this token's `aud` was the CIMD
+client URL. No Tableau documentation found in this investigation states that
+the CIMD URL is the expected audience for Hosted MCP.
+
+### CIMD and upstream issue evidence
+
+The Hosted authorization metadata advertises CIMD support and does not advertise
+RFC 7591 dynamic registration. Tableau's upstream [issue #772](https://github.com/tableau/tableau-mcp/issues/772)
+records the same metadata chain and the absence of `registration_endpoint`, but
+does not establish an audience rule or resolve Hosted token validation.
+
+The merged [PR #832](https://github.com/tableau/tableau-mcp/pull/832) adds
+loopback-host normalization for audience validation in the public source. It
+confirms that audience validation is an active concern, but it addresses
+`localhost` versus `127.0.0.1` for local deployments, not a remote Hosted MCP
+token whose audience is a CIMD URL.
+
+### Observed versus documented
+
+| Property | Observed | Expected/documented | Assessment |
+| --- | --- | --- | --- |
+| Issuer | `https://sso.online.tableau.com` | Same authorization server from protected-resource metadata | Match |
+| Audience | Ephemeral CIMD URL | Hosted resource is `https://mcp.tableau.com`; public validator uses a resource identifier | Difference; Hosted rule undocumented |
+| Resource | Requested in both OAuth requests as `https://mcp.tableau.com` | Protected-resource metadata advertises the same value | Match |
+| Token type | Bearer, JWT-like | Bearer authorization for MCP | Match |
+| Lifetime | About 1 hour | Hosted lifetime not explicitly documented in retrieved pages | Not assessable |
+| Scope | Approved broad Hosted MCP scope set | Scope challenge/entitlements apply separately from audience | Not the primary unexplained difference |
+
+### Audience hypothesis
+
+Classification: **AUDIENCE_MISMATCH_LIKELY**.
+
+Supporting evidence:
+
+- The observed `aud` is the CIMD URL, not the Hosted protected resource.
+- The public Tableau MCP validator checks `aud` against a canonical resource
+  identifier and treats `client_id` separately.
+- The Hosted docs identify `https://mcp.tableau.com` as the canonical hosted
+  resource/routing URL.
+- Hosted MCP rejects the token at initialize with `401 invalid_token`.
+
+Limitations:
+
+- The public validator is self-hosted source and may not be the exact Hosted
+  backend build.
+- The successful historical run has no saved token audience metadata.
+- No public Tableau statement explicitly says Hosted MCP rejects `aud = CIMD
+  URL`.
+
+Therefore this is the leading hypothesis, not a confirmed root cause.
+
+### Alternative hypotheses
+
+| Hypothesis | Assessment | Evidence |
+| --- | --- | --- |
+| Audience mismatch | Likely | Observed `aud` differs from Hosted resource; public validator is resource-based |
+| Site routing / site binding | Plausible | Hosted docs describe site-scoped auth and routing; current MCP never reached site visibility |
+| CIMD lifecycle | Weakened | CIMD was reachable immediately before initialize; no evidence initialize refetches it |
+| Authorization-server regression | Plausible | Issuance succeeds but token is rejected by resource layer; public evidence cannot confirm |
+| Hosted MCP validation regression | Plausible | Repeated 401 despite valid-looking issuance and prior success |
+| Signature/key rotation issue | Unknown | Client cannot inspect Hosted validation keys or server logs |
+| Short propagation delay | Weakened | Same and fresh tokens remained invalid through approximately six seconds |
+
+### Client-side fix assessment
+
+No safe client-side fix is identified. The token exchange already includes the
+resource parameter, and a client cannot safely rewrite the signed token's
+audience. Adding an audience parameter, changing `client_id`, or changing the
+resource would be speculative and requires human approval. No code change was
+made for this investigation.
+
+### Tableau escalation draft
+
+Public information is insufficient to identify the root cause. A minimal
+sanitized support/upstream report should ask Tableau:
+
+1. Is `aud=<CIMD client URL>` expected when authorization and token requests
+   both use `resource=https://mcp.tableau.com`?
+2. What audience does Hosted Tableau MCP validate for
+   `https://mcp.tableau.com`?
+3. Is the public self-hosted audience-validation behavior representative of the
+   Hosted routing layer?
+4. Are there known Hosted MCP/CIMD token-validation regressions?
+
+Include only the Hosted endpoint, authorization server, CIMD usage, resource
+value, sanitized issuer/audience pattern, scope summary, HTTP 401
+`invalid_token`, approximate timestamp with timezone, and the fact that prior
+direct MCP success exists. Do not include any token, code, header, cookie, or
+secret.
+
+The Issue #17 implication remains: integration feasibility is previously
+demonstrated, authentication reproducibility is not established, relay
+reliability is inconclusive, and agentic capability is unevaluated.
+
 ## Case setup redesign validation
 
 The datasource was retained and the redesigned contracts were validated with
