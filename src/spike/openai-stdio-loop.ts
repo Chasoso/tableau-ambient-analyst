@@ -1,6 +1,6 @@
 import { readKeychainSecret } from './keychain-secrets.js';
 import { TableauStdioBridge, type StdioCallSummary } from './tableau-stdio-bridge.js';
-import { openAiStdioTools } from './stdio-bridge-policy.js';
+import { openAiStdioTools, summarizeStdioToolArguments } from './stdio-bridge-policy.js';
 
 const openAiKeychainService = 'ambient_openai_chasoso_20261004';
 const model = 'gpt-5.6-luna';
@@ -183,6 +183,12 @@ export async function runAppManagedStdioSmoke(): Promise<LoopResult> {
         } catch {
           throw new Error('INVALID_TOOL_CALL');
         }
+        console.log(
+          JSON.stringify({
+            status: 'app_managed_stdio_tool_arguments',
+            ...summarizeStdioToolArguments(openAiTool, argumentsValue),
+          }),
+        );
         const executed = await bridge.callTool(openAiTool, argumentsValue);
         calls.push(executed.summary);
         console.log(JSON.stringify({ status: 'app_managed_stdio_tool_call', ...executed.summary }));

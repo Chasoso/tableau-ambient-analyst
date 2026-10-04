@@ -1456,3 +1456,47 @@ but the OpenAI function schema/prompt and the local aggregation validator do
 not yet agree on the query argument shape. It is not evidence of agentic case
 failure. The four cases remain unconsumed and require a human-approved fix and
 one new smoke run before any agentic batch.
+
+### Query contract diagnosis and fix
+
+The official `tools/list` response from `@tableau/mcp-server@latest` was
+inspected before changing the live path. The relevant `query-datasource`
+contract is:
+
+```text
+datasourceLuid: string (required)
+query: object (required)
+  fields: non-empty array (required)
+    fieldCaption: string (required)
+    optional function: Tableau field-function enum
+    or calculation: string
+    or binSize: positive number
+  optional filters and parameters
+optional limit: integer >= 1
+```
+
+Aggregation is represented by a field object such as
+`{"fieldCaption":"Daily View Count","function":"SUM"}`; it is not a
+top-level `aggregation` property. The previous OpenAI schema exposed `query`
+as an unconstrained object, while the validator expected an aggregation field
+without publishing the actual `fields` union to the model. The previous raw
+arguments were not retained; the safe observed shape was a query without a
+recognized aggregation field. This was classified as a local
+`TOOL_SCHEMA_CONTRACT_MISMATCH`, not as an MCP transport or authentication
+failure.
+
+The contract fix publishes the relevant MCP field union to OpenAI, validates
+that same field shape, preserves the explicit snake_case-to-kebab-case mapping,
+and forwards valid payloads unchanged. The bridge still requires an explicit
+`limit` from the model and bounds it to 100 as an application safety policy,
+although the MCP schema itself makes `limit` optional. It does not rewrite
+fields, filters, grouping, or semantic intent. Query telemetry records only
+argument shape (keys, field kinds, aggregation presence, and limit), never raw
+field values or credentials.
+
+Deterministic coverage now includes a valid MCP aggregate field, a
+dimension-plus-aggregate query, the prior missing-aggregation shape, malformed
+fields, an out-of-range limit, fixed-datasource rejection, tool allowlisting,
+and non-secret argument-shape telemetry. Validation passed with 73 tests and
+the secret scan reported no leaks. A single new Phase B smoke remains
+authorized; the four agentic cases remain unconsumed until that smoke passes.
