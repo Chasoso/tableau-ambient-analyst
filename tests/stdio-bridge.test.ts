@@ -8,7 +8,11 @@ import {
   stdioDatasourceLuid,
   validateStdioToolArguments,
 } from '../src/spike/stdio-bridge-policy.js';
-import { buildTableauMcpChildEnvironment } from '../src/spike/tableau-stdio-bridge.js';
+import {
+  approvedDatasourceName,
+  buildTableauMcpChildEnvironment,
+  filterApprovedDatasourceListResult,
+} from '../src/spike/tableau-stdio-bridge.js';
 import {
   buildFunctionCallOutput,
   canContinueWithToolCalls,
@@ -182,6 +186,67 @@ describe('application-managed stdio bridge policy', () => {
       call_id: 'call_1',
       output: '{"rows":[{"total":3}]}',
     });
+  });
+
+  it('exposes only the approved datasource from list-datasources results', () => {
+    const filtered = filterApprovedDatasourceListResult({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            data: [
+              { luid: 'unrelated-luid', name: 'Unrelated datasource' },
+              { luid: stdioDatasourceLuid, name: approvedDatasourceName },
+            ],
+          }),
+        },
+      ],
+      isError: false,
+    });
+
+    expect(filtered).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            data: [{ datasourceLuid: stdioDatasourceLuid, name: approvedDatasourceName }],
+          }),
+        },
+      ],
+      isError: false,
+    });
+    expect(JSON.stringify(filtered)).not.toContain('unrelated-luid');
+    expect(JSON.stringify(filtered)).not.toContain('Unrelated datasource');
+  });
+
+  it('fails closed when list-datasources does not include the approved datasource', () => {
+    expect(() =>
+      filterApprovedDatasourceListResult({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ data: [{ luid: 'unrelated-luid', name: 'Other' }] }),
+          },
+        ],
+        isError: false,
+      }),
+    ).toThrow('APPROVED_DATASOURCE_NOT_FOUND');
+  });
+
+  it('accepts an approved-only list-datasources result', () => {
+    expect(
+      filterApprovedDatasourceListResult({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              data: [{ datasourceLuid: stdioDatasourceLuid, name: approvedDatasourceName }],
+            }),
+          },
+        ],
+        isError: false,
+      }),
+    ).toMatchObject({ isError: false });
   });
 
   it('stops at the application tool-call budget', () => {

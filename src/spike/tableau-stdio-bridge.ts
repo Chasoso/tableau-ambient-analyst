@@ -21,6 +21,7 @@ const tableauPatKeychainService = 'tableau_ambient_analyst_pat_20261005';
 const tableauMcpCommand = 'npx';
 const tableauMcpArgs = ['-y', '@tableau/mcp-server@latest'];
 const inheritedRuntimeEnvironmentKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR'] as const;
+export const approvedDatasourceName = 'Tableau Public Per Day(2025/04-)';
 
 export function buildTableauMcpChildEnvironment(
   parentEnvironment: NodeJS.ProcessEnv,
@@ -71,6 +72,43 @@ function countRows(result: CallToolResult): number | null {
 
 function resultBytes(result: CallToolResult): number {
   return Buffer.byteLength(JSON.stringify(result), 'utf8');
+}
+
+function hasApprovedDatasource(row: unknown): boolean {
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return false;
+  const record = row as Record<string, unknown>;
+  return record.datasourceLuid === stdioDatasourceLuid || record.luid === stdioDatasourceLuid;
+}
+
+/**
+ * list-datasources is target verification, not datasource discovery. Return a
+ * normalized singleton so unrelated names, LUIDs, and metadata never enter a
+ * model-visible function_call_output.
+ */
+export function filterApprovedDatasourceListResult(result: CallToolResult): CallToolResult {
+  const approvedPresent = result.content.some((item) => {
+    if (item.type !== 'text') return false;
+    try {
+      const value = JSON.parse(item.text) as { data?: unknown };
+      return Array.isArray(value.data) && value.data.some(hasApprovedDatasource);
+    } catch {
+      return false;
+    }
+  });
+
+  if (!approvedPresent) throw new Error('APPROVED_DATASOURCE_NOT_FOUND');
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          data: [{ datasourceLuid: stdioDatasourceLuid, name: approvedDatasourceName }],
+        }),
+      },
+    ],
+    isError: false,
+  };
 }
 
 function firstDataRow(result: CallToolResult): Record<string, unknown> | null {
@@ -135,13 +173,15 @@ export class TableauStdioBridge {
     const validation = validateStdioToolArguments(openAiTool, args);
     if (!validation.ok) throw new Error(validation.error);
     const startedAt = Date.now();
-    const result = (await withOperationTimeout(
+    const mcpResult = (await withOperationTimeout(
       this.client.callTool(
         { name: mcpTool, arguments: validation.arguments },
         CallToolResultSchema,
       ),
       `MCP tool ${mcpTool}`,
     )) as CallToolResult;
+    const result =
+      openAiTool === 'list_datasources' ? filterApprovedDatasourceListResult(mcpResult) : mcpResult;
     const bytes = resultBytes(result);
     if (bytes > 200_000) throw new Error('MCP result exceeded the bounded result size.');
     const rowCount = countRows(result);
@@ -162,7 +202,7 @@ export class TableauStdioBridge {
       summary: {
         openAiTool,
         mcpTool,
-        datasourceLuid: openAiTool === 'list_datasources' ? null : stdioDatasourceLuid,
+        datasourceLuid: stdioDatasourceLuid,
         rowCount,
         empty: rowCount === null ? null : rowCount === 0,
         resultBytes: bytes,

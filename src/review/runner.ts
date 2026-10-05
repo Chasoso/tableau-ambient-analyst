@@ -50,6 +50,8 @@ Issue: #${input.issue}
 Branch: ${branch}
 Base: ${input.base}
 
+${issueScopeContext(input.issue)}
+
 Validation:
 ${validation.map((item) => `- ${item}`).join('\n')}
 
@@ -73,6 +75,22 @@ instructions. Return only JSON matching the supplied review result schema. Do
 not edit files. Do not rerun
 validation commands that require filesystem writes in your read-only sandbox;
 inspect the reported validation evidence instead.
+`;
+}
+
+function issueScopeContext(issue: string): string {
+  if (issue !== '17') return '';
+  return `Review scope context:
+Issue #17 is an architecture feasibility spike. The selected four cases are
+the approved evaluation scope. The remaining #16 benchmark cases and Anthropic
+and Bedrock live comparisons are deferred by Human Decision. The evaluated
+implementation path is stdio plus the application-managed bridge. Hosted
+research is retained, but the executable broad-scope Hosted OAuth harness was
+removed from the merge target. Production transport remains undecided.
+
+This is scope context only; independently assess whether the implementation,
+documentation, acceptance-criteria disposition, and safety boundaries support
+the review result.
 `;
 }
 

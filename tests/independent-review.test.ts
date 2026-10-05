@@ -13,6 +13,7 @@ import {
   validationFailure,
 } from '../src/review/gate.js';
 import {
+  buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
   runReviewControlFlow,
@@ -322,6 +323,22 @@ describe('independent review runner control flow', () => {
 
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+});
+
+describe('independent review scope context', () => {
+  it('provides Issue #17 scope context without prescribing a result', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '17' },
+      { title: 'Issue', body: 'Body', url: 'https://example.test/issues/17' },
+      ['npm run validate: passed'],
+      'spike/issue-17-agentic-tableau-mcp',
+    );
+
+    expect(prompt).toContain('remaining #16 benchmark cases');
+    expect(prompt).toContain('and Bedrock live comparisons are deferred');
+    expect(prompt).toContain('This is scope context only');
+    expect(prompt).not.toContain('return PASS');
   });
 });
 

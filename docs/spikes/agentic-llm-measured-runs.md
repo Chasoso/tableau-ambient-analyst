@@ -12,6 +12,56 @@ The selected measured path was OpenAI Responses API with a client-managed
 function/tool loop and local Tableau MCP over stdio. Hosted Remote MCP remains
 experimental (`VIABLE_WITH_CAVEATS`) and was not the final evaluation path.
 
+## Canonical Final Result
+
+```text
+SPIKE_FINDINGS = COMPLETE
+SCOPE_SATISFACTION = ACCEPTABLE_WITH_DOCUMENTED_DEFERRED_WORK
+AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED
+ARCHITECTURE_PRINCIPLE = SUPPORTED_WITH_CAVEATS
+STDIO_APP_MANAGED_PATH = SUPPORTED_WITH_CAVEATS
+HOSTED_REMOTE_PATH = VIABLE_WITH_CAVEATS
+```
+
+The corrected Second Phase C batch is the canonical measured result:
+
+| Case | Final result |
+| --- | --- |
+| `incomplete-first-result` | FAIL |
+| `empty-result-recovery` | PASS |
+| `hypothesis-disproved` | PASS |
+| `insufficient-evidence` | PASS |
+
+### Completed architecture-feasibility scope
+
+Issue #17 is closed as an architecture-feasibility spike. The selected four
+cases are sufficient for the architecture question in this issue: whether an
+LLM can make semantic Tableau exploration decisions while an application
+retains deterministic execution and verification boundaries.
+
+| Criterion | Final disposition |
+| --- | --- |
+| Architecture feasibility evaluated | PASS |
+| OpenAI provider exercised | PASS |
+| Selected four-case evaluation | COMPLETE |
+| Incomplete-evidence continuation | PARTIAL |
+| Empty-result recovery | PASS |
+| Hypothesis disproof | PASS |
+| Insufficient-evidence handling | PASS |
+| Telemetry and failure-mode separation | PASS |
+| Provider/application boundary | PASS |
+| Architecture recommendation | PASS |
+| Full #16 common benchmark | DEFERRED_BY_HUMAN_DECISION / NOT_EXECUTED |
+| Anthropic comparison | DEFERRED_BY_HUMAN_DECISION / NOT_EXECUTED |
+| Bedrock comparison | DEFERRED_BY_HUMAN_DECISION / NOT_EXECUTED |
+
+The remaining #16 benchmark cases, Anthropic, and Bedrock were intentionally
+deferred by Human Decision. They remain follow-up work and are not completion
+criteria for Issue #17. Production transport selection and Hosted
+productionization are also explicitly deferred. Historical pilot, setup, and
+first-Phase-C findings below are retained as chronology, not as replacements
+for this canonical final result.
+
 ## Boundary
 
 - Provider: OpenAI Responses API
@@ -22,6 +72,10 @@ experimental (`VIABLE_WITH_CAVEATS`) and was not the final evaluation path.
 - Datasource LUID: `14f3ac6d-1171-4065-baac-c63bdce1470f`
 - Allowed tools: `list-datasources`, `get-datasource-metadata`,
   `query-datasource`
+- `list-datasources` boundary: the bridge treats discovery as fixed-target
+  verification and returns only the approved datasource's normalized name and
+  LUID to the model; absence of that datasource fails closed with
+  `APPROVED_DATASOURCE_NOT_FOUND`
 - Query policy: read-only, aggregation-first, maximum 100 rows
 - Measured cases: one run each
 - Write calls, site-setting changes, and model fallback: none
