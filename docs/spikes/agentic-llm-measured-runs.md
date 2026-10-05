@@ -85,7 +85,12 @@ criteria for this closed scope.
 
 - Provider: OpenAI Responses API
 - Model: `gpt-5.6-luna`; no fallback was used
-- MCP endpoint: local `@tableau/mcp-server@latest` over stdio
+- MCP endpoint: local `@tableau/mcp-server@4.13.3` over stdio
+- MCP package integrity boundary: the PAT-receiving child uses the exact
+  reviewed version `4.13.3`, resolved in `package-lock.json` with npm integrity
+  `sha512-jXWV223H3P5HqkO6/iaqqKlefNACguyTaUNH6EW2Jjb338g8RIRgiXvHtM7ZISKLKM8pgKqSGvJPcys4iz23DA==`.
+  Mutable `@latest` is not used by the executable path; any version change
+  requires explicit review and revalidation.
 - Authentication: dedicated PAT for the spike; production credential model unresolved
 - Datasource: `Tableau Public Per Day(2025/04-)`
 - Datasource LUID: `14f3ac6d-1171-4065-baac-c63bdce1470f`
@@ -1444,7 +1449,8 @@ behavior.
 
 ### Official implementation and startup
 
-The official Tableau MCP implementation documents the following stdio command:
+Historical note: the official Tableau MCP documentation originally showed the
+following mutable command during the initial investigation:
 
 ```text
 npx -y @tableau/mcp-server@latest
@@ -1549,9 +1555,10 @@ one new smoke run before any agentic batch.
 
 ### Query contract diagnosis and fix
 
-The official `tools/list` response from `@tableau/mcp-server@latest` was
-inspected before changing the live path. The relevant `query-datasource`
-contract is:
+The official `tools/list` response was inspected before changing the live path.
+The current executable bridge now pins `@tableau/mcp-server@4.13.3`; the
+following is the historical contract observation used to align the query
+schema:
 
 ```text
 datasourceLuid: string (required)

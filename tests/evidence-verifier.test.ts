@@ -190,6 +190,31 @@ describe('evidence verifier', () => {
       ).ok,
     ).toBe(true);
     expect(verifyIncompleteExploration([queryEvidence(2)], supported).ok).toBe(false);
+    expect(
+      verifyIncompleteExploration(
+        [
+          { ...queryEvidence(2), hasWorkbookLevelEvidence: true },
+          { ...queryEvidence(3), hasWorkbookLevelEvidence: true },
+        ],
+        supported,
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyIncompleteExploration(
+        [queryEvidence(2), { ...queryEvidence(3), hasWorkbookLevelEvidence: false }],
+        supported,
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyIncompleteExploration(
+        [
+          { ...queryEvidence(2), hasWorkbookLevelEvidence: true },
+          queryEvidence(3),
+          { ...queryEvidence(4), hasWorkbookLevelEvidence: true },
+        ],
+        supported,
+      ).ok,
+    ).toBe(false);
   });
 
   it('rejects evidence that does not come from the allowed datasource', () => {

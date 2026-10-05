@@ -5,11 +5,20 @@
 **Technical spike complete — agentic feasibility is partially supported.**
 
 This document records the experiment boundary and final stopping point for
-Issue #17. It does not select a production provider, create an ADR, or add a
-provider abstraction. The measured conclusion is
+Issue #17. It does not select a production provider or add a provider
+abstraction. Its architecture recommendation is recorded in
+[ADR-0002](../adr/0002-proposed-agentic-tableau-analysis-boundary.md) as
+Proposed, not Accepted. The measured conclusion is
 `AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`; it is not a claim that LLM-only
 orchestration is sufficient. Detailed pilot and measured-run results are recorded in
 [`agentic-llm-measured-runs.md`](agentic-llm-measured-runs.md).
+
+> **Historical / Superseded sections below:** this document preserves the
+> original experiment plan and interim checkpoints. The corrected Second Phase
+> C evaluation in [`agentic-llm-measured-runs.md`](agentic-llm-measured-runs.md)
+> is the canonical final result. Do not use an interim `INCONCLUSIVE`,
+> `NOT_READY`, or "do not close" statement below as the final Issue #17
+> conclusion.
 
 Final close-out scope is an OpenAI architecture-feasibility spike. Anthropic
 and Bedrock live comparison was explicitly deferred by Human Decision and is
@@ -229,7 +238,7 @@ available scope and tool catalog must not be treated as authorization to
 expand this allowlist. The application must enforce the 100-row maximum even
 if the remote tool exposes a larger limit.
 
-## Required live prerequisites
+## Historical live prerequisites — superseded
 
 The following actions were required before the live portion could run and have
 now been completed for the current bounded batch:
@@ -310,7 +319,7 @@ The application must retain:
 
 These are the proposed evaluation dimensions, not an accepted architecture.
 
-## Current validation
+## Historical validation — superseded
 
 - `npm ci`: passed on the clean `main` baseline and feature branch.
 - `npm run validate`: passed on the feature branch (41 tests).
@@ -345,9 +354,12 @@ approved Tableau boundary check are complete. The remaining gap is usable
 behavioral instrumentation; no additional paid measured run is authorized by
 the current record.
 
-## Recommendation
+## Historical recommendation — superseded
 
-**DEFER agentic conclusion pending human decision on another measured batch.**
-Do not mark Issue #17 complete or accept a provider/architecture decision from
-this documentation alone. The current evidence supports connectivity only;
-the agentic classification remains `INCONCLUSIVE`.
+At this checkpoint the recommendation was to defer the agentic conclusion.
+That interim conclusion was superseded by the corrected Second Phase C
+evaluation: `SPIKE_FINDINGS = COMPLETE`,
+`AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`, and
+`ARCHITECTURE_PRINCIPLE = SUPPORTED_WITH_CAVEATS`. Issue #17 may close with
+the architecture recommendation remaining Proposed; see the canonical
+measured-run record for the final disposition.

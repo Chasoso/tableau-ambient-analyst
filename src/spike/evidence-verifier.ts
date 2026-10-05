@@ -100,11 +100,16 @@ export function verifyIncompleteExploration(
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
   const queryCalls = calls.filter(isApprovedSuccessfulQuery);
-  const initialIndex = queryCalls.findIndex((call) => call.hasAggregateEvidence);
-  if (initialIndex < 0) reasons.push('no successful initial aggregate evidence was observed');
+  const initialCall = queryCalls[0];
+  if (initialCall === undefined || !initialCall.hasAggregateEvidence) {
+    reasons.push('no successful initial aggregate evidence was observed');
+  }
+  if (initialCall?.hasWorkbookLevelEvidence) {
+    reasons.push('initial aggregate evidence already contained workbook-level evidence');
+  }
   if (
-    initialIndex >= 0 &&
-    !queryCalls.slice(initialIndex + 1).some((call) => call.hasWorkbookLevelEvidence)
+    initialCall !== undefined &&
+    !queryCalls.slice(1).some((call) => call.hasWorkbookLevelEvidence)
   ) {
     reasons.push('no successful workbook-level follow-up evidence was observed');
   }

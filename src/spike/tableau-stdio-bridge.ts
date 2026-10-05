@@ -19,7 +19,10 @@ const tableauSiteName = 'chasoso_202603';
 const tableauPatName = 'ambient-analyst-issue17';
 const tableauPatKeychainService = 'tableau_ambient_analyst_pat_20261005';
 const tableauMcpCommand = 'npx';
-const tableauMcpArgs = ['-y', '@tableau/mcp-server@latest'];
+// This child receives PAT_VALUE. Keep its package exact-version pinned and
+// lockfile-resolved; changing it requires explicit review and revalidation.
+const tableauMcpPackageVersion = '4.13.3';
+const tableauMcpArgs = ['-y', `@tableau/mcp-server@${tableauMcpPackageVersion}`];
 const inheritedRuntimeEnvironmentKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR'] as const;
 const aggregationFunctions = new Set([
   'SUM',
