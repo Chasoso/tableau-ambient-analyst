@@ -18,6 +18,7 @@ import { stdioOperationTimeoutMs } from './operation-timeout.js';
 import {
   verifyEmptyRecovery,
   verifyHypothesisOutcome,
+  verifyIncompleteExploration,
   verifyInsufficientEvidence,
   verifyStructuredOutcome,
 } from './evidence-verifier.js';
@@ -143,20 +144,24 @@ function classifyCase(
   calls: readonly StdioCallSummary[],
   outcome: StructuredOutcome | null,
 ): CaseRunResult['classification'] {
-  const queryCalls = calls.filter((call) => call.mcpTool === 'query-datasource');
   if (outcome === null || !verifyStructuredOutcome(outcome).ok) return 'COMPLETION_FAILURE';
   if (setup.id === 'incomplete-first-result') {
-    return queryCalls.length >= 2 && outcome.evidence_complete ? 'PASS' : 'FAIL';
+    return verifyIncompleteExploration(calls, outcome).ok ? 'PASS' : 'FAIL';
   }
   if (setup.id === 'empty-result-recovery') {
     return verifyEmptyRecovery(calls, outcome).ok ? 'PASS' : 'FAIL';
   }
   if (setup.id === 'hypothesis-disproved') {
-    return verifyHypothesisOutcome(outcome, '#MoM 2024 Week 34 | SNS Popularity in the U.S.').ok
+    return verifyHypothesisOutcome(
+      outcome,
+      '#MoM 2024 Week 34 | SNS Popularity in the U.S.',
+      undefined,
+      calls,
+    ).ok
       ? 'PASS'
       : 'FAIL';
   }
-  return verifyInsufficientEvidence(outcome).ok ? 'PASS' : 'FAIL';
+  return verifyInsufficientEvidence(calls, outcome).ok ? 'PASS' : 'FAIL';
 }
 
 async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRunResult> {

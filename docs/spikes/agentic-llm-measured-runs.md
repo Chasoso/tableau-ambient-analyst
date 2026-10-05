@@ -2,18 +2,22 @@
 
 ## Status
 
-**Inconclusive for agentic behavior.** The authenticated OpenAI Responses API
-and Hosted Tableau MCP path worked, but the first four measured runs did not
-produce enough structured evidence to evaluate the cases. These runs are not
-to be treated as a successful benchmark and must not be silently rerun or
-overwritten.
+**Final scope: architecture-feasibility spike complete.** The first Phase C
+batch was inconclusive and is preserved as historical evidence. The corrected
+Second Phase C batch is authoritative for agentic behavior:
+`FAIL`, `PASS`, `PASS`, `PASS`, yielding
+`AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`.
+
+The selected measured path was OpenAI Responses API with a client-managed
+function/tool loop and local Tableau MCP over stdio. Hosted Remote MCP remains
+experimental (`VIABLE_WITH_CAVEATS`) and was not the final evaluation path.
 
 ## Boundary
 
 - Provider: OpenAI Responses API
 - Model: `gpt-5.6-luna`; no fallback was used
-- MCP endpoint: Hosted Tableau MCP
-- OAuth identity: dedicated Tableau Viewer
+- MCP endpoint: local `@tableau/mcp-server@latest` over stdio
+- Authentication: dedicated PAT for the spike; production credential model unresolved
 - Datasource: `Tableau Public Per Day(2025/04-)`
 - Datasource LUID: `14f3ac6d-1171-4065-baac-c63bdce1470f`
 - Allowed tools: `list-datasources`, `get-datasource-metadata`,

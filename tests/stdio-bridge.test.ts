@@ -133,6 +133,27 @@ describe('application-managed stdio bridge policy', () => {
       ok: false,
       error: 'Query parameters must follow the Tableau MCP parameter shape.',
     });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { fields: [{ fieldCaption: 'Daily View Count', calculation: 'SUM([x])' }] },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Query calculations are not allowed by the read-only policy.',
+    });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: {
+          ...base.query,
+          filters: [{ field: { fieldCaption: 'Metric Date Time (JST)' }, unsafeCode: 'x' }],
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Query filter contains unsupported properties.',
+    });
   });
 
   it('summarizes query argument shape without exposing field values', () => {

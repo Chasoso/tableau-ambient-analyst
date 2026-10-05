@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   verifyEmptyRecovery,
   verifyHypothesisOutcome,
+  verifyIncompleteExploration,
   verifyInsufficientEvidence,
   verifyStructuredOutcome,
 } from '../src/spike/evidence-verifier.js';
@@ -61,6 +62,8 @@ describe('evidence verifier', () => {
           hypothesis_state: 'rejected',
         },
         'rank-1',
+        undefined,
+        [{ mcpTool: 'query-datasource', rowCount: 1, error: null }],
       ).ok,
     ).toBe(true);
     expect(
@@ -72,13 +75,14 @@ describe('evidence verifier', () => {
         },
         'rank-1',
         'other',
+        [{ mcpTool: 'query-datasource', rowCount: 1, error: null }],
       ).ok,
     ).toBe(false);
   });
 
   it('requires explicit missing evidence for insufficient-evidence', () => {
     expect(
-      verifyInsufficientEvidence({
+      verifyInsufficientEvidence([{ mcpTool: 'query-datasource', rowCount: 1, error: null }], {
         outcome: 'insufficient-evidence',
         summary: 'External evidence is missing.',
         evidence_complete: false,
@@ -87,6 +91,18 @@ describe('evidence verifier', () => {
         stop_reason: 'insufficient-evidence',
       }).ok,
     ).toBe(true);
-    expect(verifyInsufficientEvidence(supported).ok).toBe(false);
+    expect(verifyInsufficientEvidence([], supported).ok).toBe(false);
+  });
+
+  it('requires observed follow-up evidence for incomplete exploration', () => {
+    expect(
+      verifyIncompleteExploration(
+        [
+          { mcpTool: 'query-datasource', rowCount: 2, error: null },
+          { mcpTool: 'query-datasource', rowCount: 3, error: null },
+        ],
+        { ...supported, outcome: 'supported' },
+      ).ok,
+    ).toBe(true);
   });
 });

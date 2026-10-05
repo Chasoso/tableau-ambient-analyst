@@ -83,8 +83,16 @@ must make visible.
 
 ## Current evidence status
 
-No provider call or Tableau MCP call was made for Issue #17. No credential,
-approved datasource, approved MCP endpoint, approved tool allowlist, or spend
-authorization is present in this repository or local environment. Capability
-documentation is therefore `observed from official documentation`; live
-behavior is `NOT RUN — prerequisite missing`.
+This document is the provider-capability reconnaissance source and contains no
+live Anthropic or Bedrock execution evidence. Issue #17 separately contains
+live OpenAI evidence through the local stdio/application-managed path. The
+Human Decision intentionally deferred cross-provider comparison:
+
+```text
+OpenAI: evaluated live for the architecture-feasibility spike
+Anthropic: NOT_EXECUTED; follow-up
+Bedrock: NOT_EXECUTED; follow-up
+```
+
+The capability descriptions above remain official-documentation observations;
+they must not be read as live validation of Anthropic or Bedrock behavior.

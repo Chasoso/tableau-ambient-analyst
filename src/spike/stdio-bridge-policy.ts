@@ -66,7 +66,6 @@ export function summarizeStdioToolArguments(
     summary.fieldKinds = fields.map((field) => {
       if (!isRecord(field)) return 'invalid';
       if (typeof field.function === 'string') return 'function';
-      if (typeof field.calculation === 'string') return 'calculation';
       if (typeof field.binSize === 'number') return 'bin';
       return 'dimension';
     });
@@ -119,6 +118,20 @@ export function validateStdioToolArguments(
         return { ok: false, error: 'Query filters must be an array of objects.' };
       }
       for (const filter of query.filters) {
+        const allowedFilterKeys = new Set([
+          'field',
+          'filterType',
+          'quantitativeFilterType',
+          'minDate',
+          'maxDate',
+          'minValue',
+          'maxValue',
+          'values',
+          'value',
+        ]);
+        if (Object.keys(filter).some((key) => !allowedFilterKeys.has(key))) {
+          return { ok: false, error: 'Query filter contains unsupported properties.' };
+        }
         if (filter.field !== undefined) {
           if (!isRecord(filter.field) || typeof filter.field.fieldCaption !== 'string') {
             return {
@@ -177,9 +190,7 @@ export function validateStdioToolArguments(
           return { ok: false, error: 'Query field function is not supported by Tableau MCP.' };
         }
       } else if (field.calculation !== undefined) {
-        if (typeof field.calculation !== 'string') {
-          return { ok: false, error: 'Query calculation must be a string.' };
-        }
+        return { ok: false, error: 'Query calculations are not allowed by the read-only policy.' };
       } else if (field.binSize !== undefined) {
         if (typeof field.binSize !== 'number' || field.binSize <= 0) {
           return { ok: false, error: 'Query binSize must be greater than zero.' };
@@ -222,12 +233,6 @@ const queryFieldSchema = {
         function: { type: 'string', enum: mcpFieldFunctions },
       },
       required: ['fieldCaption', 'function'],
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      properties: { ...fieldProperties, calculation: { type: 'string' } },
-      required: ['fieldCaption', 'calculation'],
       additionalProperties: false,
     },
     {
@@ -280,7 +285,29 @@ export const openAiStdioTools = [
             // unchanged after validating the fixed datasource and bounded limit.
             filters: {
               type: 'array',
-              items: { type: 'object', additionalProperties: true },
+              items: {
+                type: 'object',
+                properties: {
+                  field: {
+                    type: 'object',
+                    properties: { fieldCaption: { type: 'string' } },
+                    required: ['fieldCaption'],
+                    additionalProperties: false,
+                  },
+                  filterType: { type: 'string' },
+                  quantitativeFilterType: { type: 'string' },
+                  minDate: { type: 'string' },
+                  maxDate: { type: 'string' },
+                  minValue: { type: 'number' },
+                  maxValue: { type: 'number' },
+                  values: {
+                    type: 'array',
+                    items: { type: ['string', 'number', 'boolean', 'null'] },
+                  },
+                  value: { type: ['string', 'number', 'boolean', 'null'] },
+                },
+                additionalProperties: false,
+              },
             },
             parameters: {
               type: 'array',

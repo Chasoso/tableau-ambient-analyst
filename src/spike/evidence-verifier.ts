@@ -57,12 +57,35 @@ export function verifyEmptyRecovery(
   return { ok: reasons.length === 0, reasons };
 }
 
+export function verifyIncompleteExploration(
+  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[],
+  outcome: StructuredOutcome | null,
+): EvidenceVerification {
+  const reasons = verifyStructuredOutcome(outcome).reasons;
+  const queryCalls = calls.filter((call) => call.mcpTool === 'query-datasource');
+  if (queryCalls.length < 2) reasons.push('no follow-up query was observed');
+  if (outcome?.evidence_complete !== true)
+    reasons.push('required follow-up evidence is incomplete');
+  if (outcome?.outcome === 'insufficient-evidence')
+    reasons.push('case did not reach a supported conclusion');
+  return { ok: reasons.length === 0, reasons };
+}
+
 export function verifyHypothesisOutcome(
   outcome: StructuredOutcome | null,
   expectedRank1: string,
   reportedRank1?: string,
+  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[] = [],
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
+  if (
+    !calls.some(
+      (call) =>
+        call.mcpTool === 'query-datasource' && call.rowCount !== null && call.error === null,
+    )
+  ) {
+    reasons.push('no successful ranking query evidence was observed');
+  }
   if (outcome?.hypothesis_state !== 'revised' && outcome?.hypothesis_state !== 'rejected') {
     reasons.push('hypothesis outcome must be revised or rejected');
   }
@@ -73,9 +96,18 @@ export function verifyHypothesisOutcome(
 }
 
 export function verifyInsufficientEvidence(
+  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
+  if (
+    !calls.some(
+      (call) =>
+        call.mcpTool === 'query-datasource' && call.rowCount !== null && call.error === null,
+    )
+  ) {
+    reasons.push('no successful Tableau metric evidence was observed');
+  }
   if (outcome?.outcome !== 'insufficient-evidence') {
     reasons.push('outcome must be insufficient-evidence');
   }
