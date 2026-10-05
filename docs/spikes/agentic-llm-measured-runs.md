@@ -1919,10 +1919,15 @@ authentication selection remains a follow-up decision.
 The architecture recommendation remains **Proposed**, not Accepted:
 keep exploration orchestration in the LLM, enforce only narrow application
 guardrails and evidence verification, and retain transport/authentication as
-replaceable boundaries. Follow-up candidates are production least-privilege
-authentication, Hosted 424 investigation if it recurs, production transport
-selection, and refinement of the simple evidence verifier. No follow-up Issue
-was created by this spike.
+replaceable boundaries. The explicit Human Decision for Issue #17 is to retain
+this recommendation as Proposed after the spike; Issue #17 may close without
+promoting it to Accepted. Revisit acceptance after later production architecture
+decisions, transport/authentication design, demo validation, and/or broader
+provider evaluation. See [ADR-0002](../adr/0002-proposed-agentic-tableau-analysis-boundary.md).
+
+Follow-up candidates are production least-privilege authentication, Hosted 424
+investigation if it recurs, production transport selection, and refinement of
+the simple evidence verifier. No follow-up Issue was created by this spike.
 
 ## Issue #17 close-out hardening
 
