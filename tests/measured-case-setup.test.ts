@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   measuredCaseIds,
   measuredCaseSetups,
+  hypothesisFixture,
   validateMeasuredCaseSetup,
 } from '../src/spike/measured-case-setup.js';
 
@@ -34,5 +35,14 @@ describe('measured case setup contract', () => {
         missingEvidenceAfterQueryOne: [],
       }),
     ).toContain('query one must leave required evidence incomplete');
+  });
+
+  it('keeps the hypothesis fixture bounded and separate from live all-data ranking', () => {
+    expect(hypothesisFixture.lowerBound).toBe('2025-04-01');
+    expect(hypothesisFixture.upperBoundExclusive).toBe('2026-10-01');
+    expect(hypothesisFixture.measure).toBe('Daily View Count');
+    expect(hypothesisFixture.grouping).toBe('Workbook Title');
+    expect(hypothesisFixture.sortDirection).toBe('DESC');
+    expect(hypothesisFixture.expectedRank1).not.toBe(hypothesisFixture.initialHypothesis);
   });
 });

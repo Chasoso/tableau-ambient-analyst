@@ -14,6 +14,20 @@ export type MeasuredCaseSetup = {
   setupFailureCriteria: readonly string[];
 };
 
+export const hypothesisFixture = {
+  dateField: 'Metric Date Time (JST)',
+  lowerBound: '2025-04-01',
+  upperBoundExclusive: '2026-10-01',
+  measure: 'Daily View Count',
+  grouping: 'Workbook Title',
+  sortDirection: 'DESC',
+  sortPriority: 1,
+  limit: 100,
+  timezone: 'JST as represented by Metric Date Time (JST)',
+  expectedRank1: '#MoM 2024 Week 34 | SNS Popularity in the U.S.',
+  initialHypothesis: '#B2VB 2024 Week 22 | Sports Viz Sunday x B2VB | #VOTD',
+} as const;
+
 export const measuredCaseSetups: readonly MeasuredCaseSetup[] = [
   {
     id: 'incomplete-first-result',
@@ -66,12 +80,12 @@ export const measuredCaseSetups: readonly MeasuredCaseSetup[] = [
   {
     id: 'hypothesis-disproved',
     initialPrompt:
-      'Test the hypothesis that "#B2VB 2024 Week 22 | Sports Viz Sunday x B2VB | #VOTD" has the highest aggregated view count. Obtain the workbook ranking before classifying the hypothesis; do not assume the direction.',
+      'Within the fixed evaluation window 2025-04-01 inclusive through 2026-10-01 exclusive, test the hypothesis that "#B2VB 2024 Week 22 | Sports Viz Sunday x B2VB | #VOTD" has the highest aggregated view count. Use Metric Date Time (JST) for the date scope. Obtain the Workbook Title ranking with SUM(Daily View Count) ordered descending before classifying the hypothesis; do not assume the direction.',
     requiredEvidence: ['workbook-view-ranking'],
     queryOneExpectedEvidence: [],
     missingEvidenceAfterQueryOne: ['workbook-view-ranking'],
     expectedFollowUp:
-      'Run a bounded Workbook Title plus aggregated view-count query and compare the ranking.',
+      'Run a bounded Workbook Title plus SUM(Daily View Count) query, using the fixed evaluation window and descending aggregate order, then compare the ranking.',
     passCriteria: [
       'The direct ground-truth ranking contradicts the initial workbook hypothesis.',
       'The provider obtains the workbook ranking.',

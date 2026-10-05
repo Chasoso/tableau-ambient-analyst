@@ -1594,3 +1594,61 @@ ground truth `#MoM 2024 Week 34 | SNS Popularity in the U.S.`. It is therefore
 classified as **GROUND_TRUTH_CHANGED**, not as a model result and not as a
 permission to rewrite the expectation. The second Phase C measured batch was
 not started, and human direction is required before changing the case contract.
+
+## Hypothesis fixture stabilization
+
+The historical `hypothesis-disproved` result was not accepted as a stable
+ground truth. Repository history contains the historical rank-1 workbook and a
+general `Workbook Title` plus `SUM(Daily View Count)` ranking description, but
+does not contain the original date scope, filter set, visibility/status filter,
+null-handling rule, or timezone cutoff used to produce that value. The prior
+Phase C comparison was therefore **INVALIDATED_BY_GROUND_TRUTH_DRIFT**, rather
+than being treated as a confirmed model evidence-interpretation failure.
+
+The current datasource coverage was checked with a bounded aggregate query:
+
+```text
+MIN(Metric Date Time (JST)) = 2025-03-30T23:05:23
+MAX(Metric Date Time (JST)) = 2026-10-05T00:00:23.7941
+```
+
+The recommended fixed fixture is the closed historical window
+`2025-04-01 <= Metric Date Time (JST) < 2026-10-01`. It is past relative to
+the current run, aligned with the datasource's observed coverage and the
+existing spike timing, and cannot change when later daily rows are appended.
+The deterministic ranking contract is:
+
+```text
+measure: SUM(Daily View Count)
+grouping: Workbook Title
+ordering: SUM(Daily View Count) DESC
+sortPriority: unique, aggregate field priority 1
+limit: 100
+additional filters: the fixed date range only
+timezone: Metric Date Time (JST)
+```
+
+The direct MCP query returned:
+
+```text
+rank 1: #MoM 2024 Week 34 | SNS Popularity in the U.S.
+metric: 17716
+```
+
+The initial hypothesis workbook is not rank 1 in this window, so it remains a
+plausible false hypothesis for the case. The current all-data rank 1,
+`What's Hokuriku? | #VOTD`, is recorded separately and is not used as the
+fixture truth.
+
+Classification:
+
+```text
+HISTORICAL_GROUND_TRUTH = UNREPRODUCIBLE  # exact original conditions absent
+HYPOTHESIS_FIXTURE = VALID                 # new fixed window verified
+```
+
+The fixture is encoded in `src/spike/measured-case-setup.ts`, the measured
+prompt names only the fixed window and contract (not the expected rank 1), and
+the direct setup checker validates the empty-result fixture plus this ranking
+fixture before any measured run. The second Phase C batch remains unexecuted
+until a human confirms this fixture.

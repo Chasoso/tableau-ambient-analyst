@@ -1,7 +1,8 @@
 import { stdioDatasourceLuid } from './stdio-bridge-policy.js';
 import { TableauStdioBridge } from './tableau-stdio-bridge.js';
+import { hypothesisFixture } from './measured-case-setup.js';
 
-const expectedTopWorkbook = '#MoM 2024 Week 34 | SNS Popularity in the U.S.';
+const expectedTopWorkbook = hypothesisFixture.expectedRank1;
 
 function textPayload(result: unknown): unknown {
   if (typeof result !== 'object' || result === null) return null;
@@ -87,16 +88,25 @@ async function main(): Promise<void> {
       datasourceLuid: stdioDatasourceLuid,
       query: {
         fields: [
-          { fieldCaption: 'Workbook Title' },
+          { fieldCaption: hypothesisFixture.grouping },
           {
-            fieldCaption: 'Daily View Count',
+            fieldCaption: hypothesisFixture.measure,
             function: 'SUM',
             sortDirection: 'DESC',
-            sortPriority: 1,
+            sortPriority: hypothesisFixture.sortPriority,
+          },
+        ],
+        filters: [
+          {
+            field: { fieldCaption: hypothesisFixture.dateField },
+            filterType: 'QUANTITATIVE_DATE',
+            quantitativeFilterType: 'RANGE',
+            minDate: hypothesisFixture.lowerBound,
+            maxDate: hypothesisFixture.upperBoundExclusive,
           },
         ],
       },
-      limit: 100,
+      limit: hypothesisFixture.limit,
     });
     const rankingRows = rows(rankingCall.result);
     const topRow = rankingRows[0];
