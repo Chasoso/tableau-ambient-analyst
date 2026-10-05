@@ -1560,3 +1560,37 @@ Remaining follow-ups are bounded and separate from the historical Hosted
 investigation: validate the Tableau filter argument contract for the empty
 result setup, decide whether the four-call guard is sufficient for the fixed
 case contracts, and obtain human direction before any further live case run.
+
+## Phase C second-batch setup review
+
+The first Phase C batch showed that four tool calls were too small for the
+normal discovery/metadata/initial-query/follow-up path. The guard was therefore
+changed from 4 to 6. This remains only a runaway-protection limit; it does not
+select queries, recover empty results, or force an outcome. Deterministic tests
+cover the six-call boundary and the N+1 rejection without an off-by-one error.
+
+The empty-result fixture was corrected against the actual Tableau MCP filter
+shape:
+
+```text
+filters: [
+  {
+    field: { fieldCaption: "Metric Date Time (JST)" },
+    filterType: "QUANTITATIVE_DATE",
+    quantitativeFilterType: "MIN",
+    minDate: "2099-01-01"
+  }
+]
+```
+
+The direct setup check confirmed `EMPTY_CASE_SETUP = VALID`: the MCP call
+succeeded and returned zero rows. No application-side recovery was added.
+
+The ranking contract was also made explicit: group by `Workbook Title`,
+aggregate `SUM(Daily View Count)`, sort the aggregate descending with a unique
+`sortPriority`, and use a bounded limit. The direct setup check then returned
+`What's Hokuriku? | #VOTD` as rank 1. This differs from the historical recorded
+ground truth `#MoM 2024 Week 34 | SNS Popularity in the U.S.`. It is therefore
+classified as **GROUND_TRUTH_CHANGED**, not as a model result and not as a
+permission to rewrite the expectation. The second Phase C measured batch was
+not started, and human direction is required before changing the case contract.

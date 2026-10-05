@@ -7,14 +7,18 @@ import {
   type StructuredOutcome,
 } from './response-telemetry.js';
 import { structuredOutcomeTextFormat } from './openai-mcp-request.js';
-import { openAiStdioTools, summarizeStdioToolArguments } from './stdio-bridge-policy.js';
+import {
+  openAiStdioTools,
+  stdioMaxToolCalls,
+  summarizeStdioToolArguments,
+} from './stdio-bridge-policy.js';
 import { readKeychainSecret } from './keychain-secrets.js';
 import { TableauStdioBridge, type StdioCallSummary } from './tableau-stdio-bridge.js';
 
 const openAiKeychainService = 'ambient_openai_chasoso_20261004';
 const model = 'gpt-5.6-luna';
 const maxOutputTokens = 1024;
-const maxToolCalls = 4;
+const maxToolCalls = stdioMaxToolCalls;
 
 type ResponseItem = {
   type?: unknown;

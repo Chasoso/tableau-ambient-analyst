@@ -1,4 +1,5 @@
 export const stdioDatasourceLuid = '14f3ac6d-1171-4065-baac-c63bdce1470f';
+export const stdioMaxToolCalls = 6;
 
 export const stdioToolNames = {
   list_datasources: 'list-datasources',
@@ -113,9 +114,27 @@ export function validateStdioToolArguments(
       return { ok: false, error: 'Query must declare at least one field.' };
     }
 
+    const sortPriorities = new Set<number>();
     for (const field of fields) {
       if (!isRecord(field) || typeof field.fieldCaption !== 'string') {
         return { ok: false, error: 'Query fields must follow the Tableau MCP field shape.' };
+      }
+      if (
+        field.sortDirection !== undefined &&
+        !['ASC', 'DESC'].includes(String(field.sortDirection))
+      ) {
+        return { ok: false, error: 'Query sortDirection must be ASC or DESC.' };
+      }
+      if (field.sortPriority !== undefined) {
+        if (
+          typeof field.sortPriority !== 'number' ||
+          !Number.isInteger(field.sortPriority) ||
+          field.sortPriority < 1 ||
+          sortPriorities.has(field.sortPriority)
+        ) {
+          return { ok: false, error: 'Query sort priorities must be unique positive integers.' };
+        }
+        sortPriorities.add(field.sortPriority);
       }
       if (field.function !== undefined) {
         const functionName = String(field.function).toUpperCase();
@@ -213,7 +232,7 @@ export const openAiStdioTools = [
     type: 'function',
     name: 'query_datasource',
     description:
-      'Run one bounded, read-only, aggregation-first query against the approved Tableau datasource.',
+      'Run one bounded, read-only, aggregation-first query against the approved Tableau datasource. For rankings, group by a dimension and sort the aggregated measure descending with unique sortPriority values.',
     parameters: {
       type: 'object',
       properties: {

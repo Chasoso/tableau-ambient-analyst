@@ -4,6 +4,7 @@ import {
   mapOpenAiToolToMcp,
   openAiStdioTools,
   summarizeStdioToolArguments,
+  stdioMaxToolCalls,
   stdioDatasourceLuid,
   validateStdioToolArguments,
 } from '../src/spike/stdio-bridge-policy.js';
@@ -71,6 +72,35 @@ describe('application-managed stdio bridge policy', () => {
         limit: 101,
       }),
     ).toEqual({ ok: false, error: 'Query row limit must be an integer between 1 and 100.' });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        datasourceLuid: stdioDatasourceLuid,
+        query: {
+          fields: [
+            { fieldCaption: 'Workbook Title', sortPriority: 1 },
+            { fieldCaption: 'Daily View Count', function: 'SUM', sortPriority: 1 },
+          ],
+        },
+        limit: 1,
+      }),
+    ).toEqual({ ok: false, error: 'Query sort priorities must be unique positive integers.' });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        datasourceLuid: stdioDatasourceLuid,
+        query: {
+          fields: [
+            { fieldCaption: 'Workbook Title' },
+            {
+              fieldCaption: 'Daily View Count',
+              function: 'SUM',
+              sortDirection: 'DESC',
+              sortPriority: 1,
+            },
+          ],
+        },
+        limit: 1,
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   it('summarizes query argument shape without exposing field values', () => {
@@ -101,8 +131,10 @@ describe('application-managed stdio bridge policy', () => {
   });
 
   it('stops at the application tool-call budget', () => {
-    expect(canContinueWithToolCalls(3, 1, 4)).toBe(true);
-    expect(canContinueWithToolCalls(4, 1, 4)).toBe(false);
+    expect(canContinueWithToolCalls(stdioMaxToolCalls - 1, 1)).toBe(true);
+    expect(canContinueWithToolCalls(stdioMaxToolCalls, 1)).toBe(false);
+    expect(canContinueWithToolCalls(stdioMaxToolCalls - 2, 2)).toBe(true);
+    expect(canContinueWithToolCalls(stdioMaxToolCalls - 1, 2)).toBe(false);
   });
 
   it('does not include synthetic PAT data in bridge telemetry', () => {
