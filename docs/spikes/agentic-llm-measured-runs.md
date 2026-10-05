@@ -63,6 +63,24 @@ productionization are also explicitly deferred. Historical pilot, setup, and
 first-Phase-C findings below are retained as chronology, not as replacements
 for this canonical final result.
 
+### Known accepted limitations for Issue #17 closure
+
+The following are explicit Human Decisions and are not unresolved Issue #17
+blockers:
+
+- Architecture recommendation: **Proposed**, not Accepted; Issue #17 may close
+  without promoting it.
+- Per-case auditable latency/token telemetry: `PARTIAL / NOT_RETAINED`.
+  Instrumentation emitted these values, but sanitized per-case artifacts were
+  not retained and no live rerun will be performed.
+- Full #16 common benchmark: `DEFERRED_BY_HUMAN_DECISION`.
+- Anthropic and Bedrock live evaluation: `NOT_EXECUTED /
+  DEFERRED_BY_HUMAN_DECISION`.
+
+These items are `RESOLVED_BY_HUMAN_DECISION` for this architecture-feasibility
+spike. They remain appropriate follow-up considerations, not acceptance
+criteria for this closed scope.
+
 ## Boundary
 
 - Provider: OpenAI Responses API
@@ -1986,6 +2004,13 @@ terminal-state consistency; provenance from successful approved Tableau queries
 against the fixed datasource; successful zero-row evidence followed by
 non-empty recovery; hypothesis revision/rejection and agreement between the
 observed and reported fixed-fixture rank; and explicit missing evidence.
+
+After policy/schema validation has passed, a bounded MCP tool execution error
+may be returned to the LLM only as a sanitized recoverable envelope. The bridge
+does not expose raw error text and fails closed for authentication, permission,
+credential, transport/protocol, provenance, malformed-result, and oversized
+result failures. The LLM may decide whether to recover; the application does
+not retry, rewrite a query, or choose a next step.
 
 It does not select the next tool, rewrite a query, retry an empty result,
 revise a hypothesis, or decide exploration strategy. The

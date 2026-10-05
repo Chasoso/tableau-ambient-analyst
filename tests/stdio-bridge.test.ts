@@ -343,7 +343,57 @@ describe('application-managed stdio bridge policy', () => {
     ).toThrow('unexpected field unexpected_column');
   });
 
-  it('rejects oversized, failed, and non-scalar MCP results instead of reusing them as evidence', () => {
+  it('returns only a bounded, sanitized envelope for recoverable approved tool errors', () => {
+    const rawError = 'Tableau backend rejected the requested filter.';
+    const envelope = normalizeMcpResultForModel(
+      'query_datasource',
+      { content: [{ type: 'text', text: rawError }], isError: true },
+      {
+        datasourceLuid: stdioDatasourceLuid,
+        query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+        limit: 100,
+      },
+    );
+    expect(envelope).toEqual({
+      status: 'tool_error',
+      category: 'query_error',
+      message: 'The Tableau query could not be executed.',
+      recoverable: true,
+    });
+    expect(JSON.stringify(envelope)).not.toContain(rawError);
+  });
+
+  it('fails closed for authentication or secret-bearing tool errors', () => {
+    const queryArguments = {
+      datasourceLuid: stdioDatasourceLuid,
+      query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+      limit: 100,
+    };
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        { content: [{ type: 'text', text: '403 permission denied' }], isError: true },
+        queryArguments,
+      ),
+    ).toThrow('authentication, permission, or secret-bearing');
+    try {
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [{ type: 'text', text: 'Authorization: Bearer synthetic-secret' }],
+          isError: true,
+        },
+        queryArguments,
+      );
+      throw new Error('expected secret-bearing tool error to fail closed');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('authentication, permission, or secret-bearing');
+      expect((error as Error).message).not.toContain('synthetic-secret');
+    }
+  });
+
+  it('rejects oversized and non-scalar MCP results instead of reusing them as evidence', () => {
     const queryArguments = {
       datasourceLuid: stdioDatasourceLuid,
       query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
@@ -366,13 +416,6 @@ describe('application-managed stdio bridge policy', () => {
         queryArguments,
       ),
     ).toThrow('bounded row limit');
-    expect(() =>
-      normalizeMcpResultForModel(
-        'query_datasource',
-        { content: [{ type: 'text', text: JSON.stringify({ data: [] }) }], isError: true },
-        queryArguments,
-      ),
-    ).toThrow('tool returned an error result');
     expect(() =>
       normalizeMcpResultForModel(
         'query_datasource',

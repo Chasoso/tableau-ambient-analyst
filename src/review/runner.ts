@@ -90,6 +90,10 @@ removed from the merge target. Production transport remains undecided.
 Historical inconclusive and setup runs are retained as investigation history
 and are superseded by the Canonical Final Result.
 
+The architecture recommendation remains Proposed. Per-case auditable
+latency/token telemetry is PARTIAL / NOT_RETAINED and is explicitly accepted
+as a limitation for Issue #17 closure; no live rerun is authorized.
+
 This is scope context only; independently assess whether the implementation,
 documentation, acceptance-criteria disposition, and safety boundaries support
 the review result.

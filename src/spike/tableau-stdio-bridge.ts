@@ -93,6 +93,12 @@ export type ModelVisibleMcpEvidence =
       tool: 'query_datasource';
       datasourceLuid: typeof stdioDatasourceLuid;
       rows: Array<Record<string, ScalarEvidenceValue>>;
+    }
+  | {
+      status: 'tool_error';
+      category: 'query_error' | 'tool_error';
+      message: string;
+      recoverable: true;
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,6 +107,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function resultRejection(reason: string): never {
   throw new Error(`MCP_RESULT_REJECTED: ${reason}`);
+}
+
+function errorText(result: CallToolResult): string {
+  if (!Array.isArray(result.content) || result.content.length === 0) {
+    resultRejection('tool error has no text payload');
+  }
+  const text = result.content
+    .map((item) => (item.type === 'text' && typeof item.text === 'string' ? item.text : null))
+    .filter((item): item is string => item !== null)
+    .join('\n');
+  if (text.length === 0 || text.length > 8_000) {
+    resultRejection('tool error has an invalid text payload');
+  }
+  return text;
+}
+
+function normalizeRecoverableToolError(
+  openAiTool: string,
+  result: CallToolResult,
+): Extract<ModelVisibleMcpEvidence, { status: 'tool_error' }> {
+  const rawError = errorText(result);
+  if (
+    /\bauth(?:entication|orization)?\b|\bunauthori[sz]ed\b|\bforbidden\b|\bpermission\b|\bcredential\b|\boauth\b|\btoken\b|\bbearer\b|\bpat[_ -]?value\b|\bapi[ _-]?key\b|\bsecret\b|\bpassword\b|\b(?:401|403)\b/i.test(
+      rawError,
+    )
+  ) {
+    resultRejection('tool error is authentication, permission, or secret-bearing');
+  }
+  return {
+    status: 'tool_error',
+    category: openAiTool === 'query_datasource' ? 'query_error' : 'tool_error',
+    message:
+      openAiTool === 'query_datasource'
+        ? 'The Tableau query could not be executed.'
+        : 'The approved Tableau tool could not be executed.',
+    recoverable: true,
+  };
 }
 
 function parseSingleJsonDataPayload(result: CallToolResult): unknown {
@@ -200,6 +243,7 @@ export function normalizeMcpResultForModel(
   result: CallToolResult,
   args: Record<string, unknown>,
 ): ModelVisibleMcpEvidence {
+  if (result.isError) return normalizeRecoverableToolError(openAiTool, result);
   const data = parseSingleJsonDataPayload(result);
   if (openAiTool === 'list_datasources') {
     if (!Array.isArray(data) || !data.some(hasApprovedDatasource)) {
@@ -412,15 +456,17 @@ export class TableauStdioBridge {
       `MCP tool ${mcpTool}`,
     )) as CallToolResult;
     const result =
-      openAiTool === 'list_datasources' ? filterApprovedDatasourceListResult(mcpResult) : mcpResult;
+      openAiTool === 'list_datasources' && !mcpResult.isError
+        ? filterApprovedDatasourceListResult(mcpResult)
+        : mcpResult;
     const bytes = resultBytes(result);
     if (bytes > 200_000) throw new Error('MCP result exceeded the bounded result size.');
     const modelEvidence = normalizeMcpResultForModel(openAiTool, result, validation.arguments);
-    const rowCount = countRows(result);
+    const rowCount = result.isError ? null : countRows(result);
     if (rowCount !== null && rowCount > 100) {
       throw new Error('MCP result exceeded the bounded row limit.');
     }
-    const firstRow = firstDataRow(result);
+    const firstRow = result.isError ? null : firstDataRow(result);
     const queryEvidence =
       openAiTool === 'query_datasource'
         ? queryContractEvidence(validation.arguments)
