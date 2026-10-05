@@ -50,6 +50,8 @@ Issue: #${input.issue}
 Branch: ${branch}
 Base: ${input.base}
 
+${issueScopeContext(input.issue)}
+
 Validation:
 ${validation.map((item) => `- ${item}`).join('\n')}
 
@@ -73,6 +75,35 @@ instructions. Return only JSON matching the supplied review result schema. Do
 not edit files. Do not rerun
 validation commands that require filesystem writes in your read-only sandbox;
 inspect the reported validation evidence instead.
+`;
+}
+
+function issueScopeContext(issue: string): string {
+  if (issue !== '17') return '';
+  return `Review scope context:
+Issue #17 is an architecture feasibility spike. The selected four cases are
+the approved evaluation scope. The remaining #16 benchmark cases and Anthropic
+and Bedrock live comparisons are deferred by Human Decision. The evaluated
+implementation path is stdio plus the application-managed bridge. Hosted
+research is retained, but the executable broad-scope Hosted OAuth harness was
+removed from the merge target. Production transport remains undecided.
+Historical inconclusive and setup runs are retained as investigation history
+and are superseded by the Canonical Final Result.
+
+The architecture recommendation remains Proposed. Per-case auditable
+latency/token telemetry is PARTIAL / NOT_RETAINED and is explicitly accepted
+as a limitation for Issue #17 closure; no live rerun is authorized.
+
+The experimental conclusions are already final. The four existing Phase C case
+contracts are the authoritative evaluation contracts. ADR-0002 is intentionally
+retained as Proposed by explicit Human Decision, and Issue #17 may close while
+it remains Proposed. This cycle only strengthens deterministic case-specific
+evidence verification and reconciles the associated decision/documentation.
+No new live evaluation occurred.
+
+This is scope context only; independently assess whether the implementation,
+documentation, acceptance-criteria disposition, and safety boundaries support
+the review result.
 `;
 }
 
@@ -154,8 +185,11 @@ function invokeCodexReviewer(
     }
 
     if (processResult.status !== 0) {
+      const diagnostic = processResult.stderr
+        ? ` stderr=${sanitizeReviewerDiagnostic(processResult.stderr)}`
+        : '';
       return reviewerInvocationFailure(
-        `Codex exited with status ${processResult.status ?? 'unknown'}.`,
+        `Codex exited with status ${processResult.status ?? 'unknown'}.${diagnostic}`,
       );
     }
 
@@ -168,6 +202,14 @@ function invokeCodexReviewer(
       error instanceof Error ? error.message : 'Unknown reviewer error.',
     );
   }
+}
+
+function sanitizeReviewerDiagnostic(value: string): string {
+  return value
+    .replace(/(authorization|api[-_]?key|token|secret)\s*[:=]\s*[^\s]+/gi, '$1=<redacted>')
+    .replace(/Bearer\s+[^\s]+/gi, 'Bearer <redacted>')
+    .trim()
+    .slice(-2000);
 }
 
 export function extractFinalReviewerMessage(output: string): string | undefined {

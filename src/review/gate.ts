@@ -8,6 +8,7 @@ export type ReviewGateResult = {
   blockingFindings: string[];
   nonBlockingFindings: string[];
   escalationRequired: boolean;
+  executionStatus?: 'COMPLETED' | 'FAILED';
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -54,7 +55,13 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('PASS cannot include blocking findings or escalation.');
   }
 
-  return { result, blockingFindings, nonBlockingFindings, escalationRequired };
+  return {
+    result,
+    blockingFindings,
+    nonBlockingFindings,
+    escalationRequired,
+    executionStatus: 'COMPLETED',
+  };
 }
 
 export function reviewerInvocationFailure(message: string): ReviewGateResult {
@@ -63,6 +70,7 @@ export function reviewerInvocationFailure(message: string): ReviewGateResult {
     blockingFindings: [`Reviewer invocation failed: ${message}`],
     nonBlockingFindings: [],
     escalationRequired: true,
+    executionStatus: 'FAILED',
   };
 }
 
@@ -99,5 +107,6 @@ function malformedResult(message: string): ReviewGateResult {
     blockingFindings: [message],
     nonBlockingFindings: [],
     escalationRequired: true,
+    executionStatus: 'FAILED',
   };
 }

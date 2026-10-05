@@ -13,6 +13,7 @@ import {
   validationFailure,
 } from '../src/review/gate.js';
 import {
+  buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
   runReviewControlFlow,
@@ -64,7 +65,22 @@ describe('independent review gate contract', () => {
 
     expect(canOpenPullRequest(true, escalation)).toBe(false);
     expect(canOpenPullRequest(true, failedInvocation)).toBe(false);
+    expect(failedInvocation.executionStatus).toBe('FAILED');
     expect(canOpenPullRequest(true, malformed)).toBe(false);
+    expect(malformed.executionStatus).toBe('FAILED');
+  });
+
+  it('marks valid reviewer output as completed execution', () => {
+    const result = parseReviewResult(
+      JSON.stringify({
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: ['Finding'],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+
+    expect(result.executionStatus).toBe('COMPLETED');
   });
 
   it('rejects an inconsistent PASS result', () => {
@@ -307,6 +323,23 @@ describe('independent review runner control flow', () => {
 
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+});
+
+describe('independent review scope context', () => {
+  it('provides Issue #17 scope context without prescribing a result', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '17' },
+      { title: 'Issue', body: 'Body', url: 'https://example.test/issues/17' },
+      ['npm run validate: passed'],
+      'spike/issue-17-agentic-tableau-mcp',
+    );
+
+    expect(prompt).toContain('remaining #16 benchmark cases');
+    expect(prompt).toContain('and Bedrock live comparisons are deferred');
+    expect(prompt).toContain('superseded by the Canonical Final Result');
+    expect(prompt).toContain('This is scope context only');
+    expect(prompt).not.toContain('return PASS');
   });
 });
 
