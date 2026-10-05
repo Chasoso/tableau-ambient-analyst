@@ -55,6 +55,7 @@ type QueryEvidenceCall = EvidenceCall &
     StdioCallSummary,
     | 'hasAggregateEvidence'
     | 'hasWorkbookLevelEvidence'
+    | 'observedFieldNames'
     | 'fixedHypothesisScope'
     | 'hasFixtureRankingContract'
     | 'topWorkbook'
@@ -101,17 +102,31 @@ export function verifyIncompleteExploration(
   const reasons = verifyStructuredOutcome(outcome).reasons;
   const queryCalls = calls.filter(isApprovedSuccessfulQuery);
   const initialCall = queryCalls[0];
-  if (initialCall === undefined || !initialCall.hasAggregateEvidence) {
-    reasons.push('no successful initial aggregate evidence was observed');
+  if (
+    initialCall === undefined ||
+    initialCall.rowCount === null ||
+    initialCall.rowCount < 1 ||
+    !initialCall.hasAggregateEvidence
+  ) {
+    reasons.push('no successful non-empty initial aggregate evidence was observed');
   }
   if (initialCall?.hasWorkbookLevelEvidence) {
     reasons.push('initial aggregate evidence already contained workbook-level evidence');
   }
   if (
     initialCall !== undefined &&
-    !queryCalls.slice(1).some((call) => call.hasWorkbookLevelEvidence)
+    !queryCalls
+      .slice(1)
+      .some(
+        (call) =>
+          (call.rowCount ?? 0) > 0 &&
+          call.hasWorkbookLevelEvidence &&
+          call.observedFieldNames.some(
+            (field) => field === 'Workbook Title' || field === 'workbookTitle',
+          ),
+      )
   ) {
-    reasons.push('no successful workbook-level follow-up evidence was observed');
+    reasons.push('no successful non-empty returned workbook-level follow-up evidence was observed');
   }
   if (outcome?.evidence_complete !== true)
     reasons.push('required follow-up evidence is incomplete');

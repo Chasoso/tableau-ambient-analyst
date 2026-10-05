@@ -15,6 +15,7 @@ import {
 import { readKeychainSecret } from './keychain-secrets.js';
 import { TableauStdioBridge, type StdioCallSummary } from './tableau-stdio-bridge.js';
 import { stdioOperationTimeoutMs } from './operation-timeout.js';
+import { StdioRunBudget } from './run-budget.js';
 import {
   verifyEmptyRecovery,
   verifyHypothesisOutcome,
@@ -105,13 +106,17 @@ function casePrompt(setup: MeasuredCaseSetup): string {
 async function createResponse(
   apiKey: string,
   input: unknown,
+  runBudget: StdioRunBudget,
   previousResponseId?: string,
 ): Promise<{ response: ResponsesEnvelope; latencyMs: number }> {
+  runBudget.assertCanContinue();
   const startedAt = Date.now();
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-    signal: AbortSignal.timeout(stdioOperationTimeoutMs),
+    signal: AbortSignal.timeout(
+      Math.min(stdioOperationTimeoutMs, runBudget.remainingWallClockMs()),
+    ),
     body: JSON.stringify({
       model,
       input,
@@ -166,12 +171,14 @@ function classifyCase(
 
 async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRunResult> {
   const bridge = new TableauStdioBridge();
+  const runBudget = new StdioRunBudget();
   const calls: StdioCallSummary[] = [];
   let responseCount = 0;
   let totalCostUsd = 0;
   try {
-    await bridge.connect();
-    const listed = await bridge.listTools();
+    runBudget.assertCanContinue();
+    await bridge.connect(runBudget.remainingWallClockMs());
+    const listed = await bridge.listTools(runBudget.remainingWallClockMs());
     const available = listed.tools.map((tool) => tool.name);
     if (
       !['list-datasources', 'get-datasource-metadata', 'query-datasource'].every((name) =>
@@ -194,11 +201,17 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
     let input: unknown = casePrompt(setup);
     let previousResponseId: string | undefined;
     for (;;) {
-      const { response, latencyMs } = await createResponse(apiKey, input, previousResponseId);
+      const { response, latencyMs } = await createResponse(
+        apiKey,
+        input,
+        runBudget,
+        previousResponseId,
+      );
       responseCount += 1;
       const envelope = summarizeResponseEnvelope(response);
       const usage = summarizeUsage(response.usage);
       totalCostUsd += usage.approximateCostUsd ?? 0;
+      runBudget.recordUsage(usage);
       console.log(
         JSON.stringify({
           event: 'stdio_agentic_response',
@@ -273,6 +286,7 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
 
       const outputs: Array<Record<string, unknown>> = [];
       for (const call of pendingCalls) {
+        runBudget.assertCanContinue();
         const openAiTool = typeof call.name === 'string' ? call.name : '';
         const callId = typeof call.call_id === 'string' ? call.call_id : '';
         if (!openAiTool || !callId || typeof call.arguments !== 'string') {
@@ -292,7 +306,11 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
             ...summarizeStdioToolArguments(openAiTool, argumentsValue),
           }),
         );
-        const executed = await bridge.callTool(openAiTool, argumentsValue);
+        const executed = await bridge.callTool(
+          openAiTool,
+          argumentsValue,
+          runBudget.remainingWallClockMs(),
+        );
         calls.push(executed.summary);
         console.log(
           JSON.stringify({
@@ -314,6 +332,7 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'UNKNOWN';
+    const limitReached = message.startsWith('RUN_');
     const classification = message.startsWith('OPENAI_')
       ? 'TRANSPORT_FAILURE'
       : message.includes('MCP') || message.includes('Datasource') || message.includes('Query')
@@ -337,7 +356,7 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
       responseCount,
       structuredOutcome: null,
       finalAnswerPresent: false,
-      stopReason: 'error',
+      stopReason: limitReached ? 'limit-reached' : 'error',
       error: message,
       costUsd: totalCostUsd,
     };

@@ -13,6 +13,7 @@ import {
   buildTableauMcpChildEnvironment,
   filterApprovedDatasourceListResult,
   normalizeMcpResultForModel,
+  resolveTableauMcpLocalExecutable,
 } from '../src/spike/tableau-stdio-bridge.js';
 import {
   buildFunctionCallOutput,
@@ -471,5 +472,14 @@ describe('application-managed stdio bridge policy', () => {
     expect(childEnvironment).not.toHaveProperty('OPENAI_API_KEY');
     expect(childEnvironment).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
     expect(childEnvironment).not.toHaveProperty('CUSTOM_SECRET');
+  });
+
+  it('resolves the exact locally installed Tableau MCP binary without npx', () => {
+    expect(resolveTableauMcpLocalExecutable()).toMatch(/@tableau\/mcp-server\/build\/index\.js$/);
+    expect(() =>
+      resolveTableauMcpLocalExecutable(() => {
+        throw new Error('not installed');
+      }),
+    ).toThrow('TABLEAU_MCP_BINARY_NOT_AVAILABLE');
   });
 });

@@ -253,9 +253,15 @@ now been completed for the current bounded batch:
 5. Human confirms the data-flow, retention/logging boundary, and remaining
    experiment spend cap.
 
-The local harness completed OAuth with the dedicated Viewer, verified the
-approved datasource and tools, and completed the bounded four-case batch. The
-live integration is therefore classified as:
+> **Historical / superseded Hosted feasibility result.** This paragraph records
+> an earlier Hosted OAuth experiment only. The canonical final four-case
+> evaluation used the local stdio + application-managed bridge, not Hosted
+> Remote MCP. The executable broad-scope Hosted harness was removed from the
+> merge target; Hosted research remains a future migration candidate.
+
+The historical Hosted harness completed OAuth with the dedicated Viewer and
+verified the approved datasource and tools. Its historical live integration
+classification was:
 
 ```text
 PASS for connectivity / integration

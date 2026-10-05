@@ -26,6 +26,7 @@ const queryEvidence = (rowCount: number) => ({
   error: null,
   hasAggregateEvidence: true,
   hasWorkbookLevelEvidence: false,
+  observedFieldNames: ['SUM(Daily View Count)'],
   fixedHypothesisScope: false,
   hasFixtureRankingContract: false,
   topWorkbook: null,
@@ -182,13 +183,46 @@ describe('evidence verifier', () => {
   it('requires observed follow-up evidence for incomplete exploration', () => {
     expect(
       verifyIncompleteExploration(
-        [queryEvidence(2), { ...queryEvidence(3), hasWorkbookLevelEvidence: true }],
+        [
+          queryEvidence(2),
+          {
+            ...queryEvidence(3),
+            hasWorkbookLevelEvidence: true,
+            observedFieldNames: ['Workbook Title', 'SUM(Daily View Count)'],
+          },
+        ],
         {
           ...supported,
           outcome: 'supported',
         },
       ).ok,
     ).toBe(true);
+    expect(
+      verifyIncompleteExploration(
+        [
+          queryEvidence(2),
+          {
+            ...queryEvidence(0),
+            hasWorkbookLevelEvidence: true,
+            observedFieldNames: ['Workbook Title', 'SUM(Daily View Count)'],
+          },
+        ],
+        supported,
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyIncompleteExploration(
+        [
+          queryEvidence(2),
+          {
+            ...queryEvidence(3),
+            hasWorkbookLevelEvidence: true,
+            observedFieldNames: ['SUM(Daily View Count)'],
+          },
+        ],
+        supported,
+      ).ok,
+    ).toBe(false);
     expect(verifyIncompleteExploration([queryEvidence(2)], supported).ok).toBe(false);
     expect(
       verifyIncompleteExploration(

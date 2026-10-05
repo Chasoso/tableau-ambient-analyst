@@ -89,8 +89,10 @@ criteria for this closed scope.
 - MCP package integrity boundary: the PAT-receiving child uses the exact
   reviewed version `4.13.3`, resolved in `package-lock.json` with npm integrity
   `sha512-jXWV223H3P5HqkO6/iaqqKlefNACguyTaUNH6EW2Jjb338g8RIRgiXvHtM7ZISKLKM8pgKqSGvJPcys4iz23DA==`.
-  Mutable `@latest` is not used by the executable path; any version change
-  requires explicit review and revalidation.
+  The bridge executes that locally installed package's reviewed binary through
+  `node`, rather than fetching a package through `npx` at runtime. Mutable
+  `@latest` is not used by the executable path; a missing local binary fails
+  closed, and any version change requires explicit review and revalidation.
 - Authentication: dedicated PAT for the spike; production credential model unresolved
 - Datasource: `Tableau Public Per Day(2025/04-)`
 - Datasource LUID: `14f3ac6d-1171-4065-baac-c63bdce1470f`
@@ -101,6 +103,9 @@ criteria for this closed scope.
   LUID to the model; absence of that datasource fails closed with
   `APPROVED_DATASOURCE_NOT_FOUND`
 - Query policy: read-only, aggregation-first, maximum 100 rows
+- Runaway protection: 10-minute per-operation timeout, 15-minute per-case
+  wall-clock bound, six tool-call bound, and fail-closed cumulative usage
+  limits of 100,000 tokens / `$0.05` before another paid request.
 - Measured cases: one run each
 - Write calls, site-setting changes, and model fallback: none
 

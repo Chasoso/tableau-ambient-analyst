@@ -5,6 +5,9 @@ import {
   type CallToolResult,
   type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import {
   mapOpenAiToolToMcp,
@@ -18,26 +21,51 @@ const tableauServer = 'https://10ax.online.tableau.com';
 const tableauSiteName = 'chasoso_202603';
 const tableauPatName = 'ambient-analyst-issue17';
 const tableauPatKeychainService = 'tableau_ambient_analyst_pat_20261005';
-const tableauMcpCommand = 'npx';
 // This child receives PAT_VALUE. Keep its package exact-version pinned and
-// lockfile-resolved; changing it requires explicit review and revalidation.
+// lockfile-resolved. It is deliberately run from the local reviewed install,
+// never fetched by npx at execution time. Changing it requires explicit
+// review and revalidation.
 const tableauMcpPackageVersion = '4.13.3';
-const tableauMcpArgs = ['-y', `@tableau/mcp-server@${tableauMcpPackageVersion}`];
+const tableauMcpPackageName = '@tableau/mcp-server';
+const localRequire = createRequire(import.meta.url);
 const inheritedRuntimeEnvironmentKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR'] as const;
-const aggregationFunctions = new Set([
-  'SUM',
-  'AVG',
-  'MEDIAN',
-  'COUNT',
-  'COUNTD',
-  'MIN',
-  'MAX',
-  'STDEV',
-  'VAR',
-  'COLLECT',
-  'AGG',
-]);
 export const approvedDatasourceName = 'Tableau Public Per Day(2025/04-)';
+
+type TableauMcpManifest = {
+  version?: unknown;
+  bin?: unknown;
+};
+
+/**
+ * Resolves the locally installed, lockfile-reviewed Tableau MCP executable.
+ * This deliberately has no registry fallback because the child receives PAT_VALUE.
+ */
+export function resolveTableauMcpLocalExecutable(
+  resolvePackageEntry: (name: string) => string = localRequire.resolve,
+): string {
+  let packageEntry: string;
+  let manifestPath: string;
+  try {
+    packageEntry = resolvePackageEntry(tableauMcpPackageName);
+    manifestPath = resolve(dirname(dirname(packageEntry)), 'package.json');
+  } catch {
+    throw new Error('TABLEAU_MCP_BINARY_NOT_AVAILABLE');
+  }
+  let manifest: TableauMcpManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as TableauMcpManifest;
+  } catch {
+    throw new Error('TABLEAU_MCP_BINARY_NOT_AVAILABLE');
+  }
+  if (manifest.version !== tableauMcpPackageVersion || !isRecord(manifest.bin)) {
+    throw new Error('TABLEAU_MCP_BINARY_NOT_AVAILABLE');
+  }
+  const binary = manifest.bin['tableau-mcp-server'];
+  if (typeof binary !== 'string' || binary.length === 0) {
+    throw new Error('TABLEAU_MCP_BINARY_NOT_AVAILABLE');
+  }
+  return resolve(dirname(manifestPath), binary);
+}
 
 export function buildTableauMcpChildEnvironment(
   parentEnvironment: NodeJS.ProcessEnv,
@@ -74,6 +102,7 @@ export type StdioCallSummary = {
   hasAggregateEvidence: boolean;
   hasWorkbookLevelEvidence: boolean;
   hasFixtureRankingContract: boolean;
+  observedFieldNames: string[];
 };
 
 type ScalarEvidenceValue = string | number | boolean | null;
@@ -369,23 +398,17 @@ function hasFixedHypothesisScope(args: Record<string, unknown>): boolean {
 }
 
 function queryContractEvidence(args: Record<string, unknown>): {
-  hasAggregateEvidence: boolean;
-  hasWorkbookLevelEvidence: boolean;
   hasFixtureRankingContract: boolean;
 } {
   const query = args.query;
   if (typeof query !== 'object' || query === null || Array.isArray(query)) {
     return {
-      hasAggregateEvidence: false,
-      hasWorkbookLevelEvidence: false,
       hasFixtureRankingContract: false,
     };
   }
   const fields = (query as Record<string, unknown>).fields;
   if (!Array.isArray(fields)) {
     return {
-      hasAggregateEvidence: false,
-      hasWorkbookLevelEvidence: false,
       hasFixtureRankingContract: false,
     };
   }
@@ -404,14 +427,25 @@ function queryContractEvidence(args: Record<string, unknown>): {
       field.sortDirection === 'DESC',
   );
   return {
-    hasAggregateEvidence: records.some(
-      (field) =>
-        typeof field.function === 'string' &&
-        aggregationFunctions.has(field.function.toUpperCase()),
-    ),
-    hasWorkbookLevelEvidence,
     hasFixtureRankingContract:
       hasWorkbookLevelEvidence && hasDailyViewCountSum && hasDescendingMetricSort,
+  };
+}
+
+function observedQueryEvidence(rows: Array<Record<string, ScalarEvidenceValue>>): {
+  hasAggregateEvidence: boolean;
+  hasWorkbookLevelEvidence: boolean;
+  observedFieldNames: string[];
+} {
+  const fields = [...new Set(rows.flatMap((row) => Object.keys(row)))].sort();
+  return {
+    hasAggregateEvidence: fields.some((field) =>
+      /^(SUM|AVG|MEDIAN|COUNTD?|MIN|MAX|STDEV|VAR|COLLECT|AGG)\(/i.test(field),
+    ),
+    hasWorkbookLevelEvidence: fields.some(
+      (field) => field === 'Workbook Title' || field === 'workbookTitle',
+    ),
+    observedFieldNames: fields,
   };
 }
 
@@ -423,24 +457,26 @@ export class TableauStdioBridge {
 
   private transport: StdioClientTransport | null = null;
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs?: number): Promise<void> {
     const patValue = readKeychainSecret(tableauPatKeychainService);
+    const tableauMcpExecutable = resolveTableauMcpLocalExecutable();
     this.transport = new StdioClientTransport({
-      command: tableauMcpCommand,
-      args: tableauMcpArgs,
+      command: process.execPath,
+      args: [tableauMcpExecutable],
       env: buildTableauMcpChildEnvironment(process.env, patValue),
       stderr: 'pipe',
     });
-    await withOperationTimeout(this.client.connect(this.transport), 'MCP initialize');
+    await withOperationTimeout(this.client.connect(this.transport), 'MCP initialize', timeoutMs);
   }
 
-  async listTools(): Promise<ListToolsResult> {
-    return this.client.listTools();
+  async listTools(timeoutMs?: number): Promise<ListToolsResult> {
+    return withOperationTimeout(this.client.listTools(), 'MCP tools/list', timeoutMs);
   }
 
   async callTool(
     openAiTool: string,
     args: unknown,
+    timeoutMs?: number,
   ): Promise<{
     result: CallToolResult;
     modelEvidence: ModelVisibleMcpEvidence;
@@ -457,6 +493,7 @@ export class TableauStdioBridge {
         CallToolResultSchema,
       ),
       `MCP tool ${mcpTool}`,
+      timeoutMs,
     )) as CallToolResult;
     const result =
       openAiTool === 'list_datasources' && !mcpResult.isError
@@ -470,13 +507,18 @@ export class TableauStdioBridge {
       throw new Error('MCP result exceeded the bounded row limit.');
     }
     const firstRow = result.isError ? null : firstDataRow(result);
+    const observedRows =
+      'tool' in modelEvidence && modelEvidence.tool === 'query_datasource'
+        ? modelEvidence.rows
+        : [];
     const queryEvidence =
       openAiTool === 'query_datasource'
-        ? queryContractEvidence(validation.arguments)
+        ? { ...queryContractEvidence(validation.arguments), ...observedQueryEvidence(observedRows) }
         : {
             hasAggregateEvidence: false,
             hasWorkbookLevelEvidence: false,
             hasFixtureRankingContract: false,
+            observedFieldNames: [],
           };
     const topWorkbook =
       typeof firstRow?.['Workbook Title'] === 'string'
