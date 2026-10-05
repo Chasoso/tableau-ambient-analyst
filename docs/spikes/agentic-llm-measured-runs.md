@@ -217,7 +217,7 @@ validation found:
 
 - metadata: HTTP 200;
 - `Metric Date Time (JST)`, `Workbook Title`, and `Daily View Count` were
-  available;
+  available.
 - month-level view aggregate: HTTP 200, 12 rows;
 - Workbook Title view breakdown: HTTP 200, bounded at 100 rows;
 - valid future-date filter: HTTP 200, 0 rows;

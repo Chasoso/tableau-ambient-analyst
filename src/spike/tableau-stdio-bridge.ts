@@ -103,6 +103,23 @@ export type StdioCallSummary = {
   hasWorkbookLevelEvidence: boolean;
   hasFixtureRankingContract: boolean;
   observedFieldNames: string[];
+  queryContract: QueryContractSummary | null;
+};
+
+export type QueryContractSummary = {
+  fields: Array<{
+    fieldCaption: string;
+    function: string | null;
+    sortDirection: string | null;
+    sortPriority: number | null;
+  }>;
+  filters: Array<{
+    fieldCaption: string | null;
+    filterType: string | null;
+    quantitativeFilterType: string | null;
+    minDate: string | null;
+    maxDate: string | null;
+  }>;
 };
 
 type ScalarEvidenceValue = string | number | boolean | null;
@@ -432,6 +449,42 @@ function queryContractEvidence(args: Record<string, unknown>): {
   };
 }
 
+function summarizeQueryContract(args: Record<string, unknown>): QueryContractSummary | null {
+  if (!isRecord(args.query) || !Array.isArray(args.query.fields)) return null;
+  const fields = args.query.fields.flatMap((field) => {
+    if (!isRecord(field) || typeof field.fieldCaption !== 'string') return [];
+    return [
+      {
+        fieldCaption: field.fieldCaption,
+        function: typeof field.function === 'string' ? field.function : null,
+        sortDirection: typeof field.sortDirection === 'string' ? field.sortDirection : null,
+        sortPriority: typeof field.sortPriority === 'number' ? field.sortPriority : null,
+      },
+    ];
+  });
+  const filters = Array.isArray(args.query.filters)
+    ? args.query.filters.flatMap((filter) => {
+        if (!isRecord(filter)) return [];
+        return [
+          {
+            fieldCaption:
+              isRecord(filter.field) && typeof filter.field.fieldCaption === 'string'
+                ? filter.field.fieldCaption
+                : null,
+            filterType: typeof filter.filterType === 'string' ? filter.filterType : null,
+            quantitativeFilterType:
+              typeof filter.quantitativeFilterType === 'string'
+                ? filter.quantitativeFilterType
+                : null,
+            minDate: typeof filter.minDate === 'string' ? filter.minDate : null,
+            maxDate: typeof filter.maxDate === 'string' ? filter.maxDate : null,
+          },
+        ];
+      })
+    : [];
+  return { fields, filters };
+}
+
 function observedQueryEvidence(rows: Array<Record<string, ScalarEvidenceValue>>): {
   hasAggregateEvidence: boolean;
   hasWorkbookLevelEvidence: boolean;
@@ -545,6 +598,8 @@ export class TableauStdioBridge {
         fixedHypothesisScope:
           openAiTool === 'query_datasource' && hasFixedHypothesisScope(validation.arguments),
         ...queryEvidence,
+        queryContract:
+          openAiTool === 'query_datasource' ? summarizeQueryContract(validation.arguments) : null,
       },
     };
   }

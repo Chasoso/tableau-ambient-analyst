@@ -4,6 +4,17 @@
 
 Proposed
 
+### Human Decision for Issue #17
+
+Human Decision explicitly confirms that ADR-0002 remains **Proposed**. Do not
+promote it to Accepted, revise it, or reject it as part of Issue #17. Issue
+#17 may close while this recommendation remains Proposed; this is the intended
+final state, not an unresolved approval blocker.
+
+Revisit acceptance only after later demo validation, production
+architecture/transport/authentication decisions, and/or broader provider
+evaluation.
+
 ## Context
 
 Issue #17 evaluated whether an LLM can perform semantic exploration of a

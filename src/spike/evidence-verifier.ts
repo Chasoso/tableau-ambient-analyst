@@ -1,6 +1,7 @@
 import type { StdioCallSummary } from './tableau-stdio-bridge.js';
 import type { StructuredOutcome } from './response-telemetry.js';
 import { stdioDatasourceLuid } from './stdio-bridge-policy.js';
+import { hypothesisFixture } from './measured-case-setup.js';
 
 export type EvidenceVerification = {
   ok: boolean;
@@ -53,12 +54,12 @@ type EvidenceCall = Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error' | 'd
 type QueryEvidenceCall = EvidenceCall &
   Pick<
     StdioCallSummary,
-    | 'hasAggregateEvidence'
     | 'hasWorkbookLevelEvidence'
     | 'observedFieldNames'
     | 'fixedHypothesisScope'
     | 'hasFixtureRankingContract'
     | 'topWorkbook'
+    | 'queryContract'
   >;
 
 function isApprovedSuccessfulQuery(call: EvidenceCall): boolean {
@@ -70,6 +71,76 @@ function isApprovedSuccessfulQuery(call: EvidenceCall): boolean {
   );
 }
 
+function hasSumDailyViewCount(call: QueryEvidenceCall): boolean {
+  return (
+    call.queryContract?.fields.some(
+      (field) => field.fieldCaption === 'Daily View Count' && field.function === 'SUM',
+    ) ?? false
+  );
+}
+
+function hasWorkbookBreakdown(call: QueryEvidenceCall): boolean {
+  return (
+    (call.queryContract?.fields.some((field) => field.fieldCaption === 'Workbook Title') ??
+      false) &&
+    call.hasWorkbookLevelEvidence &&
+    call.observedFieldNames.some((field) => field === 'Workbook Title' || field === 'workbookTitle')
+  );
+}
+
+function hasMonthLevelTrend(call: QueryEvidenceCall): boolean {
+  return (
+    call.queryContract?.fields.some(
+      (field) =>
+        field.fieldCaption === 'Month' ||
+        /month/i.test(field.fieldCaption) ||
+        field.function === 'MONTH' ||
+        field.function === 'TRUNC_MONTH',
+    ) ?? false
+  );
+}
+
+function hasFutureDateFixture(call: QueryEvidenceCall): boolean {
+  return (
+    call.queryContract?.filters.some(
+      (filter) =>
+        filter.fieldCaption === 'Metric Date Time (JST)' && filter.minDate === '2099-01-01',
+    ) ?? false
+  );
+}
+
+function hasHypothesisFixtureRanking(call: QueryEvidenceCall): boolean {
+  const fields = call.queryContract?.fields ?? [];
+  const filters = call.queryContract?.filters ?? [];
+  return (
+    fields.some((field) => field.fieldCaption === hypothesisFixture.grouping) &&
+    fields.some(
+      (field) =>
+        field.fieldCaption === hypothesisFixture.measure &&
+        field.function === 'SUM' &&
+        field.sortDirection === hypothesisFixture.sortDirection &&
+        field.sortPriority === hypothesisFixture.sortPriority,
+    ) &&
+    filters.some(
+      (filter) =>
+        filter.fieldCaption === hypothesisFixture.dateField &&
+        filter.minDate === hypothesisFixture.lowerBound &&
+        filter.maxDate === hypothesisFixture.upperBoundExclusive,
+    )
+  );
+}
+
+function hasRelevantPerformanceEvidence(call: QueryEvidenceCall): boolean {
+  return (
+    hasSumDailyViewCount(call) &&
+    (call.queryContract?.fields.some(
+      (field) =>
+        field.fieldCaption === 'Workbook Title' || field.fieldCaption === 'Metric Date Time (JST)',
+    ) ??
+      false)
+  );
+}
+
 export function verifyStructuredOutcome(outcome: StructuredOutcome | null): EvidenceVerification {
   if (outcome === null) return { ok: false, reasons: ['structured outcome is missing or invalid'] };
   const reasons = verifyOutcomeShape(outcome);
@@ -77,18 +148,25 @@ export function verifyStructuredOutcome(outcome: StructuredOutcome | null): Evid
 }
 
 export function verifyEmptyRecovery(
-  calls: readonly EvidenceCall[],
+  calls: readonly QueryEvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
   const queryCalls = calls.filter(isApprovedSuccessfulQuery);
-  const emptyIndex = queryCalls.findIndex((call) => call.rowCount === 0);
-  if (emptyIndex < 0) reasons.push('no successful zero-row query was observed');
+  const emptyIndex = queryCalls.findIndex(
+    (call) => call.rowCount === 0 && hasFutureDateFixture(call) && hasSumDailyViewCount(call),
+  );
+  if (emptyIndex < 0) reasons.push('no successful future-date fixture zero-row query was observed');
   if (
     emptyIndex >= 0 &&
-    !queryCalls.slice(emptyIndex + 1).some((call) => (call.rowCount ?? 0) > 0)
+    !queryCalls
+      .slice(emptyIndex + 1)
+      .some(
+        (call) =>
+          (call.rowCount ?? 0) > 0 && hasSumDailyViewCount(call) && !hasFutureDateFixture(call),
+      )
   ) {
-    reasons.push('no non-empty follow-up evidence was observed after the empty query');
+    reasons.push('no relevant non-empty recovery evidence was observed after the empty query');
   }
   if (outcome?.outcome !== 'supported')
     reasons.push('empty recovery must produce a supported outcome');
@@ -106,7 +184,8 @@ export function verifyIncompleteExploration(
     initialCall === undefined ||
     initialCall.rowCount === null ||
     initialCall.rowCount < 1 ||
-    !initialCall.hasAggregateEvidence
+    !hasMonthLevelTrend(initialCall) ||
+    !hasSumDailyViewCount(initialCall)
   ) {
     reasons.push('no successful non-empty initial aggregate evidence was observed');
   }
@@ -119,11 +198,7 @@ export function verifyIncompleteExploration(
       .slice(1)
       .some(
         (call) =>
-          (call.rowCount ?? 0) > 0 &&
-          call.hasWorkbookLevelEvidence &&
-          call.observedFieldNames.some(
-            (field) => field === 'Workbook Title' || field === 'workbookTitle',
-          ),
+          (call.rowCount ?? 0) > 0 && hasSumDailyViewCount(call) && hasWorkbookBreakdown(call),
       )
   ) {
     reasons.push('no successful non-empty returned workbook-level follow-up evidence was observed');
@@ -148,6 +223,9 @@ export function verifyHypothesisOutcome(
     | 'fixedHypothesisScope'
     | 'hasFixtureRankingContract'
     | 'topWorkbook'
+    | 'queryContract'
+    | 'hasWorkbookLevelEvidence'
+    | 'observedFieldNames'
   >[] = [],
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
@@ -160,6 +238,7 @@ export function verifyHypothesisOutcome(
         isApprovedSuccessfulQuery(call) &&
         call.fixedHypothesisScope &&
         call.hasFixtureRankingContract &&
+        hasHypothesisFixtureRanking(call) &&
         call.topWorkbook !== null,
     )
   ) {
@@ -170,6 +249,7 @@ export function verifyHypothesisOutcome(
         isApprovedSuccessfulQuery(call) &&
         call.fixedHypothesisScope &&
         call.hasFixtureRankingContract &&
+        hasHypothesisFixtureRanking(call) &&
         call.topWorkbook !== null,
     );
     if (rankingCall?.topWorkbook !== expectedRank1) {
@@ -187,12 +267,19 @@ export function verifyHypothesisOutcome(
 }
 
 export function verifyInsufficientEvidence(
-  calls: readonly EvidenceCall[],
+  calls: readonly QueryEvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
-  if (!calls.some(isApprovedSuccessfulQuery)) {
-    reasons.push('no successful Tableau metric evidence was observed');
+  if (
+    !calls.some(
+      (call) =>
+        isApprovedSuccessfulQuery(call) &&
+        (call.rowCount ?? 0) > 0 &&
+        hasRelevantPerformanceEvidence(call),
+    )
+  ) {
+    reasons.push('no successful relevant Tableau performance evidence was observed');
   }
   if (outcome?.outcome !== 'insufficient-evidence') {
     reasons.push('outcome must be insufficient-evidence');
