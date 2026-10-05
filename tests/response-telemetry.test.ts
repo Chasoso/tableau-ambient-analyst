@@ -15,6 +15,7 @@ const validOutcome = {
   missing_evidence: [],
   hypothesis_state: 'rejected',
   stop_reason: 'sufficient-evidence',
+  reported_rank_1: '#MoM 2024 Week 34 | SNS Popularity in the U.S.',
 };
 
 describe('Responses telemetry extraction', () => {

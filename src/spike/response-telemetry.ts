@@ -10,6 +10,7 @@ export type StructuredOutcome = {
   missing_evidence: string[];
   hypothesis_state: HypothesisState;
   stop_reason: StopReason;
+  reported_rank_1?: string | null;
 };
 
 export type ToolCallTelemetry = {
@@ -105,6 +106,7 @@ export function extractStructuredOutcome(finalAnswer: string): StructuredOutcome
   const missingEvidence = readField(record, 'missingEvidence', 'missing_evidence');
   const hypothesisState = readField(record, 'hypothesisState', 'hypothesis_state');
   const stopReason = readField(record, 'stopReason', 'stop_reason');
+  const reportedRank1 = readField(record, 'reportedRank1', 'reported_rank_1');
   const validOutcomes = new Set<OutcomeType>([
     'supported',
     'revised',
@@ -131,7 +133,8 @@ export function extractStructuredOutcome(finalAnswer: string): StructuredOutcome
     !Array.isArray(missingEvidence) ||
     !missingEvidence.every((value) => typeof value === 'string') ||
     !validHypothesisStates.has(hypothesisState as HypothesisState) ||
-    !validStopReasons.has(stopReason as StopReason)
+    !validStopReasons.has(stopReason as StopReason) ||
+    (reportedRank1 !== undefined && reportedRank1 !== null && typeof reportedRank1 !== 'string')
   ) {
     return null;
   }
@@ -142,6 +145,7 @@ export function extractStructuredOutcome(finalAnswer: string): StructuredOutcome
     missing_evidence: missingEvidence as string[],
     hypothesis_state: hypothesisState as HypothesisState,
     stop_reason: stopReason as StopReason,
+    ...(reportedRank1 === undefined ? {} : { reported_rank_1: reportedRank1 as string | null }),
   };
 }
 

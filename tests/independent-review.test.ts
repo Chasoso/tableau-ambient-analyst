@@ -337,6 +337,7 @@ describe('independent review scope context', () => {
 
     expect(prompt).toContain('remaining #16 benchmark cases');
     expect(prompt).toContain('and Bedrock live comparisons are deferred');
+    expect(prompt).toContain('superseded by the Canonical Final Result');
     expect(prompt).toContain('This is scope context only');
     expect(prompt).not.toContain('return PASS');
   });

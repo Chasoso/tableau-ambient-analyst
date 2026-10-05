@@ -59,6 +59,7 @@ describe('OpenAI remote MCP request construction', () => {
       'missing_evidence',
       'hypothesis_state',
       'stop_reason',
+      'reported_rank_1',
     ]);
     expect(structuredOutcomeTextFormat.schema.additionalProperties).toBe(false);
   });

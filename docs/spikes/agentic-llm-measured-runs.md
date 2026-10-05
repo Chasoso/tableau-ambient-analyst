@@ -80,11 +80,18 @@ for this canonical final result.
 - Measured cases: one run each
 - Write calls, site-setting changes, and model fallback: none
 
+## Historical Investigation Log
+
+> Historical results only. This section preserves the investigation chronology,
+> including Pilot runs, setup failures, mutable-ground-truth findings, and the
+> first Phase C batch. It is superseded for final Issue #17 evaluation by the
+> **Canonical Final Result** above.
+
 The earlier four runs remain **Pilot runs**. They established transport and
 integration success but lacked the instrumentation needed for behavioral
-evaluation. The table below records the new four **Measured runs** separately.
+evaluation.
 
-## Measured runs
+### Early measured runs — superseded
 
 | Case | MCP calls | First query behavior | Recovery/continuation | Final answer/outcome | Result |
 | --- | ---: | --- | --- | --- | --- |
@@ -165,11 +172,13 @@ retry bounds, secret handling, write prohibition, and human escalation remain
 application responsibilities. No production provider or orchestration
 architecture is accepted by this record.
 
-## Next decision
+## Historical decision checkpoint — resolved
 
-`HUMAN_DECISION_REQUIRED` before any additional paid case run. The decision
-needed is whether to authorize one new four-case measured batch after the
-instrumentation fix, or to retain this spike as inconclusive evidence.
+Historical state: `HUMAN_DECISION_REQUIRED` before any additional paid case
+run. Resolution: subsequent Human Decisions authorized the corrected setup,
+fixed fixture, and one corrected Second Phase C batch. The final disposition
+is the Canonical Final Result above; this historical checkpoint is not a
+current Issue #17 blocker.
 
 ## Latest deterministic live setup preflight
 
@@ -243,9 +252,11 @@ OpenAI/Hosted-MCP incompatibility. The earlier direct MCP success and earlier
 OpenAI relay success remain historical evidence; the earlier `424` remains a
 separate relay diagnostic failure. Agentic behavior was not evaluated.
 
-The issue remains `HUMAN_DECISION_REQUIRED` because the single authorized
-diagnostic retry did not reach the relay and no further OAuth or relay retries
-are authorized by this record.
+Historical state: `HUMAN_DECISION_REQUIRED` because the single authorized
+diagnostic retry did not reach the relay. Resolution: Hosted reliability was
+subsequently closed as experimental research, the executable harness was
+removed from the merge target, and final agentic evaluation moved to stdio.
+This is not a current Issue #17 blocker.
 
 ## OAuth token timing diagnosis
 
@@ -391,9 +402,11 @@ Not yet proven:
   audience for this flow.
 - Whether the dedicated Viewer/site context contributes to this rejection.
 
-The most likely failure layer remains Hosted MCP token acceptance or an OAuth
-resource/audience compatibility issue. No OAuth request, scope, site role, or
-security boundary was changed. The issue remains `HUMAN_DECISION_REQUIRED`.
+The most likely historical failure layer remains Hosted MCP token acceptance or
+an OAuth resource/audience compatibility issue. No OAuth request, scope, site
+role, or security boundary was changed. Historical state:
+`HUMAN_DECISION_REQUIRED`. Resolution: this diagnostic remains retained Hosted
+research only, not a current Issue #17 blocker.
 
 ## Token-request resource inspection
 
@@ -1581,7 +1594,10 @@ READY_FOR_AGENTIC_4_CASE_BATCH = yes
 This smoke validates the end-to-end bridge and contract alignment only. The
 four agentic cases remain unconsumed and require a separate human decision.
 
-## Phase C: final stdio agentic cases
+### First Phase C — historical and superseded
+
+> Historical result only. The guard-4 batch below is superseded by the
+> corrected Second Phase C canonical evaluation.
 
 The approved Phase C batch used the local PAT-authenticated stdio path, the
 existing three-tool allowlist, `gpt-5.6-luna`, `max_output_tokens: 1024`, strict
@@ -1619,7 +1635,7 @@ investigation: validate the Tableau filter argument contract for the empty
 result setup, decide whether the four-call guard is sufficient for the fixed
 case contracts, and obtain human direction before any further live case run.
 
-## Phase C second-batch setup review
+### Historical setup correction for the canonical batch
 
 The first Phase C batch showed that four tool calls were too small for the
 normal discovery/metadata/initial-query/follow-up path. The guard was therefore
@@ -1653,7 +1669,7 @@ classified as **GROUND_TRUTH_CHANGED**, not as a model result and not as a
 permission to rewrite the expectation. The second Phase C measured batch was
 not started, and human direction is required before changing the case contract.
 
-## Hypothesis fixture stabilization
+### Hypothesis fixture stabilization retained as provenance
 
 The historical `hypothesis-disproved` result was not accepted as a stable
 ground truth. Repository history contains the historical rank-1 workbook and a
@@ -1711,7 +1727,7 @@ the direct setup checker validates the empty-result fixture plus this ranking
 fixture before any measured run. The second Phase C batch remains unexecuted
 until a human confirms this fixture.
 
-## Second Phase C / corrected evaluation batch
+## Canonical Final Evaluation — Second Phase C / corrected batch
 
 The human-approved corrected batch used the local PAT-authenticated stdio path
 only. The Hosted Remote MCP path was not retried. Before the batch, the two

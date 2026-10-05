@@ -24,6 +24,11 @@ const queryEvidence = (rowCount: number) => ({
   datasourceLuid: stdioDatasourceLuid,
   rowCount,
   error: null,
+  hasAggregateEvidence: true,
+  hasWorkbookLevelEvidence: false,
+  fixedHypothesisScope: false,
+  hasFixtureRankingContract: false,
+  topWorkbook: null,
 });
 
 describe('evidence verifier', () => {
@@ -54,6 +59,13 @@ describe('evidence verifier', () => {
   it('verifies empty-result recovery from observed tool summaries', () => {
     expect(verifyEmptyRecovery([queryEvidence(0), queryEvidence(1)], supported).ok).toBe(true);
     expect(verifyEmptyRecovery([queryEvidence(0)], supported).ok).toBe(false);
+    expect(verifyEmptyRecovery([queryEvidence(1)], supported).ok).toBe(false);
+    expect(
+      verifyEmptyRecovery(
+        [queryEvidence(0), { ...queryEvidence(1), error: 'MCP tool returned an error.' }],
+        supported,
+      ).ok,
+    ).toBe(false);
   });
 
   it('requires hypothesis revision and can check a reported fixture rank', () => {
@@ -63,6 +75,7 @@ describe('evidence verifier', () => {
           ...supported,
           outcome: 'rejected',
           hypothesis_state: 'rejected',
+          reported_rank_1: 'rank-1',
         },
         'rank-1',
         undefined,
@@ -70,6 +83,7 @@ describe('evidence verifier', () => {
           {
             ...queryEvidence(1),
             fixedHypothesisScope: true,
+            hasFixtureRankingContract: true,
             topWorkbook: 'rank-1',
           },
         ],
@@ -88,9 +102,36 @@ describe('evidence verifier', () => {
           {
             ...queryEvidence(1),
             fixedHypothesisScope: true,
+            hasFixtureRankingContract: true,
             topWorkbook: 'rank-1',
           },
         ],
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyHypothesisOutcome(
+        {
+          ...supported,
+          outcome: 'rejected',
+          hypothesis_state: 'rejected',
+          reported_rank_1: 'rank-1',
+        },
+        'rank-1',
+        undefined,
+        [{ ...queryEvidence(1), hasFixtureRankingContract: true, topWorkbook: 'rank-1' }],
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyHypothesisOutcome(
+        {
+          ...supported,
+          outcome: 'rejected',
+          hypothesis_state: 'rejected',
+          reported_rank_1: 'rank-1',
+        },
+        'rank-1',
+        undefined,
+        [],
       ).ok,
     ).toBe(false);
     expect(
@@ -106,6 +147,7 @@ describe('evidence verifier', () => {
           {
             ...queryEvidence(1),
             fixedHypothesisScope: true,
+            hasFixtureRankingContract: true,
             topWorkbook: 'other',
           },
         ],
@@ -125,15 +167,29 @@ describe('evidence verifier', () => {
       }).ok,
     ).toBe(true);
     expect(verifyInsufficientEvidence([], supported).ok).toBe(false);
+    expect(
+      verifyInsufficientEvidence([queryEvidence(1)], {
+        outcome: 'insufficient-evidence',
+        summary: 'External evidence is missing.',
+        evidence_complete: true,
+        missing_evidence: ['external-cause'],
+        hypothesis_state: 'not-applicable',
+        stop_reason: 'sufficient-evidence',
+      }).ok,
+    ).toBe(false);
   });
 
   it('requires observed follow-up evidence for incomplete exploration', () => {
     expect(
-      verifyIncompleteExploration([queryEvidence(2), queryEvidence(3)], {
-        ...supported,
-        outcome: 'supported',
-      }).ok,
+      verifyIncompleteExploration(
+        [queryEvidence(2), { ...queryEvidence(3), hasWorkbookLevelEvidence: true }],
+        {
+          ...supported,
+          outcome: 'supported',
+        },
+      ).ok,
     ).toBe(true);
+    expect(verifyIncompleteExploration([queryEvidence(2)], supported).ok).toBe(false);
   });
 
   it('rejects evidence that does not come from the allowed datasource', () => {
@@ -150,5 +206,23 @@ describe('evidence verifier', () => {
         },
       ).ok,
     ).toBe(false);
+  });
+
+  it('rejects unapproved-tool evidence and insufficient outcomes without an external gap', () => {
+    const insufficient = {
+      outcome: 'insufficient-evidence' as const,
+      summary: 'Causal evidence is unavailable.',
+      evidence_complete: false,
+      missing_evidence: ['unknown source'],
+      hypothesis_state: 'not-applicable' as const,
+      stop_reason: 'insufficient-evidence' as const,
+    };
+    expect(
+      verifyInsufficientEvidence(
+        [{ ...queryEvidence(1), mcpTool: 'unapproved-tool' }],
+        insufficient,
+      ).ok,
+    ).toBe(false);
+    expect(verifyInsufficientEvidence([queryEvidence(1)], insufficient).ok).toBe(false);
   });
 });

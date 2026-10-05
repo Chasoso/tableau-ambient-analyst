@@ -40,6 +40,11 @@ export const structuredOutcomeTextFormat = {
           'other',
         ],
       },
+      reported_rank_1: {
+        type: ['string', 'null'],
+        description:
+          'For a ranking conclusion, the observed rank-1 workbook title; otherwise null.',
+      },
     },
     required: [
       'outcome',
@@ -48,6 +53,7 @@ export const structuredOutcomeTextFormat = {
       'missing_evidence',
       'hypothesis_state',
       'stop_reason',
+      'reported_rank_1',
     ],
   },
 } as const;

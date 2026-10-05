@@ -9,6 +9,13 @@ export type EvidenceVerification = {
 
 function verifyOutcomeShape(outcome: StructuredOutcome): string[] {
   const reasons: string[] = [];
+  if (typeof outcome.summary !== 'string' || outcome.summary.trim().length === 0) {
+    reasons.push('structured outcome summary is required');
+  }
+  if (!Array.isArray(outcome.missing_evidence)) {
+    reasons.push('structured outcome missing_evidence must be an array');
+    return reasons;
+  }
   if (outcome.outcome === 'insufficient-evidence') {
     if (outcome.evidence_complete)
       reasons.push('insufficient-evidence must not be evidence-complete');
@@ -42,6 +49,16 @@ function verifyOutcomeShape(outcome: StructuredOutcome): string[] {
 }
 
 type EvidenceCall = Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error' | 'datasourceLuid'>;
+
+type QueryEvidenceCall = EvidenceCall &
+  Pick<
+    StdioCallSummary,
+    | 'hasAggregateEvidence'
+    | 'hasWorkbookLevelEvidence'
+    | 'fixedHypothesisScope'
+    | 'hasFixtureRankingContract'
+    | 'topWorkbook'
+  >;
 
 function isApprovedSuccessfulQuery(call: EvidenceCall): boolean {
   return (
@@ -78,12 +95,19 @@ export function verifyEmptyRecovery(
 }
 
 export function verifyIncompleteExploration(
-  calls: readonly EvidenceCall[],
+  calls: readonly QueryEvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
   const queryCalls = calls.filter(isApprovedSuccessfulQuery);
-  if (queryCalls.length < 2) reasons.push('no follow-up query was observed');
+  const initialIndex = queryCalls.findIndex((call) => call.hasAggregateEvidence);
+  if (initialIndex < 0) reasons.push('no successful initial aggregate evidence was observed');
+  if (
+    initialIndex >= 0 &&
+    !queryCalls.slice(initialIndex + 1).some((call) => call.hasWorkbookLevelEvidence)
+  ) {
+    reasons.push('no successful workbook-level follow-up evidence was observed');
+  }
   if (outcome?.evidence_complete !== true)
     reasons.push('required follow-up evidence is incomplete');
   if (outcome?.outcome === 'insufficient-evidence')
@@ -97,7 +121,13 @@ export function verifyHypothesisOutcome(
   reportedRank1?: string,
   calls: readonly Pick<
     StdioCallSummary,
-    'mcpTool' | 'rowCount' | 'error' | 'datasourceLuid' | 'fixedHypothesisScope' | 'topWorkbook'
+    | 'mcpTool'
+    | 'rowCount'
+    | 'error'
+    | 'datasourceLuid'
+    | 'fixedHypothesisScope'
+    | 'hasFixtureRankingContract'
+    | 'topWorkbook'
   >[] = [],
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
@@ -107,14 +137,20 @@ export function verifyHypothesisOutcome(
   if (
     !calls.some(
       (call) =>
-        isApprovedSuccessfulQuery(call) && call.fixedHypothesisScope && call.topWorkbook !== null,
+        isApprovedSuccessfulQuery(call) &&
+        call.fixedHypothesisScope &&
+        call.hasFixtureRankingContract &&
+        call.topWorkbook !== null,
     )
   ) {
     reasons.push('no successful fixed-scope ranking result was observed');
   } else {
     const rankingCall = calls.find(
       (call) =>
-        isApprovedSuccessfulQuery(call) && call.fixedHypothesisScope && call.topWorkbook !== null,
+        isApprovedSuccessfulQuery(call) &&
+        call.fixedHypothesisScope &&
+        call.hasFixtureRankingContract &&
+        call.topWorkbook !== null,
     );
     if (rankingCall?.topWorkbook !== expectedRank1) {
       reasons.push('observed fixed-scope rank 1 does not match the verified fixture');
@@ -123,7 +159,8 @@ export function verifyHypothesisOutcome(
   if (outcome?.hypothesis_state !== 'revised' && outcome?.hypothesis_state !== 'rejected') {
     reasons.push('hypothesis outcome must be revised or rejected');
   }
-  if (reportedRank1 !== undefined && reportedRank1 !== expectedRank1) {
+  const observedReportedRank1 = outcome?.reported_rank_1 ?? reportedRank1;
+  if (observedReportedRank1 !== expectedRank1) {
     reasons.push('reported rank 1 does not match the verified fixture');
   }
   return { ok: reasons.length === 0, reasons };
@@ -139,6 +176,13 @@ export function verifyInsufficientEvidence(
   }
   if (outcome?.outcome !== 'insufficient-evidence') {
     reasons.push('outcome must be insufficient-evidence');
+  }
+  if (
+    !outcome?.missing_evidence.some((item) =>
+      /external|referral|social|campaign|search|attribution|event/i.test(item),
+    )
+  ) {
+    reasons.push('insufficient-evidence must identify a missing external causal evidence source');
   }
   return { ok: reasons.length === 0, reasons };
 }

@@ -21,6 +21,19 @@ const tableauPatKeychainService = 'tableau_ambient_analyst_pat_20261005';
 const tableauMcpCommand = 'npx';
 const tableauMcpArgs = ['-y', '@tableau/mcp-server@latest'];
 const inheritedRuntimeEnvironmentKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR'] as const;
+const aggregationFunctions = new Set([
+  'SUM',
+  'AVG',
+  'MEDIAN',
+  'COUNT',
+  'COUNTD',
+  'MIN',
+  'MAX',
+  'STDEV',
+  'VAR',
+  'COLLECT',
+  'AGG',
+]);
 export const approvedDatasourceName = 'Tableau Public Per Day(2025/04-)';
 
 export function buildTableauMcpChildEnvironment(
@@ -55,6 +68,9 @@ export type StdioCallSummary = {
   topWorkbook: string | null;
   topMetric: number | null;
   fixedHypothesisScope: boolean;
+  hasAggregateEvidence: boolean;
+  hasWorkbookLevelEvidence: boolean;
+  hasFixtureRankingContract: boolean;
 };
 
 function countRows(result: CallToolResult): number | null {
@@ -141,6 +157,53 @@ function hasFixedHypothesisScope(args: Record<string, unknown>): boolean {
   );
 }
 
+function queryContractEvidence(args: Record<string, unknown>): {
+  hasAggregateEvidence: boolean;
+  hasWorkbookLevelEvidence: boolean;
+  hasFixtureRankingContract: boolean;
+} {
+  const query = args.query;
+  if (typeof query !== 'object' || query === null || Array.isArray(query)) {
+    return {
+      hasAggregateEvidence: false,
+      hasWorkbookLevelEvidence: false,
+      hasFixtureRankingContract: false,
+    };
+  }
+  const fields = (query as Record<string, unknown>).fields;
+  if (!Array.isArray(fields)) {
+    return {
+      hasAggregateEvidence: false,
+      hasWorkbookLevelEvidence: false,
+      hasFixtureRankingContract: false,
+    };
+  }
+  const records = fields.filter(
+    (field): field is Record<string, unknown> =>
+      typeof field === 'object' && field !== null && !Array.isArray(field),
+  );
+  const hasWorkbookLevelEvidence = records.some((field) => field.fieldCaption === 'Workbook Title');
+  const hasDailyViewCountSum = records.some(
+    (field) => field.fieldCaption === 'Daily View Count' && field.function === 'SUM',
+  );
+  const hasDescendingMetricSort = records.some(
+    (field) =>
+      field.fieldCaption === 'Daily View Count' &&
+      field.function === 'SUM' &&
+      field.sortDirection === 'DESC',
+  );
+  return {
+    hasAggregateEvidence: records.some(
+      (field) =>
+        typeof field.function === 'string' &&
+        aggregationFunctions.has(field.function.toUpperCase()),
+    ),
+    hasWorkbookLevelEvidence,
+    hasFixtureRankingContract:
+      hasWorkbookLevelEvidence && hasDailyViewCountSum && hasDescendingMetricSort,
+  };
+}
+
 export class TableauStdioBridge {
   private readonly client = new Client(
     { name: 'tableau-ambient-analyst-stdio-bridge', version: '0.1.0' },
@@ -189,6 +252,14 @@ export class TableauStdioBridge {
       throw new Error('MCP result exceeded the bounded row limit.');
     }
     const firstRow = firstDataRow(result);
+    const queryEvidence =
+      openAiTool === 'query_datasource'
+        ? queryContractEvidence(validation.arguments)
+        : {
+            hasAggregateEvidence: false,
+            hasWorkbookLevelEvidence: false,
+            hasFixtureRankingContract: false,
+          };
     const topWorkbook =
       typeof firstRow?.['Workbook Title'] === 'string'
         ? firstRow['Workbook Title']
@@ -212,6 +283,7 @@ export class TableauStdioBridge {
         topMetric,
         fixedHypothesisScope:
           openAiTool === 'query_datasource' && hasFixedHypothesisScope(validation.arguments),
+        ...queryEvidence,
       },
     };
   }

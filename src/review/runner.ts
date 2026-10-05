@@ -87,6 +87,8 @@ and Bedrock live comparisons are deferred by Human Decision. The evaluated
 implementation path is stdio plus the application-managed bridge. Hosted
 research is retained, but the executable broad-scope Hosted OAuth harness was
 removed from the merge target. Production transport remains undecided.
+Historical inconclusive and setup runs are retained as investigation history
+and are superseded by the Canonical Final Result.
 
 This is scope context only; independently assess whether the implementation,
 documentation, acceptance-criteria disposition, and safety boundaries support
