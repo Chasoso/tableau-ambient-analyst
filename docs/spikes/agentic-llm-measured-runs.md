@@ -1652,3 +1652,186 @@ prompt names only the fixed window and contract (not the expected rank 1), and
 the direct setup checker validates the empty-result fixture plus this ranking
 fixture before any measured run. The second Phase C batch remains unexecuted
 until a human confirms this fixture.
+
+## Second Phase C / corrected evaluation batch
+
+The human-approved corrected batch used the local PAT-authenticated stdio path
+only. The Hosted Remote MCP path was not retried. Before the batch, the two
+setup checks passed:
+
+```text
+tool-call guard: 6
+EMPTY_CASE_SETUP: VALID
+HYPOTHESIS_FIXTURE: VALID
+```
+
+The guard was increased from 4 to 6 because the first Phase C run consumed the
+initial metadata/discovery calls before it could complete a meaningful
+follow-up exploration. The guard is a bounded runaway-protection limit, not an
+application workflow and does not force a conclusion.
+
+Each case ran once with `gpt-5.6-luna`, `max_output_tokens=1024`, strict
+structured output, and the existing non-orchestrating application bridge.
+Transport, completion, tool, token, latency, and cost telemetry were
+captured. The four responses completed and produced structured outcomes; no
+case was retried.
+
+| Case | Tool calls | Useful | Redundant/error | Guard reached | Structured outcome | Result | Cost (USD) |
+| --- | ---: | ---: | ---: | --- | --- | --- | ---: |
+| `incomplete-first-result` | 6 | 3 | 3 | yes/at boundary | `insufficient-evidence` | FAIL | 0.01179320 |
+| `empty-result-recovery` | 4 | 3 | 1 | no | `supported` | PASS | 0.00612764 |
+| `hypothesis-disproved` | 6 | 3 | 3 | yes/at boundary | `rejected` | PASS | 0.01361012 |
+| `insufficient-evidence` | 5 | 3 | 1 | no | `insufficient-evidence` | PASS | 0.01108614 |
+
+The batch used 25 OpenAI responses calls and 21 Tableau MCP tool calls. The
+recorded batch estimate is **$0.04261710**. The historical total for Issue
+#17 is not reconstructed beyond the costs recorded in the spike evidence;
+this amount is therefore a known addition, not an invented historical total.
+
+### `incomplete-first-result`
+
+The model obtained a monthly aggregate, then selected a workbook-level
+follow-up that was relevant to the missing contribution question. It did not
+stop immediately or fabricate a workbook answer. However, it issued further
+queries after the first breakdown (including an MCP error and repeated bounded
+queries), reached the six-call guard boundary, and returned
+`insufficient-evidence` because the capped workbook result did not reconcile
+the trend. The follow-up-selection behavior was observable, but the case did
+not meet the required supported-conclusion/evidence-completion contract.
+This is agentic negative evidence, not a transport failure.
+
+### `empty-result-recovery`
+
+The deterministic fixture is valid: the future-date query is accepted and
+returns zero rows. The model's first generated filter attempt produced an MCP
+argument error, then it corrected the query, observed a valid empty result,
+removed the date constraint, and obtained usable evidence. It completed with
+`outcome=supported` and stopped with `sufficient-evidence`. This is a PASS
+with a tool-schema/efficiency caveat; the application did not choose or apply
+the recovery.
+
+### `hypothesis-disproved`
+
+The fixed window and ranking contract were used without revealing the fixture
+answer in the prompt. After three failed ranking-filter attempts, the model
+issued a successful ranking query and reported:
+
+```text
+rank 1: #MoM 2024 Week 34 | SNS Popularity in the U.S. (17,716)
+hypothesized workbook: rank 12 (1,712)
+hypothesis_state: rejected
+```
+
+The rank-1 interpretation matched the verified fixture, so this case is a
+PASS. The repeated failed attempts are a material efficiency and schema-use
+caveat. The first Phase C result is not comparable as a model correctness
+result: it is retained as `INVALIDATED_BY_GROUND_TRUTH_DRIFT`.
+
+### `insufficient-evidence`
+
+The model inspected available Tableau metrics, identified that referrals,
+promotion, campaign attribution, audience, and other external causal evidence
+were absent, and returned `outcome=insufficient-evidence` without inventing a
+cause. It completed before the guard and is a PASS. One malformed/extra query
+was observed, but the model stopped at the correct evidence boundary.
+
+### Batch comparison
+
+| Case | First Phase C | Second Phase C | Interpretation |
+| --- | --- | --- | --- |
+| `incomplete-first-result` | INCONCLUSIVE at guard 4 | FAIL; relevant follow-up but guard-boundary looping and incomplete evidence | Guard 6 enabled more exploration, but not a supported conclusion |
+| `empty-result-recovery` | SETUP_FAILURE / INCONCLUSIVE | PASS with one malformed first attempt, then valid empty recovery | Valid fixture made the behavior measurable |
+| `hypothesis-disproved` | Invalidated by ground-truth drift | PASS against fixed fixture; inefficient ranking setup | Fixed historical window made correctness testable |
+| `insufficient-evidence` | INCONCLUSIVE at guard 4 | PASS; missing external evidence identified and stop reached | Guard 6 allowed completion |
+
+The corrected batch therefore provides meaningful evidence but does not show
+uniform success. The resulting classification is:
+
+```text
+AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED
+STDIO_APP_MANAGED_PATH = SUPPORTED_WITH_CAVEATS
+```
+
+Dimension-level assessment:
+
+| Dimension | Assessment | Evidence |
+| --- | --- | --- |
+| Follow-up exploration | PARTIAL | Relevant follow-up selected, but repeated calls prevented a supported final conclusion |
+| Empty-result recovery | SUPPORTED | Valid zero-row result was recognized and safely followed by a broader query |
+| Hypothesis revision | SUPPORTED | Initial hypothesis rejected and fixed-fixture rank 1 reported correctly |
+| Evidence interpretation | PARTIAL | Correct ranking and missing-cause boundaries were demonstrated, but query errors/redundancy remained |
+| Insufficient-evidence handling | SUPPORTED | External causal evidence was explicitly identified as missing |
+| Stop decision | SUPPORTED_WITH_CAVEATS | Two cases stopped appropriately; one consumed the guard after repeated exploration |
+| Tool efficiency | PARTIAL | Useful exploration occurred, but 5 error/redundant calls were observed across cases |
+| Final correctness | PARTIAL | Three cases met their outcome contracts; incomplete-first-result did not |
+
+The evidence supports the architecture principle with caveats:
+
+```text
+探索のオーケストレーションはLLMへ寄せ、
+完了条件と最小限のガードレールだけをアプリ側に残す。
+
+ARCHITECTURE_PRINCIPLE = SUPPORTED_WITH_CAVEATS
+```
+
+The LLM should own next-tool selection, follow-up exploration, empty-result
+interpretation, hypothesis testing/revision, evidence interpretation, and
+the decision to stop. The application should own credential isolation, the
+three-tool allowlist, datasource and read-only boundaries, result/row limits,
+argument validation, the six-call runaway guard, completion/cost telemetry,
+and a simple evidence verifier. The verifier may check that required evidence
+arrived, that it is Tableau-backed, and that a reported ranking is internally
+consistent; it must not choose the next query or implement case-specific
+recovery.
+
+The `Required Evidence / Optional Evidence / Open Questions` analysis
+contract should be passed to the LLM as the analytical context. The
+application verifier should only check evidence presence, provenance,
+contract completeness, and obvious consistency. It should not become a
+workflow engine.
+
+### Issue #17 acceptance review
+
+| Criterion | Result | Evidence |
+| --- | --- | --- |
+| Selected provider exercised against evaluation cases | PASS | Four corrected stdio cases completed once each |
+| Continuation after incomplete evidence | PARTIAL | Relevant follow-up occurred; one case ended incomplete at guard boundary |
+| Empty-result recovery | PASS | Valid zero-row fixture and model-selected recovery query |
+| Hypothesis disproof | PASS | Fixed-window rank and rejected hypothesis matched fixture truth |
+| Insufficient-evidence behavior | PASS | Missing external causal evidence identified without fabrication |
+| Tool-call evidence recorded | PASS | Per-call tool mapping, intent, rows, errors, and latency recorded |
+| Evidence completion recorded | PASS | Structured outcomes and evidence-complete fields captured |
+| Latency recorded | PASS | Response and MCP timing telemetry captured |
+| Tokens/cost recorded | PASS | Per-case usage and cost estimate captured |
+| Failure modes recorded | PASS | Transport, MCP argument, guard, and agentic outcomes separated |
+| Provider/application responsibility assessed | PASS | Thin bridge and LLM/application boundary documented |
+| External-service safety maintained | PASS | PAT isolation, read-only tools, datasource boundary, and no writes |
+| Proposed architecture recommendation documented | PASS | Local stdio path and Hosted caveats consolidated |
+
+Issue #17 is assessed as **READY** as a technical spike: the acceptance
+criteria are materially satisfied and the remaining Viewer authentication and
+historical Hosted 424 questions are legitimate follow-ups. READY does not mean
+the agentic hypothesis was fully proven; the measured conclusion remains
+`PARTIALLY_SUPPORTED`.
+
+### Final architecture and follow-ups
+
+Hosted Remote MCP remains:
+
+```text
+HOSTED_REMOTE_PATH = VIABLE_WITH_CAVEATS
+```
+
+It was technically demonstrated, but the historical intermittent HTTP 424
+tool-list failures remain unexplained and Viewer least-privilege authentication
+remains unresolved. The local stdio/application-managed path is the more
+observable evaluation path for this spike, while production transport and
+authentication selection remains a follow-up decision.
+
+The architecture recommendation remains **Proposed**, not Accepted:
+keep exploration orchestration in the LLM, enforce only narrow application
+guardrails and evidence verification, and retain transport/authentication as
+replaceable boundaries. Follow-up candidates are production least-privilege
+authentication, Hosted 424 investigation if it recurs, production transport
+selection, and refinement of the simple evidence verifier. No follow-up Issue
+was created by this spike.
