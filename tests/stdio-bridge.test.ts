@@ -103,6 +103,38 @@ describe('application-managed stdio bridge policy', () => {
     ).toMatchObject({ ok: true });
   });
 
+  it('rejects malformed filters and parameters without rewriting valid queries', () => {
+    const base = {
+      datasourceLuid: stdioDatasourceLuid,
+      query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+      limit: 100,
+    };
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { ...base.query, filters: ['bad'] },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Query filters must be an array of objects.',
+    });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { ...base.query, filters: [{ field: { fieldCaption: 'Metric Date Time (JST)' } }] },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { ...base.query, parameters: [{ parameterCaption: 'x' }] },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Query parameters must follow the Tableau MCP parameter shape.',
+    });
+  });
+
   it('summarizes query argument shape without exposing field values', () => {
     expect(
       summarizeStdioToolArguments('query_datasource', {

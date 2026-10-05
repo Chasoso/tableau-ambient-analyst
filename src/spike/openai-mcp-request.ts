@@ -6,6 +6,11 @@ export const tableauMcpAllowedTools = [
   'query-datasource',
 ] as const;
 
+// Experimental Hosted feasibility configuration only. Issue #17's selected
+// evaluation path is the local PAT-authenticated stdio bridge; this remote
+// configuration is retained for historical reproducibility and is not a
+// production approval or authentication recommendation.
+
 export const structuredOutcomeTextFormat = {
   type: 'json_schema',
   name: 'tableau_evaluation_outcome',

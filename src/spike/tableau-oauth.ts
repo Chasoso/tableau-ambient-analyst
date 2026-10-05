@@ -27,10 +27,12 @@ const tableauPodUrl = 'https://10ax.online.tableau.com';
 const protectedResourceMetadataUrl = `${tableauMcpUrl}/.well-known/oauth-protected-resource`;
 const datasourceLuid = '14f3ac6d-1171-4065-baac-c63bdce1470f';
 const allowedTools = tableauMcpAllowedTools;
-// Temporary Issue #17 exception: Hosted Tableau MCP currently advertises this
-// full catalog scope set during initialization. The effective safety boundary
-// remains the dedicated Viewer identity, approved datasource, allowed_tools,
-// and the read-only experiment policy. Do not broaden this list further.
+// EXPERIMENTAL ONLY: this Hosted OAuth diagnostic preserves the broad scope
+// set observed during the feasibility spike. It is not a production runtime,
+// is not the selected stdio evaluation path, and is not a least-privilege or
+// write-capable authorization recommendation. The selected model-visible
+// boundary remains the approved three read-only tools. Do not broaden this
+// list or reuse this diagnostic for production authentication.
 const requestedScopes =
   'tableau:mcp:datasource:read tableau:mcp:workbook:read tableau:mcp:workbook:create ' +
   'tableau:mcp:content:read tableau:mcp:view:read tableau:mcp:view:download ' +

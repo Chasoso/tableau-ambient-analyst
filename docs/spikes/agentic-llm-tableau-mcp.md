@@ -2,13 +2,13 @@
 
 ## Status
 
-**Inconclusive for agentic behavior — authenticated integration passed; the
-first measured batch lacked usable final-answer instrumentation.**
+**Technical spike complete — agentic feasibility is partially supported.**
 
-This document records the experiment boundary and the current stopping point
-for Issue #17. It does not select a production provider, create an ADR, add a
-provider abstraction, or claim successful agentic behavior. Detailed pilot and
-measured-run results are recorded in
+This document records the experiment boundary and final stopping point for
+Issue #17. It does not select a production provider, create an ADR, or add a
+provider abstraction. The measured conclusion is
+`AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`; it is not a claim that LLM-only
+orchestration is sufficient. Detailed pilot and measured-run results are recorded in
 [`agentic-llm-measured-runs.md`](agentic-llm-measured-runs.md).
 
 ## Question
@@ -53,9 +53,11 @@ The current official OpenAI configuration uses a Responses request `tools`
 entry with `type: "mcp"`, `server_label`, and `server_url`. If the remote
 server requires OAuth, the access token is supplied as `authorization` on the
 request and must not be written to repository artifacts. `allowed_tools` can
-restrict the tools imported from the server. The default approval behavior
-requires approval before data is shared; no approval relaxation is authorized
-for this spike yet.
+restrict the tools imported from the server. For the bounded Hosted feasibility
+experiment, `require_approval: never` was used only with the three approved
+read-only model-visible tools. This is an experimental setting, not a
+production approval recommendation. Hosted OAuth scope breadth and Viewer
+least-privilege authentication remain unresolved.
 
 Tool discovery and calls are represented in the Responses result as
 `mcp_list_tools` and `mcp_call` items. Call output or errors are returned as

@@ -114,6 +114,41 @@ export function validateStdioToolArguments(
       return { ok: false, error: 'Query must declare at least one field.' };
     }
 
+    if (query.filters !== undefined) {
+      if (!Array.isArray(query.filters) || query.filters.some((filter) => !isRecord(filter))) {
+        return { ok: false, error: 'Query filters must be an array of objects.' };
+      }
+      for (const filter of query.filters) {
+        if (filter.field !== undefined) {
+          if (!isRecord(filter.field) || typeof filter.field.fieldCaption !== 'string') {
+            return {
+              ok: false,
+              error: 'Query filter field must follow the Tableau MCP field shape.',
+            };
+          }
+        }
+        if (filter.filterType !== undefined && typeof filter.filterType !== 'string') {
+          return { ok: false, error: 'Query filterType must be a string.' };
+        }
+      }
+    }
+    if (query.parameters !== undefined) {
+      if (
+        !Array.isArray(query.parameters) ||
+        query.parameters.some(
+          (parameter) =>
+            !isRecord(parameter) ||
+            typeof parameter.parameterCaption !== 'string' ||
+            !Object.hasOwn(parameter, 'value'),
+        )
+      ) {
+        return {
+          ok: false,
+          error: 'Query parameters must follow the Tableau MCP parameter shape.',
+        };
+      }
+    }
+
     const sortPriorities = new Set<number>();
     for (const field of fields) {
       if (!isRecord(field) || typeof field.fieldCaption !== 'string') {

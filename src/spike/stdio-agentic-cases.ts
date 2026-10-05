@@ -14,6 +14,12 @@ import {
 } from './stdio-bridge-policy.js';
 import { readKeychainSecret } from './keychain-secrets.js';
 import { TableauStdioBridge, type StdioCallSummary } from './tableau-stdio-bridge.js';
+import {
+  verifyEmptyRecovery,
+  verifyHypothesisOutcome,
+  verifyInsufficientEvidence,
+  verifyStructuredOutcome,
+} from './evidence-verifier.js';
 
 const openAiKeychainService = 'ambient_openai_chasoso_20261004';
 const model = 'gpt-5.6-luna';
@@ -136,22 +142,19 @@ function classifyCase(
   outcome: StructuredOutcome | null,
 ): CaseRunResult['classification'] {
   const queryCalls = calls.filter((call) => call.mcpTool === 'query-datasource');
-  if (outcome === null) return 'COMPLETION_FAILURE';
+  if (outcome === null || !verifyStructuredOutcome(outcome).ok) return 'COMPLETION_FAILURE';
   if (setup.id === 'incomplete-first-result') {
     return queryCalls.length >= 2 && outcome.evidence_complete ? 'PASS' : 'FAIL';
   }
   if (setup.id === 'empty-result-recovery') {
-    const emptyIndex = queryCalls.findIndex((call) => call.rowCount === 0);
-    return emptyIndex >= 0 && queryCalls.length > emptyIndex + 1 ? 'PASS' : 'FAIL';
+    return verifyEmptyRecovery(calls, outcome).ok ? 'PASS' : 'FAIL';
   }
   if (setup.id === 'hypothesis-disproved') {
-    return outcome.hypothesis_state === 'revised' || outcome.hypothesis_state === 'rejected'
+    return verifyHypothesisOutcome(outcome, '#MoM 2024 Week 34 | SNS Popularity in the U.S.').ok
       ? 'PASS'
       : 'FAIL';
   }
-  return outcome.outcome === 'insufficient-evidence' && outcome.missing_evidence.length > 0
-    ? 'PASS'
-    : 'FAIL';
+  return verifyInsufficientEvidence(outcome).ok ? 'PASS' : 'FAIL';
 }
 
 async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRunResult> {

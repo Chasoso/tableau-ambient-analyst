@@ -100,6 +100,9 @@ export class TableauStdioBridge {
     const bytes = resultBytes(result);
     if (bytes > 200_000) throw new Error('MCP result exceeded the bounded result size.');
     const rowCount = countRows(result);
+    if (rowCount !== null && rowCount > 100) {
+      throw new Error('MCP result exceeded the bounded row limit.');
+    }
     return {
       result,
       summary: {

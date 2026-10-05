@@ -1808,11 +1808,17 @@ workflow engine.
 | External-service safety maintained | PASS | PAT isolation, read-only tools, datasource boundary, and no writes |
 | Proposed architecture recommendation documented | PASS | Local stdio path and Hosted caveats consolidated |
 
-Issue #17 is assessed as **READY** as a technical spike: the acceptance
-criteria are materially satisfied and the remaining Viewer authentication and
-historical Hosted 424 questions are legitimate follow-ups. READY does not mean
-the agentic hypothesis was fully proven; the measured conclusion remains
-`PARTIALLY_SUPPORTED`.
+The experimental findings are complete, but merge readiness is not implied by
+the findings alone:
+
+```text
+SPIKE_FINDINGS = COMPLETE
+MERGE_READINESS = PENDING_REVIEW
+```
+
+The measured conclusion remains `AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`.
+Independent Review and explicit human confirmation are required before
+`MERGE_READINESS` can become `READY`.
 
 ### Final architecture and follow-ups
 
@@ -1835,3 +1841,104 @@ replaceable boundaries. Follow-up candidates are production least-privilege
 authentication, Hosted 424 investigation if it recurs, production transport
 selection, and refinement of the simple evidence verifier. No follow-up Issue
 was created by this spike.
+
+## Issue #17 close-out hardening
+
+No additional live evaluation was performed during close-out. The final
+experimental evidence is fixed as follows:
+
+| Case | Final result | Interpretation |
+| --- | --- | --- |
+| `incomplete-first-result` | FAIL | Relevant follow-up was attempted, but redundant queries reached the six-call guard and a supported conclusion was not completed |
+| `empty-result-recovery` | PASS | The valid zero-row fixture was recognized and a model-selected recovery query obtained evidence |
+| `hypothesis-disproved` | PASS | The fixed historical fixture was ranked correctly and the initial hypothesis was rejected |
+| `insufficient-evidence` | PASS | Missing external causal evidence was identified without fabrication |
+
+The close-out state is:
+
+```text
+SPIKE_FINDINGS = COMPLETE
+AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED
+ARCHITECTURE_PRINCIPLE = SUPPORTED_WITH_CAVEATS
+MERGE_READINESS = PENDING_REVIEW
+```
+
+### Independent Review disposition
+
+The previous Independent Review returned `CHANGES_REQUIRED` with escalation.
+The findings are classified without reopening live evaluation:
+
+| Finding | Disposition | Rationale / action |
+| --- | --- | --- |
+| Hosted OAuth scope is broader than the read-only boundary | Follow-up | Hosted is experimental-only and not the selected evaluation path. Production least-privilege OAuth is separate follow-up work. |
+| Hosted `require_approval=never` approval mismatch | Follow-up | It was bounded to the three approved read-only tools for feasibility only; it is not a production recommendation. |
+| Hosted timeout/retry/result-size enforcement | Follow-up | Hosted is not selected for final evaluation; no Hosted retry or productionization is added. |
+| Selected stdio datasource/query runtime boundaries | Must fix | The stdio bridge fails closed on the fixed datasource, approved tools, actual query shape, filters/parameters, row limit, result size, and aggregation-first policy. |
+| Structured outcome could be treated as PASS without sufficient validation | Must fix | A deterministic evidence verifier rejects missing or internally inconsistent outcomes and checks empty recovery, hypothesis state, and insufficient-evidence contracts. |
+| Documentation marked READY before human confirmation | Must fix | Documentation now separates `SPIKE_FINDINGS=COMPLETE` from `MERGE_READINESS=PENDING_REVIEW`. |
+
+Hosted-specific code remains an explicit diagnostic spike path only. It is not
+used by the normal stdio runner and is not a production runtime. Its historical
+scope, approval, Viewer authentication, and intermittent 424 caveats are
+preserved for reproducibility and listed as follow-up work. The selected
+execution path is local stdio plus the thin application-managed bridge.
+
+### Evidence verifier boundary
+
+The verifier checks structured outcome enums, required fields, and internal
+consistency; successful zero-row evidence followed by non-empty recovery;
+hypothesis revision/rejection and, when supplied by the harness, agreement
+with the fixed fixture rank; explicit missing evidence; and the fixed
+datasource through the stdio bridge.
+
+It does not select the next tool, rewrite a query, retry an empty result,
+revise a hypothesis, or decide exploration strategy. The
+`incomplete-first-result` FAIL remains negative evidence and is not transformed
+into a PASS by the verifier.
+
+### Final transport comparison
+
+| Dimension | Hosted + Remote MCP | stdio + app-managed |
+| --- | --- | --- |
+| Connectivity | Demonstrated | Demonstrated |
+| Reliability | Intermittent 424 caveat | Stable enough for evaluation |
+| Authentication | OAuth complexity; Viewer unresolved | Dedicated PAT worked for spike; production least privilege unresolved |
+| Observability | Lower; connector boundary obscures failures | Higher; bridge sees tool arguments, results, latency, and errors |
+| Application complexity | Lower | Higher due to local process and tool loop |
+| Agentic evaluation suitability | Secondary/experimental | Preferred path for this spike |
+| Production readiness | Unresolved | Unresolved |
+| Recommendation | Experimental only | Proposed evaluation architecture, not Accepted production architecture |
+
+### Proposed architecture
+
+```text
+Conversation / Trigger
+        ↓
+Lightweight Analysis Contract
+        ↓
+Agentic LLM
+        ↓
+Thin application-managed tool bridge
+        ↓
+Tableau MCP
+        ↓
+Structured Evidence
+        ↓
+Simple Evidence Verifier
+        ↓
+Intervention Decision
+```
+
+The Analysis Contract retains `Required Evidence`, `Optional Evidence`, and
+`Open Questions`. The LLM uses these as analytical context. The application
+verifies completion, provenance, safety, bounds, and obvious consistency
+without becoming a workflow engine.
+
+Follow-up candidates, not part of this close-out implementation, are:
+
+1. Hosted Tableau MCP least-privilege authentication;
+2. Hosted intermittent 424/vendor escalation if it recurs;
+3. production transport selection (Hosted, self-hosted HTTP, or stdio);
+4. production PAT/OAuth credential model;
+5. evidence-verifier refinement; and
+6. additional provider comparison if still required.
