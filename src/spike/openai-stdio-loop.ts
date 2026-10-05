@@ -1,5 +1,6 @@
 import { readKeychainSecret } from './keychain-secrets.js';
 import { TableauStdioBridge, type StdioCallSummary } from './tableau-stdio-bridge.js';
+import { stdioOperationTimeoutMs } from './operation-timeout.js';
 import {
   openAiStdioTools,
   stdioMaxToolCalls,
@@ -107,6 +108,7 @@ async function createResponse(
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(stdioOperationTimeoutMs),
     body: JSON.stringify({
       model,
       input,

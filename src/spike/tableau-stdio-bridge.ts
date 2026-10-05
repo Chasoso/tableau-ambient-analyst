@@ -12,6 +12,7 @@ import {
   validateStdioToolArguments,
 } from './stdio-bridge-policy.js';
 import { readKeychainSecret } from './keychain-secrets.js';
+import { withOperationTimeout } from './operation-timeout.js';
 
 const tableauServer = 'https://10ax.online.tableau.com';
 const tableauSiteName = 'chasoso_202603';
@@ -77,7 +78,7 @@ export class TableauStdioBridge {
       },
       stderr: 'pipe',
     });
-    await this.client.connect(this.transport);
+    await withOperationTimeout(this.client.connect(this.transport), 'MCP initialize');
   }
 
   async listTools(): Promise<ListToolsResult> {
@@ -93,9 +94,12 @@ export class TableauStdioBridge {
     const validation = validateStdioToolArguments(openAiTool, args);
     if (!validation.ok) throw new Error(validation.error);
     const startedAt = Date.now();
-    const result = (await this.client.callTool(
-      { name: mcpTool, arguments: validation.arguments },
-      CallToolResultSchema,
+    const result = (await withOperationTimeout(
+      this.client.callTool(
+        { name: mcpTool, arguments: validation.arguments },
+        CallToolResultSchema,
+      ),
+      `MCP tool ${mcpTool}`,
     )) as CallToolResult;
     const bytes = resultBytes(result);
     if (bytes > 200_000) throw new Error('MCP result exceeded the bounded result size.');

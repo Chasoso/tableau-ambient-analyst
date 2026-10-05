@@ -6,6 +6,7 @@ import {
   verifyInsufficientEvidence,
   verifyStructuredOutcome,
 } from '../src/spike/evidence-verifier.js';
+import { stdioOperationTimeoutMs } from '../src/spike/operation-timeout.js';
 
 const supported = {
   outcome: 'supported' as const,
@@ -17,6 +18,9 @@ const supported = {
 };
 
 describe('evidence verifier', () => {
+  it('keeps the live operation timeout bounded', () => {
+    expect(stdioOperationTimeoutMs).toBe(10 * 60 * 1000);
+  });
   it('rejects internally inconsistent structured outcomes', () => {
     expect(verifyStructuredOutcome({ ...supported, evidence_complete: false })).toMatchObject({
       ok: false,

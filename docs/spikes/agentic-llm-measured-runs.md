@@ -1794,7 +1794,7 @@ workflow engine.
 
 | Criterion | Result | Evidence |
 | --- | --- | --- |
-| Selected provider exercised against evaluation cases | PASS | Four corrected stdio cases completed once each |
+| Selected provider exercised against evaluation cases | PARTIAL | OpenAI was exercised through the client-managed stdio function/tool loop; provider-managed Hosted Remote MCP orchestration was not established as a reliable evaluation path |
 | Continuation after incomplete evidence | PARTIAL | Relevant follow-up occurred; one case ended incomplete at guard boundary |
 | Empty-result recovery | PASS | Valid zero-row fixture and model-selected recovery query |
 | Hypothesis disproof | PASS | Fixed-window rank and rejected hypothesis matched fixture truth |
@@ -1807,8 +1807,10 @@ workflow engine.
 | Provider/application responsibility assessed | PASS | Thin bridge and LLM/application boundary documented |
 | External-service safety maintained | PASS | PAT isolation, read-only tools, datasource boundary, and no writes |
 | Proposed architecture recommendation documented | PASS | Local stdio path and Hosted caveats consolidated |
+| Anthropic/Bedrock provider comparison | NOT_EXECUTED | Official capability pages were reviewed, but no live alternative-provider configuration was run; this remains outside the selected bounded batch |
 
-The experimental findings are complete, but merge readiness is not implied by
+The experimental findings are complete for the selected OpenAI plus local
+stdio scope, but merge readiness is not implied by
 the findings alone:
 
 ```text
@@ -1817,6 +1819,10 @@ MERGE_READINESS = PENDING_REVIEW
 ```
 
 The measured conclusion remains `AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`.
+The original provider-managed MCP hypothesis is only partially evaluated:
+the successful Phase C path is a client-managed application bridge, while the
+Hosted provider-managed path remains experimental and caveated. The provider
+comparison criterion is explicitly not executed for Anthropic or Bedrock.
 Independent Review and explicit human confirmation are required before
 `MERGE_READINESS` can become `READY`.
 
