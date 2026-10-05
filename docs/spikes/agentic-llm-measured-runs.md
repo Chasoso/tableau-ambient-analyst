@@ -1807,7 +1807,7 @@ workflow engine.
 | Provider/application responsibility assessed | PASS | Thin bridge and LLM/application boundary documented |
 | External-service safety maintained | PASS | PAT isolation, read-only tools, datasource boundary, and no writes |
 | Proposed architecture recommendation documented | PASS | Local stdio path and Hosted caveats consolidated |
-| Anthropic/Bedrock provider comparison | NOT_EXECUTED | Official capability pages were reviewed, but no live alternative-provider configuration was run; this remains outside the selected bounded batch |
+| Cross-provider comparison (Anthropic/Bedrock) | DEFERRED_BY_HUMAN_DECISION | Human Decision changed Issue #17 into an OpenAI architecture-feasibility spike; no Anthropic or Bedrock live configuration was executed |
 
 The experimental findings are complete for the selected OpenAI plus local
 stdio scope, but merge readiness is not implied by
@@ -1815,6 +1815,7 @@ the findings alone:
 
 ```text
 SPIKE_FINDINGS = COMPLETE
+SCOPE_SATISFACTION = ACCEPTABLE_WITH_DOCUMENTED_DEFERRED_WORK
 MERGE_READINESS = PENDING_REVIEW
 ```
 
@@ -1822,7 +1823,8 @@ The measured conclusion remains `AGENTIC_FEASIBILITY = PARTIALLY_SUPPORTED`.
 The original provider-managed MCP hypothesis is only partially evaluated:
 the successful Phase C path is a client-managed application bridge, while the
 Hosted provider-managed path remains experimental and caveated. The provider
-comparison criterion is explicitly not executed for Anthropic or Bedrock.
+comparison criterion is explicitly deferred by Human Decision for Anthropic and
+Bedrock.
 Independent Review and explicit human confirmation are required before
 `MERGE_READINESS` can become `READY`.
 
@@ -1948,3 +1950,25 @@ Follow-up candidates, not part of this close-out implementation, are:
 4. production PAT/OAuth credential model;
 5. evidence-verifier refinement; and
 6. additional provider comparison if still required.
+
+### Independent Review execution status
+
+The first close-out review invocation returned a reviewer process exit status
+of 1. This was not classified as a new code finding. The review runner has
+been hardened to distinguish reviewer output from execution failure:
+
+```text
+PASS / CHANGES_REQUIRED = reviewer completed and returned a gate result
+EXECUTION_FAILED = reviewer process, output, or invocation failed
+```
+
+The gate remains fail-closed: an execution failure maps to
+`INDEPENDENT_REVIEW_EXECUTION=FAILED`,
+`INDEPENDENT_REVIEW_RESULT=NOT_COMPLETED`, and no PR may be created. The
+reviewer diagnostic is captured with secret redaction for human diagnosis.
+
+The next review context must treat this as an architecture-feasibility spike:
+OpenAI was executed live, Anthropic and Bedrock were intentionally deferred,
+Hosted Remote MCP is experimental and not production-ready, and the selected
+evaluation path was local stdio plus the application-managed bridge. This is
+scope context, not an instruction to return PASS.

@@ -154,8 +154,11 @@ function invokeCodexReviewer(
     }
 
     if (processResult.status !== 0) {
+      const diagnostic = processResult.stderr
+        ? ` stderr=${sanitizeReviewerDiagnostic(processResult.stderr)}`
+        : '';
       return reviewerInvocationFailure(
-        `Codex exited with status ${processResult.status ?? 'unknown'}.`,
+        `Codex exited with status ${processResult.status ?? 'unknown'}.${diagnostic}`,
       );
     }
 
@@ -168,6 +171,14 @@ function invokeCodexReviewer(
       error instanceof Error ? error.message : 'Unknown reviewer error.',
     );
   }
+}
+
+function sanitizeReviewerDiagnostic(value: string): string {
+  return value
+    .replace(/(authorization|api[-_]?key|token|secret)\s*[:=]\s*[^\s]+/gi, '$1=<redacted>')
+    .replace(/Bearer\s+[^\s]+/gi, 'Bearer <redacted>')
+    .trim()
+    .slice(-2000);
 }
 
 export function extractFinalReviewerMessage(output: string): string | undefined {

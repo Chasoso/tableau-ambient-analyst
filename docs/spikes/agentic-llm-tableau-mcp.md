@@ -11,6 +11,12 @@ provider abstraction. The measured conclusion is
 orchestration is sufficient. Detailed pilot and measured-run results are recorded in
 [`agentic-llm-measured-runs.md`](agentic-llm-measured-runs.md).
 
+Final close-out scope is an OpenAI architecture-feasibility spike. Anthropic
+and Bedrock live comparison was explicitly deferred by Human Decision and is
+follow-up work, not a completion blocker. `SPIKE_FINDINGS=COMPLETE` and
+`SCOPE_SATISFACTION=ACCEPTABLE_WITH_DOCUMENTED_DEFERRED_WORK`; merge readiness
+remains `PENDING_REVIEW` until Independent Review completes successfully.
+
 ## Question
 
 After receiving one initial exploration policy and completion condition, can a

@@ -64,7 +64,22 @@ describe('independent review gate contract', () => {
 
     expect(canOpenPullRequest(true, escalation)).toBe(false);
     expect(canOpenPullRequest(true, failedInvocation)).toBe(false);
+    expect(failedInvocation.executionStatus).toBe('FAILED');
     expect(canOpenPullRequest(true, malformed)).toBe(false);
+    expect(malformed.executionStatus).toBe('FAILED');
+  });
+
+  it('marks valid reviewer output as completed execution', () => {
+    const result = parseReviewResult(
+      JSON.stringify({
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: ['Finding'],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+
+    expect(result.executionStatus).toBe('COMPLETED');
   });
 
   it('rejects an inconsistent PASS result', () => {
