@@ -8,6 +8,7 @@ import {
   stdioDatasourceLuid,
   validateStdioToolArguments,
 } from '../src/spike/stdio-bridge-policy.js';
+import { buildTableauMcpChildEnvironment } from '../src/spike/tableau-stdio-bridge.js';
 import {
   buildFunctionCallOutput,
   canContinueWithToolCalls,
@@ -194,5 +195,32 @@ describe('application-managed stdio bridge policy', () => {
     const syntheticPat = 'synthetic-pat-value';
     const telemetry = JSON.stringify({ tool: 'query_datasource', resultBytes: 42 });
     expect(telemetry).not.toContain(syntheticPat);
+  });
+
+  it('passes only the explicit runtime and Tableau environment to the child', () => {
+    const childEnvironment = buildTableauMcpChildEnvironment(
+      {
+        PATH: '/bin',
+        HOME: '/tmp/home',
+        OPENAI_API_KEY: 'openai-secret',
+        AWS_SECRET_ACCESS_KEY: 'aws-secret',
+        CUSTOM_SECRET: 'custom-secret',
+      },
+      'synthetic-pat',
+    );
+
+    expect(childEnvironment).toMatchObject({
+      PATH: '/bin',
+      HOME: '/tmp/home',
+      SERVER: 'https://10ax.online.tableau.com',
+      SITE_NAME: 'chasoso_202603',
+      AUTH: 'pat',
+      PAT_NAME: 'ambient-analyst-issue17',
+      PAT_VALUE: 'synthetic-pat',
+      TRANSPORT: 'stdio',
+    });
+    expect(childEnvironment).not.toHaveProperty('OPENAI_API_KEY');
+    expect(childEnvironment).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+    expect(childEnvironment).not.toHaveProperty('CUSTOM_SECRET');
   });
 });

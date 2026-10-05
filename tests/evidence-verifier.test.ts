@@ -8,6 +8,7 @@ import {
   verifyStructuredOutcome,
 } from '../src/spike/evidence-verifier.js';
 import { stdioOperationTimeoutMs } from '../src/spike/operation-timeout.js';
+import { stdioDatasourceLuid } from '../src/spike/stdio-bridge-policy.js';
 
 const supported = {
   outcome: 'supported' as const,
@@ -17,6 +18,13 @@ const supported = {
   hypothesis_state: 'not-applicable' as const,
   stop_reason: 'sufficient-evidence' as const,
 };
+
+const queryEvidence = (rowCount: number) => ({
+  mcpTool: 'query-datasource' as const,
+  datasourceLuid: stdioDatasourceLuid,
+  rowCount,
+  error: null,
+});
 
 describe('evidence verifier', () => {
   it('keeps the live operation timeout bounded', () => {
@@ -35,22 +43,17 @@ describe('evidence verifier', () => {
         stop_reason: 'sufficient-evidence',
       }),
     ).toMatchObject({ ok: false });
+    expect(
+      verifyStructuredOutcome({
+        ...supported,
+        stop_reason: 'tool-error',
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it('verifies empty-result recovery from observed tool summaries', () => {
-    expect(
-      verifyEmptyRecovery(
-        [
-          { mcpTool: 'query-datasource', rowCount: 0, error: null },
-          { mcpTool: 'query-datasource', rowCount: 1, error: null },
-        ],
-        supported,
-      ).ok,
-    ).toBe(true);
-    expect(
-      verifyEmptyRecovery([{ mcpTool: 'query-datasource', rowCount: 0, error: null }], supported)
-        .ok,
-    ).toBe(false);
+    expect(verifyEmptyRecovery([queryEvidence(0), queryEvidence(1)], supported).ok).toBe(true);
+    expect(verifyEmptyRecovery([queryEvidence(0)], supported).ok).toBe(false);
   });
 
   it('requires hypothesis revision and can check a reported fixture rank', () => {
@@ -65,9 +68,7 @@ describe('evidence verifier', () => {
         undefined,
         [
           {
-            mcpTool: 'query-datasource',
-            rowCount: 1,
-            error: null,
+            ...queryEvidence(1),
             fixedHypothesisScope: true,
             topWorkbook: 'rank-1',
           },
@@ -85,9 +86,7 @@ describe('evidence verifier', () => {
         'other',
         [
           {
-            mcpTool: 'query-datasource',
-            rowCount: 1,
-            error: null,
+            ...queryEvidence(1),
             fixedHypothesisScope: true,
             topWorkbook: 'rank-1',
           },
@@ -105,9 +104,7 @@ describe('evidence verifier', () => {
         undefined,
         [
           {
-            mcpTool: 'query-datasource',
-            rowCount: 1,
-            error: null,
+            ...queryEvidence(1),
             fixedHypothesisScope: true,
             topWorkbook: 'other',
           },
@@ -118,7 +115,7 @@ describe('evidence verifier', () => {
 
   it('requires explicit missing evidence for insufficient-evidence', () => {
     expect(
-      verifyInsufficientEvidence([{ mcpTool: 'query-datasource', rowCount: 1, error: null }], {
+      verifyInsufficientEvidence([queryEvidence(1)], {
         outcome: 'insufficient-evidence',
         summary: 'External evidence is missing.',
         evidence_complete: false,
@@ -132,13 +129,26 @@ describe('evidence verifier', () => {
 
   it('requires observed follow-up evidence for incomplete exploration', () => {
     expect(
-      verifyIncompleteExploration(
-        [
-          { mcpTool: 'query-datasource', rowCount: 2, error: null },
-          { mcpTool: 'query-datasource', rowCount: 3, error: null },
-        ],
-        { ...supported, outcome: 'supported' },
-      ).ok,
+      verifyIncompleteExploration([queryEvidence(2), queryEvidence(3)], {
+        ...supported,
+        outcome: 'supported',
+      }).ok,
     ).toBe(true);
+  });
+
+  it('rejects evidence that does not come from the allowed datasource', () => {
+    expect(
+      verifyInsufficientEvidence(
+        [{ ...queryEvidence(1), datasourceLuid: 'outside-approved-boundary' }],
+        {
+          outcome: 'insufficient-evidence',
+          summary: 'External evidence is missing.',
+          evidence_complete: false,
+          missing_evidence: ['external-cause'],
+          hypothesis_state: 'not-applicable',
+          stop_reason: 'insufficient-evidence',
+        },
+      ).ok,
+    ).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import type { StdioCallSummary } from './tableau-stdio-bridge.js';
 import type { StructuredOutcome } from './response-telemetry.js';
+import { stdioDatasourceLuid } from './stdio-bridge-policy.js';
 
 export type EvidenceVerification = {
   ok: boolean;
@@ -26,10 +27,29 @@ function verifyOutcomeShape(outcome: StructuredOutcome): string[] {
   ) {
     reasons.push('conclusive outcomes must be evidence-complete');
   }
+  if (
+    (outcome.outcome === 'supported' ||
+      outcome.outcome === 'revised' ||
+      outcome.outcome === 'rejected') &&
+    outcome.stop_reason !== 'sufficient-evidence'
+  ) {
+    reasons.push('conclusive outcomes must use the sufficient-evidence stop reason');
+  }
   if (outcome.evidence_complete && outcome.missing_evidence.length > 0) {
     reasons.push('evidence-complete outcomes cannot list missing evidence');
   }
   return reasons;
+}
+
+type EvidenceCall = Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error' | 'datasourceLuid'>;
+
+function isApprovedSuccessfulQuery(call: EvidenceCall): boolean {
+  return (
+    call.mcpTool === 'query-datasource' &&
+    call.datasourceLuid === stdioDatasourceLuid &&
+    call.rowCount !== null &&
+    call.error === null
+  );
 }
 
 export function verifyStructuredOutcome(outcome: StructuredOutcome | null): EvidenceVerification {
@@ -39,12 +59,12 @@ export function verifyStructuredOutcome(outcome: StructuredOutcome | null): Evid
 }
 
 export function verifyEmptyRecovery(
-  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[],
+  calls: readonly EvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
-  const queryCalls = calls.filter((call) => call.mcpTool === 'query-datasource');
-  const emptyIndex = queryCalls.findIndex((call) => call.rowCount === 0 && call.error === null);
+  const queryCalls = calls.filter(isApprovedSuccessfulQuery);
+  const emptyIndex = queryCalls.findIndex((call) => call.rowCount === 0);
   if (emptyIndex < 0) reasons.push('no successful zero-row query was observed');
   if (
     emptyIndex >= 0 &&
@@ -58,11 +78,11 @@ export function verifyEmptyRecovery(
 }
 
 export function verifyIncompleteExploration(
-  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[],
+  calls: readonly EvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
-  const queryCalls = calls.filter((call) => call.mcpTool === 'query-datasource');
+  const queryCalls = calls.filter(isApprovedSuccessfulQuery);
   if (queryCalls.length < 2) reasons.push('no follow-up query was observed');
   if (outcome?.evidence_complete !== true)
     reasons.push('required follow-up evidence is incomplete');
@@ -77,33 +97,24 @@ export function verifyHypothesisOutcome(
   reportedRank1?: string,
   calls: readonly Pick<
     StdioCallSummary,
-    'mcpTool' | 'rowCount' | 'error' | 'fixedHypothesisScope' | 'topWorkbook'
+    'mcpTool' | 'rowCount' | 'error' | 'datasourceLuid' | 'fixedHypothesisScope' | 'topWorkbook'
   >[] = [],
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
-  if (
-    !calls.some(
-      (call) =>
-        call.mcpTool === 'query-datasource' && call.rowCount !== null && call.error === null,
-    )
-  ) {
+  if (!calls.some((call) => isApprovedSuccessfulQuery(call))) {
     reasons.push('no successful ranking query evidence was observed');
   }
   if (
     !calls.some(
       (call) =>
-        call.mcpTool === 'query-datasource' &&
-        call.fixedHypothesisScope &&
-        call.topWorkbook !== null,
+        isApprovedSuccessfulQuery(call) && call.fixedHypothesisScope && call.topWorkbook !== null,
     )
   ) {
     reasons.push('no successful fixed-scope ranking result was observed');
   } else {
     const rankingCall = calls.find(
       (call) =>
-        call.mcpTool === 'query-datasource' &&
-        call.fixedHypothesisScope &&
-        call.topWorkbook !== null,
+        isApprovedSuccessfulQuery(call) && call.fixedHypothesisScope && call.topWorkbook !== null,
     );
     if (rankingCall?.topWorkbook !== expectedRank1) {
       reasons.push('observed fixed-scope rank 1 does not match the verified fixture');
@@ -119,16 +130,11 @@ export function verifyHypothesisOutcome(
 }
 
 export function verifyInsufficientEvidence(
-  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[],
+  calls: readonly EvidenceCall[],
   outcome: StructuredOutcome | null,
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
-  if (
-    !calls.some(
-      (call) =>
-        call.mcpTool === 'query-datasource' && call.rowCount !== null && call.error === null,
-    )
-  ) {
+  if (!calls.some(isApprovedSuccessfulQuery)) {
     reasons.push('no successful Tableau metric evidence was observed');
   }
   if (outcome?.outcome !== 'insufficient-evidence') {

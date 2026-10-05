@@ -1889,22 +1889,22 @@ The findings are classified without reopening live evaluation:
 | Structured outcome could be treated as PASS without sufficient validation | Must fix | A deterministic evidence verifier rejects missing or internally inconsistent outcomes and checks empty recovery, hypothesis state, and insufficient-evidence contracts. |
 | Documentation marked READY before human confirmation | Must fix | Documentation now separates `SPIKE_FINDINGS=COMPLETE` from `MERGE_READINESS=PENDING_REVIEW`. |
 
-Hosted-specific code remains an explicit diagnostic spike path only. It is not
-used by the normal stdio runner and is not a production runtime. Its historical
-scope, approval, Viewer authentication, and intermittent 424 caveats are
-preserved for reproducibility and listed as follow-up work. The selected
-execution path is local stdio plus the thin application-managed bridge.
-The Hosted OAuth harness also fails closed unless
-`ENABLE_HOSTED_MCP_SPIKE=1` is explicitly set; normal validation and CI do not
-invoke that harness.
+The executable Hosted OAuth diagnostic harness was removed from this merge
+target because its current tool catalog requires broader-than-read-only OAuth
+scope. Normal runtime, validation, and CI contain no Hosted live path. The
+historical Hosted scope, approval, Viewer authentication, and intermittent 424
+findings are retained as research evidence and follow-up work. Hosted remains
+an experimental future migration candidate; the selected execution path is
+local stdio plus the thin application-managed bridge, and production transport
+remains undecided.
 
 ### Evidence verifier boundary
 
-The verifier checks structured outcome enums, required fields, and internal
-consistency; successful zero-row evidence followed by non-empty recovery;
-hypothesis revision/rejection and, when supplied by the harness, agreement
-with the fixed fixture rank; explicit missing evidence; and the fixed
-datasource through the stdio bridge.
+The verifier checks structured outcome enums, required fields, internal and
+terminal-state consistency; provenance from successful approved Tableau queries
+against the fixed datasource; successful zero-row evidence followed by
+non-empty recovery; hypothesis revision/rejection and agreement between the
+observed and reported fixed-fixture rank; and explicit missing evidence.
 
 It does not select the next tool, rewrite a query, retry an empty result,
 revise a hypothesis, or decide exploration strategy. The

@@ -20,6 +20,27 @@ const tableauPatName = 'ambient-analyst-issue17';
 const tableauPatKeychainService = 'tableau_ambient_analyst_pat_20261005';
 const tableauMcpCommand = 'npx';
 const tableauMcpArgs = ['-y', '@tableau/mcp-server@latest'];
+const inheritedRuntimeEnvironmentKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR'] as const;
+
+export function buildTableauMcpChildEnvironment(
+  parentEnvironment: NodeJS.ProcessEnv,
+  patValue: string,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const key of inheritedRuntimeEnvironmentKeys) {
+    const value = parentEnvironment[key];
+    if (value !== undefined) environment[key] = value;
+  }
+  return {
+    ...environment,
+    SERVER: tableauServer,
+    SITE_NAME: tableauSiteName,
+    AUTH: 'pat',
+    PAT_NAME: tableauPatName,
+    PAT_VALUE: patValue,
+    TRANSPORT: 'stdio',
+  };
+}
 
 export type StdioCallSummary = {
   openAiTool: string;
@@ -92,23 +113,10 @@ export class TableauStdioBridge {
 
   async connect(): Promise<void> {
     const patValue = readKeychainSecret(tableauPatKeychainService);
-    const inheritedEnvironment = Object.fromEntries(
-      Object.entries(process.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    );
     this.transport = new StdioClientTransport({
       command: tableauMcpCommand,
       args: tableauMcpArgs,
-      env: {
-        ...inheritedEnvironment,
-        SERVER: tableauServer,
-        SITE_NAME: tableauSiteName,
-        AUTH: 'pat',
-        PAT_NAME: tableauPatName,
-        PAT_VALUE: patValue,
-        TRANSPORT: 'stdio',
-      },
+      env: buildTableauMcpChildEnvironment(process.env, patValue),
       stderr: 'pipe',
     });
     await withOperationTimeout(this.client.connect(this.transport), 'MCP initialize');

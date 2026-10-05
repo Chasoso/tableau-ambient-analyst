@@ -16,7 +16,6 @@
     "build": "tsc -p tsconfig.build.json",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
     "review:independent": "npm run build && node dist/review/cli.js",
-    "spike:tableau-oauth": "npm run build && node dist/spike/tableau-oauth.js",
     "spike:stdio-smoke": "npm run build && node dist/spike/openai-stdio-loop.js",
     "spike:stdio-agentic-cases": "npm run build && node dist/spike/stdio-agentic-cases.js",
     "spike:stdio-case-setup": "npm run build && node dist/spike/stdio-case-setup-checks.js"
