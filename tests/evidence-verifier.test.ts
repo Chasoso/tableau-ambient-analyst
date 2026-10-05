@@ -63,7 +63,15 @@ describe('evidence verifier', () => {
         },
         'rank-1',
         undefined,
-        [{ mcpTool: 'query-datasource', rowCount: 1, error: null }],
+        [
+          {
+            mcpTool: 'query-datasource',
+            rowCount: 1,
+            error: null,
+            fixedHypothesisScope: true,
+            topWorkbook: 'rank-1',
+          },
+        ],
       ).ok,
     ).toBe(true);
     expect(
@@ -75,7 +83,35 @@ describe('evidence verifier', () => {
         },
         'rank-1',
         'other',
-        [{ mcpTool: 'query-datasource', rowCount: 1, error: null }],
+        [
+          {
+            mcpTool: 'query-datasource',
+            rowCount: 1,
+            error: null,
+            fixedHypothesisScope: true,
+            topWorkbook: 'rank-1',
+          },
+        ],
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifyHypothesisOutcome(
+        {
+          ...supported,
+          outcome: 'rejected',
+          hypothesis_state: 'rejected',
+        },
+        'rank-1',
+        undefined,
+        [
+          {
+            mcpTool: 'query-datasource',
+            rowCount: 1,
+            error: null,
+            fixedHypothesisScope: true,
+            topWorkbook: 'other',
+          },
+        ],
       ).ok,
     ).toBe(false);
   });

@@ -1894,6 +1894,9 @@ used by the normal stdio runner and is not a production runtime. Its historical
 scope, approval, Viewer authentication, and intermittent 424 caveats are
 preserved for reproducibility and listed as follow-up work. The selected
 execution path is local stdio plus the thin application-managed bridge.
+The Hosted OAuth harness also fails closed unless
+`ENABLE_HOSTED_MCP_SPIKE=1` is explicitly set; normal validation and CI do not
+invoke that harness.
 
 ### Evidence verifier boundary
 

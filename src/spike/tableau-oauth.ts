@@ -1202,6 +1202,9 @@ async function probeMcpToolList(accessToken: string): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
+  if (process.env.ENABLE_HOSTED_MCP_SPIKE !== '1') {
+    throw new Error('HOSTED_MCP_SPIKE_NOT_ENABLED');
+  }
   const resourceMetadata = await jsonFetch<OAuthMetadata>(protectedResourceMetadataUrl);
   if (
     !Array.isArray(resourceMetadata.authorization_servers) ||

@@ -75,7 +75,10 @@ export function verifyHypothesisOutcome(
   outcome: StructuredOutcome | null,
   expectedRank1: string,
   reportedRank1?: string,
-  calls: readonly Pick<StdioCallSummary, 'mcpTool' | 'rowCount' | 'error'>[] = [],
+  calls: readonly Pick<
+    StdioCallSummary,
+    'mcpTool' | 'rowCount' | 'error' | 'fixedHypothesisScope' | 'topWorkbook'
+  >[] = [],
 ): EvidenceVerification {
   const reasons = verifyStructuredOutcome(outcome).reasons;
   if (
@@ -85,6 +88,26 @@ export function verifyHypothesisOutcome(
     )
   ) {
     reasons.push('no successful ranking query evidence was observed');
+  }
+  if (
+    !calls.some(
+      (call) =>
+        call.mcpTool === 'query-datasource' &&
+        call.fixedHypothesisScope &&
+        call.topWorkbook !== null,
+    )
+  ) {
+    reasons.push('no successful fixed-scope ranking result was observed');
+  } else {
+    const rankingCall = calls.find(
+      (call) =>
+        call.mcpTool === 'query-datasource' &&
+        call.fixedHypothesisScope &&
+        call.topWorkbook !== null,
+    );
+    if (rankingCall?.topWorkbook !== expectedRank1) {
+      reasons.push('observed fixed-scope rank 1 does not match the verified fixture');
+    }
   }
   if (outcome?.hypothesis_state !== 'revised' && outcome?.hypothesis_state !== 'rejected') {
     reasons.push('hypothesis outcome must be revised or rejected');

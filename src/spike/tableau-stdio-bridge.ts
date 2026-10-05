@@ -30,6 +30,9 @@ export type StdioCallSummary = {
   resultBytes: number;
   latencyMs: number;
   error: string | null;
+  topWorkbook: string | null;
+  topMetric: number | null;
+  fixedHypothesisScope: boolean;
 };
 
 function countRows(result: CallToolResult): number | null {
@@ -47,6 +50,36 @@ function countRows(result: CallToolResult): number | null {
 
 function resultBytes(result: CallToolResult): number {
   return Buffer.byteLength(JSON.stringify(result), 'utf8');
+}
+
+function firstDataRow(result: CallToolResult): Record<string, unknown> | null {
+  for (const item of result.content ?? []) {
+    if (item.type !== 'text') continue;
+    try {
+      const value = JSON.parse(item.text) as { data?: unknown };
+      const row = Array.isArray(value.data) ? value.data[0] : null;
+      if (typeof row === 'object' && row !== null && !Array.isArray(row)) {
+        return row as Record<string, unknown>;
+      }
+    } catch {
+      // Non-JSON tool text is still returned to the model as evidence.
+    }
+  }
+  return null;
+}
+
+function hasFixedHypothesisScope(args: Record<string, unknown>): boolean {
+  const query = args.query;
+  if (typeof query !== 'object' || query === null || Array.isArray(query)) return false;
+  const filters = (query as Record<string, unknown>).filters;
+  if (!Array.isArray(filters)) return false;
+  return filters.some(
+    (filter) =>
+      typeof filter === 'object' &&
+      filter !== null &&
+      (filter as Record<string, unknown>).minDate === '2025-04-01' &&
+      (filter as Record<string, unknown>).maxDate === '2026-10-01',
+  );
 }
 
 export class TableauStdioBridge {
@@ -107,6 +140,15 @@ export class TableauStdioBridge {
     if (rowCount !== null && rowCount > 100) {
       throw new Error('MCP result exceeded the bounded row limit.');
     }
+    const firstRow = firstDataRow(result);
+    const topWorkbook =
+      typeof firstRow?.['Workbook Title'] === 'string'
+        ? firstRow['Workbook Title']
+        : typeof firstRow?.workbookTitle === 'string'
+          ? firstRow.workbookTitle
+          : null;
+    const rawMetric = firstRow?.['Daily View Count'] ?? firstRow?.dailyViewCount;
+    const topMetric = typeof rawMetric === 'number' ? rawMetric : null;
     return {
       result,
       summary: {
@@ -118,6 +160,10 @@ export class TableauStdioBridge {
         resultBytes: bytes,
         latencyMs: Date.now() - startedAt,
         error: result.isError ? 'MCP tool returned an error.' : null,
+        topWorkbook,
+        topMetric,
+        fixedHypothesisScope:
+          openAiTool === 'query_datasource' && hasFixedHypothesisScope(validation.arguments),
       },
     };
   }
