@@ -94,9 +94,12 @@ The architecture recommendation remains Proposed. Per-case auditable
 latency/token telemetry is PARTIAL / NOT_RETAINED and is explicitly accepted
 as a limitation for Issue #17 closure; no live rerun is authorized.
 
-The experimental conclusions are already final. This cycle only reconciles
-stale documentation, strengthens deterministic evidence verification, and pins
-the credential-receiving Tableau MCP package. No new live evaluation occurred.
+The experimental conclusions are already final. The four existing Phase C case
+contracts are the authoritative evaluation contracts. ADR-0002 is intentionally
+retained as Proposed by explicit Human Decision, and Issue #17 may close while
+it remains Proposed. This cycle only strengthens deterministic case-specific
+evidence verification and reconciles the associated decision/documentation.
+No new live evaluation occurred.
 
 This is scope context only; independently assess whether the implementation,
 documentation, acceptance-criteria disposition, and safety boundaries support
