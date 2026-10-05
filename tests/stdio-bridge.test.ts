@@ -163,6 +163,78 @@ describe('application-managed stdio bridge policy', () => {
     });
   });
 
+  it('fails closed for unknown or ambiguous query schema properties', () => {
+    const base = {
+      datasourceLuid: stdioDatasourceLuid,
+      query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+      limit: 100,
+    };
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { ...base.query, unexpectedQueryProperty: true },
+      }),
+    ).toEqual({ ok: false, error: 'Query contains unsupported properties.' });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: { fields: [{ ...base.query.fields[0], unexpectedFieldProperty: true }] },
+      }),
+    ).toEqual({ ok: false, error: 'Query field contains unsupported properties.' });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: {
+          ...base.query,
+          filters: [{ field: { fieldCaption: 'Metric Date Time (JST)', unexpected: true } }],
+        },
+      }),
+    ).toEqual({ ok: false, error: 'Query filter field must follow the Tableau MCP field shape.' });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: {
+          ...base.query,
+          parameters: [{ parameterCaption: 'Date', value: '2026-01-01', unexpected: true }],
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Query parameters must follow the Tableau MCP parameter shape.',
+    });
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        ...base,
+        query: {
+          fields: [
+            { fieldCaption: 'Daily View Count', function: 'SUM', calculation: 'SUM([Views])' },
+          ],
+        },
+      }),
+    ).toEqual({ ok: false, error: 'Query calculations are not allowed by the read-only policy.' });
+  });
+
+  it('accepts only supported filter and parameter shapes', () => {
+    expect(
+      validateStdioToolArguments('query_datasource', {
+        datasourceLuid: stdioDatasourceLuid,
+        query: {
+          fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }],
+          filters: [
+            {
+              field: { fieldCaption: 'Metric Date Time (JST)' },
+              filterType: 'quantitative',
+              minDate: '2025-04-01',
+              maxDate: '2026-10-01',
+            },
+          ],
+          parameters: [{ parameterCaption: 'Example', value: true }],
+        },
+        limit: 100,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it('summarizes query argument shape without exposing field values', () => {
     expect(
       summarizeStdioToolArguments('query_datasource', {

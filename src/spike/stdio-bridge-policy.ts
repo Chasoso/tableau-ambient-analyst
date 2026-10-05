@@ -45,6 +45,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowedKeys.includes(key));
+}
+
+function isScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
 export function mapOpenAiToolToMcp(toolName: string): string | null {
   return Object.hasOwn(stdioToolNames, toolName) ? stdioToolNames[toolName as StdioToolName] : null;
 }
@@ -93,13 +101,26 @@ export function validateStdioToolArguments(
     return { ok: false, error: 'Tool arguments must be an object.' };
   }
   const args = argumentsValue as StdioToolArguments;
-  if (toolName === 'list_datasources') return { ok: true, arguments: args };
+  if (toolName === 'list_datasources') {
+    return hasOnlyKeys(args, [])
+      ? { ok: true, arguments: args }
+      : { ok: false, error: 'list-datasources accepts no arguments.' };
+  }
+  if (toolName !== 'get_datasource_metadata' && toolName !== 'query_datasource') {
+    return { ok: false, error: 'Tool is not approved.' };
+  }
   if (toolName === 'get_datasource_metadata' || toolName === 'query_datasource') {
     if (args.datasourceLuid !== stdioDatasourceLuid) {
       return { ok: false, error: 'Datasource is outside the approved boundary.' };
     }
   }
+  if (toolName === 'get_datasource_metadata' && !hasOnlyKeys(args, ['datasourceLuid'])) {
+    return { ok: false, error: 'Metadata request contains unsupported properties.' };
+  }
   if (toolName === 'query_datasource') {
+    if (!hasOnlyKeys(args, ['datasourceLuid', 'query', 'limit'])) {
+      return { ok: false, error: 'Query request contains unsupported properties.' };
+    }
     const limit = args.limit;
     if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 100) {
       return { ok: false, error: 'Query row limit must be an integer between 1 and 100.' };
@@ -107,6 +128,9 @@ export function validateStdioToolArguments(
     const query = args.query;
     if (!isRecord(query)) {
       return { ok: false, error: 'Query must be an object.' };
+    }
+    if (!hasOnlyKeys(query, ['fields', 'filters', 'parameters'])) {
+      return { ok: false, error: 'Query contains unsupported properties.' };
     }
     const fields = query.fields;
     if (!Array.isArray(fields) || fields.length === 0) {
@@ -118,7 +142,7 @@ export function validateStdioToolArguments(
         return { ok: false, error: 'Query filters must be an array of objects.' };
       }
       for (const filter of query.filters) {
-        const allowedFilterKeys = new Set([
+        const allowedFilterKeys = [
           'field',
           'filterType',
           'quantitativeFilterType',
@@ -128,12 +152,16 @@ export function validateStdioToolArguments(
           'maxValue',
           'values',
           'value',
-        ]);
-        if (Object.keys(filter).some((key) => !allowedFilterKeys.has(key))) {
+        ];
+        if (!hasOnlyKeys(filter, allowedFilterKeys)) {
           return { ok: false, error: 'Query filter contains unsupported properties.' };
         }
         if (filter.field !== undefined) {
-          if (!isRecord(filter.field) || typeof filter.field.fieldCaption !== 'string') {
+          if (
+            !isRecord(filter.field) ||
+            !hasOnlyKeys(filter.field, ['fieldCaption']) ||
+            typeof filter.field.fieldCaption !== 'string'
+          ) {
             return {
               ok: false,
               error: 'Query filter field must follow the Tableau MCP field shape.',
@@ -143,6 +171,32 @@ export function validateStdioToolArguments(
         if (filter.filterType !== undefined && typeof filter.filterType !== 'string') {
           return { ok: false, error: 'Query filterType must be a string.' };
         }
+        if (
+          filter.quantitativeFilterType !== undefined &&
+          typeof filter.quantitativeFilterType !== 'string'
+        ) {
+          return { ok: false, error: 'Query quantitativeFilterType must be a string.' };
+        }
+        if (
+          (filter.minDate !== undefined && typeof filter.minDate !== 'string') ||
+          (filter.maxDate !== undefined && typeof filter.maxDate !== 'string') ||
+          (filter.minValue !== undefined && typeof filter.minValue !== 'number') ||
+          (filter.maxValue !== undefined && typeof filter.maxValue !== 'number')
+        ) {
+          return { ok: false, error: 'Query filter bounds must use the supported scalar types.' };
+        }
+        if (
+          filter.values !== undefined &&
+          (!Array.isArray(filter.values) || !filter.values.every(isScalar))
+        ) {
+          return { ok: false, error: 'Query filter values must be scalar values.' };
+        }
+        if (filter.value !== undefined && !isScalar(filter.value)) {
+          return { ok: false, error: 'Query filter value must be a scalar value.' };
+        }
+        if (filter.value !== undefined && filter.values !== undefined) {
+          return { ok: false, error: 'Query filter cannot use both value and values.' };
+        }
       }
     }
     if (query.parameters !== undefined) {
@@ -151,8 +205,10 @@ export function validateStdioToolArguments(
         query.parameters.some(
           (parameter) =>
             !isRecord(parameter) ||
+            !hasOnlyKeys(parameter, ['parameterCaption', 'value']) ||
             typeof parameter.parameterCaption !== 'string' ||
-            !Object.hasOwn(parameter, 'value'),
+            !Object.hasOwn(parameter, 'value') ||
+            !isScalar(parameter.value),
         )
       ) {
         return {
@@ -166,6 +222,29 @@ export function validateStdioToolArguments(
     for (const field of fields) {
       if (!isRecord(field) || typeof field.fieldCaption !== 'string') {
         return { ok: false, error: 'Query fields must follow the Tableau MCP field shape.' };
+      }
+      const allowedFieldKeys = [
+        'fieldCaption',
+        'fieldAlias',
+        'maxDecimalPlaces',
+        'sortDirection',
+        'sortPriority',
+        'function',
+        'binSize',
+        'calculation',
+      ];
+      if (!hasOnlyKeys(field, allowedFieldKeys)) {
+        return { ok: false, error: 'Query field contains unsupported properties.' };
+      }
+      if (Object.hasOwn(field, 'calculation')) {
+        return { ok: false, error: 'Query calculations are not allowed by the read-only policy.' };
+      }
+      if (
+        (field.fieldAlias !== undefined && typeof field.fieldAlias !== 'string') ||
+        (field.maxDecimalPlaces !== undefined &&
+          (!Number.isInteger(field.maxDecimalPlaces) || (field.maxDecimalPlaces as number) < 0))
+      ) {
+        return { ok: false, error: 'Query field contains invalid supported properties.' };
       }
       if (
         field.sortDirection !== undefined &&
@@ -184,13 +263,14 @@ export function validateStdioToolArguments(
         }
         sortPriorities.add(field.sortPriority);
       }
+      if (field.function !== undefined && field.binSize !== undefined) {
+        return { ok: false, error: 'Query field cannot combine function and binSize.' };
+      }
       if (field.function !== undefined) {
         const functionName = String(field.function).toUpperCase();
         if (!mcpFieldFunctions.includes(functionName as (typeof mcpFieldFunctions)[number])) {
           return { ok: false, error: 'Query field function is not supported by Tableau MCP.' };
         }
-      } else if (field.calculation !== undefined) {
-        return { ok: false, error: 'Query calculations are not allowed by the read-only policy.' };
       } else if (field.binSize !== undefined) {
         if (typeof field.binSize !== 'number' || field.binSize <= 0) {
           return { ok: false, error: 'Query binSize must be greater than zero.' };
