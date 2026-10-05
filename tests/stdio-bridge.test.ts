@@ -12,6 +12,7 @@ import {
   approvedDatasourceName,
   buildTableauMcpChildEnvironment,
   filterApprovedDatasourceListResult,
+  normalizeMcpResultForModel,
 } from '../src/spike/tableau-stdio-bridge.js';
 import {
   buildFunctionCallOutput,
@@ -247,6 +248,146 @@ describe('application-managed stdio bridge policy', () => {
         isError: false,
       }),
     ).toMatchObject({ isError: false });
+  });
+
+  it('normalizes valid approved MCP evidence before it can reach the model', () => {
+    expect(
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ data: [{ 'Daily View Count': 42 }] }),
+            },
+          ],
+          isError: false,
+        },
+        {
+          datasourceLuid: stdioDatasourceLuid,
+          query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+          limit: 100,
+        },
+      ),
+    ).toEqual({
+      tool: 'query_datasource',
+      datasourceLuid: stdioDatasourceLuid,
+      rows: [{ 'Daily View Count': 42 }],
+    });
+    expect(
+      normalizeMcpResultForModel(
+        'get_datasource_metadata',
+        {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ data: [{ fieldCaption: 'Daily View Count' }] }),
+            },
+          ],
+          isError: false,
+        },
+        { datasourceLuid: stdioDatasourceLuid },
+      ),
+    ).toEqual({
+      tool: 'get_datasource_metadata',
+      datasourceLuid: stdioDatasourceLuid,
+      fieldCaptions: ['Daily View Count'],
+    });
+  });
+
+  it('rejects MCP evidence with the wrong datasource provenance or result shape', () => {
+    const queryResult = {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({ data: [{ 'Daily View Count': 42 }] }),
+        },
+      ],
+      isError: false,
+    };
+    const queryArguments = {
+      datasourceLuid: stdioDatasourceLuid,
+      query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+      limit: 100,
+    };
+    expect(() =>
+      normalizeMcpResultForModel('query_datasource', queryResult, {
+        ...queryArguments,
+        datasourceLuid: 'other',
+      }),
+    ).toThrow('outside the approved datasource');
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [{ type: 'text', text: JSON.stringify({ data: [], unexpected: 'untrusted' }) }],
+          isError: false,
+        },
+        queryArguments,
+      ),
+    ).toThrow('must be an object with data');
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ data: [{ unexpected_column: 42 }] }),
+            },
+          ],
+          isError: false,
+        },
+        queryArguments,
+      ),
+    ).toThrow('unexpected field unexpected_column');
+  });
+
+  it('rejects oversized, failed, and non-scalar MCP results instead of reusing them as evidence', () => {
+    const queryArguments = {
+      datasourceLuid: stdioDatasourceLuid,
+      query: { fields: [{ fieldCaption: 'Daily View Count', function: 'SUM' }] },
+      limit: 100,
+    };
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                data: Array.from({ length: 101 }, () => ({ 'Daily View Count': 1 })),
+              }),
+            },
+          ],
+          isError: false,
+        },
+        queryArguments,
+      ),
+    ).toThrow('bounded row limit');
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        { content: [{ type: 'text', text: JSON.stringify({ data: [] }) }], isError: true },
+        queryArguments,
+      ),
+    ).toThrow('tool returned an error result');
+    expect(() =>
+      normalizeMcpResultForModel(
+        'query_datasource',
+        {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ data: [{ 'Daily View Count': { nested: 42 } }] }),
+            },
+          ],
+          isError: false,
+        },
+        queryArguments,
+      ),
+    ).toThrow('is not a scalar');
   });
 
   it('stops at the application tool-call budget', () => {

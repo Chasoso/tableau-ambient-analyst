@@ -198,7 +198,7 @@ export async function runAppManagedStdioSmoke(): Promise<LoopResult> {
         const executed = await bridge.callTool(openAiTool, argumentsValue);
         calls.push(executed.summary);
         console.log(JSON.stringify({ status: 'app_managed_stdio_tool_call', ...executed.summary }));
-        outputs.push(buildFunctionCallOutput(callId, executed.result));
+        outputs.push(buildFunctionCallOutput(callId, executed.modelEvidence));
       }
       previousResponseId = typeof response.id === 'string' ? response.id : undefined;
       if (previousResponseId === undefined) throw new Error('OPENAI_CONTINUATION_FAILED');

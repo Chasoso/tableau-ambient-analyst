@@ -48,7 +48,8 @@ retains deterministic execution and verification boundaries.
 | Empty-result recovery | PASS |
 | Hypothesis disproof | PASS |
 | Insufficient-evidence handling | PASS |
-| Telemetry and failure-mode separation | PASS |
+| Telemetry instrumentation and failure-mode separation | PASS |
+| Per-case retained token/latency telemetry | PARTIAL / NOT_RETAINED |
 | Provider/application boundary | PASS |
 | Architecture recommendation | PASS |
 | Full #16 common benchmark | DEFERRED_BY_HUMAN_DECISION / NOT_EXECUTED |
@@ -1745,10 +1746,14 @@ follow-up exploration. The guard is a bounded runaway-protection limit, not an
 application workflow and does not force a conclusion.
 
 Each case ran once with `gpt-5.6-luna`, `max_output_tokens=1024`, strict
-structured output, and the existing non-orchestrating application bridge.
-Transport, completion, tool, token, latency, and cost telemetry were
-captured. The four responses completed and produced structured outcomes; no
-case was retried.
+structured output, and the existing non-orchestrating application bridge. The
+runtime instrumentation emitted transport, completion, tool, token, latency,
+and cost telemetry. However, the sanitized per-response token and latency
+values were not retained as a committed run artifact. This record therefore
+uses the retained call counts, outcomes, and per-case cost estimates below as
+auditable evidence; token and latency retention is `PARTIAL / NOT_RETAINED`.
+The four responses completed and produced structured outcomes; no case was
+retried.
 
 | Case | Tool calls | Useful | Redundant/error | Guard reached | Structured outcome | Result | Cost (USD) |
 | --- | ---: | ---: | ---: | --- | --- | --- | ---: |
@@ -1873,10 +1878,11 @@ workflow engine.
 | Empty-result recovery | PASS | Valid zero-row fixture and model-selected recovery query |
 | Hypothesis disproof | PASS | Fixed-window rank and rejected hypothesis matched fixture truth |
 | Insufficient-evidence behavior | PASS | Missing external causal evidence identified without fabrication |
-| Tool-call evidence recorded | PASS | Per-call tool mapping, intent, rows, errors, and latency recorded |
+| Tool-call evidence recorded | PASS | Retained per-case tool-call counts, useful/redundant classification, and final outcomes; the harness emitted richer per-call summaries at runtime |
 | Evidence completion recorded | PASS | Structured outcomes and evidence-complete fields captured |
-| Latency recorded | PASS | Response and MCP timing telemetry captured |
-| Tokens/cost recorded | PASS | Per-case usage and cost estimate captured |
+| Latency recorded | PARTIAL / NOT_RETAINED | Runtime instrumentation emitted latency, but no committed per-case latency values or sanitized run artifact remain |
+| Tokens recorded | PARTIAL / NOT_RETAINED | Runtime instrumentation emitted usage, but no committed per-case token values or sanitized run artifact remain |
+| Cost recorded | PASS | Per-case cost estimates are retained in the canonical batch table |
 | Failure modes recorded | PASS | Transport, MCP argument, guard, and agentic outcomes separated |
 | Provider/application responsibility assessed | PASS | Thin bridge and LLM/application boundary documented |
 | External-service safety maintained | PASS | PAT isolation, read-only tools, datasource boundary, and no writes |

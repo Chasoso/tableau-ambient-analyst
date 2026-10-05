@@ -73,6 +73,170 @@ export type StdioCallSummary = {
   hasFixtureRankingContract: boolean;
 };
 
+type ScalarEvidenceValue = string | number | boolean | null;
+
+export type ModelVisibleMcpEvidence =
+  | {
+      tool: 'list_datasources';
+      datasourceLuid: typeof stdioDatasourceLuid;
+      datasources: Array<{
+        datasourceLuid: typeof stdioDatasourceLuid;
+        name: typeof approvedDatasourceName;
+      }>;
+    }
+  | {
+      tool: 'get_datasource_metadata';
+      datasourceLuid: typeof stdioDatasourceLuid;
+      fieldCaptions: string[];
+    }
+  | {
+      tool: 'query_datasource';
+      datasourceLuid: typeof stdioDatasourceLuid;
+      rows: Array<Record<string, ScalarEvidenceValue>>;
+    };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function resultRejection(reason: string): never {
+  throw new Error(`MCP_RESULT_REJECTED: ${reason}`);
+}
+
+function parseSingleJsonDataPayload(result: CallToolResult): unknown {
+  if (result.isError) resultRejection('tool returned an error result');
+  if (!Array.isArray(result.content) || result.content.length !== 1) {
+    resultRejection('expected exactly one text result payload');
+  }
+  const item = result.content[0];
+  if (item?.type !== 'text' || typeof item.text !== 'string') {
+    resultRejection('expected a JSON text result payload');
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(item.text);
+  } catch {
+    resultRejection('result payload is not JSON');
+  }
+  if (
+    !isRecord(payload) ||
+    !Object.hasOwn(payload, 'data') ||
+    Object.keys(payload).some((key) => key !== 'data')
+  ) {
+    resultRejection('result payload must be an object with data');
+  }
+  return payload.data;
+}
+
+function expectedQueryResultFields(args: Record<string, unknown>): Set<string> {
+  const fields = isRecord(args.query) && Array.isArray(args.query.fields) ? args.query.fields : [];
+  const expected = new Set<string>();
+  for (const field of fields) {
+    if (!isRecord(field) || typeof field.fieldCaption !== 'string') continue;
+    const caption = field.fieldCaption;
+    expected.add(caption);
+    if (typeof field.fieldAlias === 'string') expected.add(field.fieldAlias);
+    if (typeof field.function === 'string') {
+      expected.add(`${field.function}(${caption})`);
+      expected.add(`${field.function}([${caption}])`);
+    }
+  }
+  return expected;
+}
+
+function normalizeQueryRows(
+  data: unknown,
+  args: Record<string, unknown>,
+): Array<Record<string, ScalarEvidenceValue>> {
+  if (!Array.isArray(data)) resultRejection('query result data must be an array');
+  if (data.length > 100) resultRejection('query result exceeded the bounded row limit');
+  const expectedFields = expectedQueryResultFields(args);
+  if (expectedFields.size === 0) resultRejection('query result has no expected fields');
+  return data.map((row) => {
+    if (!isRecord(row) || Object.keys(row).length === 0) {
+      resultRejection('query result rows must be non-empty objects');
+    }
+    const normalized: Record<string, ScalarEvidenceValue> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (!expectedFields.has(key))
+        resultRejection(`query result contains unexpected field ${key}`);
+      if (
+        value !== null &&
+        typeof value !== 'string' &&
+        typeof value !== 'number' &&
+        typeof value !== 'boolean'
+      ) {
+        resultRejection(`query result field ${key} is not a scalar`);
+      }
+      normalized[key] = value;
+    }
+    return normalized;
+  });
+}
+
+function collectMetadataFieldCaptions(value: unknown, captions: Set<string>, depth = 0): void {
+  if (depth > 8 || captions.size >= 500) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectMetadataFieldCaptions(item, captions, depth + 1));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const key of ['fieldCaption', 'caption', 'name']) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 256) {
+      captions.add(candidate);
+    }
+  }
+  Object.values(value).forEach((item) => collectMetadataFieldCaptions(item, captions, depth + 1));
+}
+
+/**
+ * Converts an MCP result into the only shape that may cross the application to
+ * the model. This is a safety boundary, not analysis orchestration: it checks
+ * success, fixed provenance, result shape, and bounded scalar evidence.
+ */
+export function normalizeMcpResultForModel(
+  openAiTool: string,
+  result: CallToolResult,
+  args: Record<string, unknown>,
+): ModelVisibleMcpEvidence {
+  const data = parseSingleJsonDataPayload(result);
+  if (openAiTool === 'list_datasources') {
+    if (!Array.isArray(data) || !data.some(hasApprovedDatasource)) {
+      resultRejection('approved datasource is absent');
+    }
+    return {
+      tool: 'list_datasources',
+      datasourceLuid: stdioDatasourceLuid,
+      datasources: [{ datasourceLuid: stdioDatasourceLuid, name: approvedDatasourceName }],
+    };
+  }
+  if (openAiTool === 'get_datasource_metadata') {
+    if (args.datasourceLuid !== stdioDatasourceLuid) {
+      resultRejection('metadata result is outside the approved datasource');
+    }
+    const captions = new Set<string>();
+    collectMetadataFieldCaptions(data, captions);
+    if (captions.size === 0) resultRejection('metadata result contains no field captions');
+    return {
+      tool: 'get_datasource_metadata',
+      datasourceLuid: stdioDatasourceLuid,
+      fieldCaptions: [...captions].sort(),
+    };
+  }
+  if (openAiTool === 'query_datasource') {
+    if (args.datasourceLuid !== stdioDatasourceLuid) {
+      resultRejection('query result is outside the approved datasource');
+    }
+    return {
+      tool: 'query_datasource',
+      datasourceLuid: stdioDatasourceLuid,
+      rows: normalizeQueryRows(data, args),
+    };
+  }
+  resultRejection('tool is not approved');
+}
+
 function countRows(result: CallToolResult): number | null {
   for (const item of result.content ?? []) {
     if (item.type !== 'text') continue;
@@ -230,7 +394,11 @@ export class TableauStdioBridge {
   async callTool(
     openAiTool: string,
     args: unknown,
-  ): Promise<{ result: CallToolResult; summary: StdioCallSummary }> {
+  ): Promise<{
+    result: CallToolResult;
+    modelEvidence: ModelVisibleMcpEvidence;
+    summary: StdioCallSummary;
+  }> {
     const mcpTool = mapOpenAiToolToMcp(openAiTool);
     if (mcpTool === null) throw new Error('TOOL_NOT_ALLOWED');
     const validation = validateStdioToolArguments(openAiTool, args);
@@ -247,6 +415,7 @@ export class TableauStdioBridge {
       openAiTool === 'list_datasources' ? filterApprovedDatasourceListResult(mcpResult) : mcpResult;
     const bytes = resultBytes(result);
     if (bytes > 200_000) throw new Error('MCP result exceeded the bounded result size.');
+    const modelEvidence = normalizeMcpResultForModel(openAiTool, result, validation.arguments);
     const rowCount = countRows(result);
     if (rowCount !== null && rowCount > 100) {
       throw new Error('MCP result exceeded the bounded row limit.');
@@ -270,6 +439,7 @@ export class TableauStdioBridge {
     const topMetric = typeof rawMetric === 'number' ? rawMetric : null;
     return {
       result,
+      modelEvidence,
       summary: {
         openAiTool,
         mcpTool,

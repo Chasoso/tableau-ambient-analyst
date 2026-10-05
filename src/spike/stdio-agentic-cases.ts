@@ -305,7 +305,7 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
         outputs.push({
           type: 'function_call_output',
           call_id: callId,
-          output: JSON.stringify(executed.result),
+          output: JSON.stringify(executed.modelEvidence),
         });
       }
       previousResponseId = typeof response.id === 'string' ? response.id : undefined;
