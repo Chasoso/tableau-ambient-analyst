@@ -106,7 +106,7 @@ then starts the bounded independent read-only review/fix loop. Only after a
 validated `PASS` does it push the feature branch and create a pull request with
 `Closes #<issue>`. It never merges the pull request. The runner stores only a
 small branch/base accounting state in the local, untracked
-`.git/tableau-ambient-review-state.json` file and stops after 12 review
+`.git/tableau-ambient-review-state.json` file and stops after 16 review
 invocations or 8 AUTO_FIX cycles across process restarts. This command is not
 called by `npm run validate` and is not added to
 ordinary CI. Before validation or reviewer invocation, the runner requires a
@@ -125,7 +125,7 @@ When
 all blocking findings are structured `AUTO_FIX`, a separate workspace-write
 Codex implementer applies only those deterministic fixes, creates a
 Conventional Commit, and returns to validation and a fresh read-only review.
-The reviewer process never edits files. The default maximum is 12 independent
+The reviewer process never edits files. The default maximum is 16 independent
 review invocations and 8 actual AUTO_FIX cycles. Repeated normalized
 generalized rules are tracked; the third consecutive repeat terminates as
 `NON_CONVERGING_REVIEW`. An AUTO_FIX with no material repository change
@@ -224,7 +224,7 @@ uncertainty.
 - `CHANGES_REQUIRED` with HUMAN_DECISION_REQUIRED or BLOCKED findings: stop;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
 - 8 AUTO_FIX cycles: stop and escalate with the accounting report;
-- 12 review invocations: stop and escalate with the accounting report;
+- 16 review invocations: stop and escalate with the accounting report;
 - the same generalized rule three times consecutively: `NON_CONVERGING_REVIEW`;
 - an AUTO_FIX with no repository change: `NO_PROGRESS`.
 

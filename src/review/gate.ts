@@ -1,6 +1,6 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
 export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const;
-export const maxReviewInvocations = 12;
+export const maxReviewInvocations = 16;
 export const maxAutoFixCycles = 8;
 export const repeatedRuleThreshold = 3;
 /** @deprecated Use maxReviewInvocations. */

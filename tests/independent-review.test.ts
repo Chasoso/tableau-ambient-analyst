@@ -17,6 +17,7 @@ import {
   canOpenPullRequest,
   canContinueAutoFix,
   maxAutoFixCycles,
+  maxReviewInvocations,
   maxReviewCycles,
   normalizedFindingCategory,
   parseReviewResult,
@@ -976,7 +977,7 @@ describe('independent review runner control flow', () => {
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
       accountingEpochStart: 'issue-29-accounting-v2',
-      reviewInvocationCount: 11,
+      reviewInvocationCount: maxReviewInvocations - 1,
       autoFixCycleCount: 0,
       generalizedRuleHistory: [] as string[],
       consecutiveRepeatCount: 0,
@@ -987,10 +988,10 @@ describe('independent review runner control flow', () => {
       input,
       dependencies({
         readAccounting: () => limitAccounting,
-        recordReview: () => ({ ...limitAccounting, reviewInvocationCount: 12 }),
+        recordReview: () => ({ ...limitAccounting, reviewInvocationCount: maxReviewInvocations }),
         recordTermination: () => ({
           ...limitAccounting,
-          reviewInvocationCount: 12,
+          reviewInvocationCount: maxReviewInvocations,
           terminationReason: 'MAX_REVIEW_INVOCATIONS' as const,
         }),
         invokeReviewer: () => {
@@ -1002,7 +1003,7 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.terminationReason).toBe('MAX_REVIEW_INVOCATIONS');
-    expect(result.accounting?.reviewInvocationCount).toBe(12);
+    expect(result.accounting?.reviewInvocationCount).toBe(maxReviewInvocations);
     expect(result.accounting?.autoFixCycleCount).toBe(0);
   });
 });
@@ -1235,6 +1236,39 @@ describe('review cycle state', () => {
         readReviewAccountingAtPath(statePath, 'feature/a', 'develop').reviewInvocationCount,
       ).toBe(1);
       expect(JSON.parse(readFileSync(statePath, 'utf8')).entries).toHaveLength(3);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('allows the fifteenth current invocation and stops at the sixteenth', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 15,
+        autoFixCycleCount: 7,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: true,
+        cycleResults: [],
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: 16,
+        autoFixCycleCount: 7,
+      });
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

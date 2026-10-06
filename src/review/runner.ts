@@ -347,7 +347,6 @@ Your final response must contain only this JSON object:
       { "path": "tests/example.test.ts", "reason": "direct_test" }
   ]
 }
-}
 Set completed to false or list every remaining blocking issue when the
 self-review cannot pass. Do not claim a check passed unless you performed it.
 `;
@@ -593,8 +592,10 @@ function runBoundedReviewFixLoopUnsafe(
   }
   if (initialAccounting.terminationReason) {
     if (
-      initialAccounting.terminationReason === 'NO_PROGRESS' &&
-      initialAccounting.resumeAfterPolicyChange === 'issue-29-bounded-scope-v3' &&
+      ((initialAccounting.terminationReason === 'NO_PROGRESS' &&
+        initialAccounting.resumeAfterPolicyChange === 'issue-29-bounded-scope-v3') ||
+        (initialAccounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+          initialAccounting.resumeAfterPolicyChange === 'issue-29-review-budget-v2')) &&
       dependencies.recordResume
     ) {
       dependencies.recordResume(input.cwd, input.base);

@@ -42,7 +42,7 @@ existing Human Decision is `HUMAN_DECISION_REQUIRED`; report what must be
 decided, why repository rules cannot decide it, options, and a recommendation.
 Missing credentials, services, fixtures, or repository prerequisites are
 `BLOCKED`, not decisions. Never weaken safety boundaries to keep the loop
-moving. The default limits are 12 independent review invocations and 8
+moving. The default limits are 16 independent review invocations and 8
 AUTO_FIX cycles. Track them separately. Escalate after the same normalized
 generalized rule repeats three times, or when an AUTO_FIX reports no material
 repository change. Legacy review history is retained for audit but is separate
