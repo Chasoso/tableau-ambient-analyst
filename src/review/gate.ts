@@ -51,6 +51,7 @@ export type ReviewAccounting = {
   cycleResults: ReviewCycleRecord[];
   terminationHistory?: TerminationReason[];
   resumeAfterPolicyChange?: string | undefined;
+  migrationCompatibility?: string | undefined;
   terminationReason?: TerminationReason | undefined;
 };
 

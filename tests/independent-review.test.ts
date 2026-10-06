@@ -1155,6 +1155,71 @@ describe('review cycle state', () => {
     }
   });
 
+  it('rejects missing middle generalized rules in current accounting', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 3,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: ['A', 'C'],
+      consecutiveRepeatCount: 1,
+      lastFixChangedRepository: null,
+      terminationHistory: [],
+      cycleResults: ['A', 'B', 'C'].map((rule, index) => ({
+        reviewInvocation: index + 1,
+        result: 'CHANGES_REQUIRED',
+        classifications: ['AUTO_FIX'],
+        generalizedRules: [rule],
+        repositoryChanged: false,
+      })),
+    };
+    writeFileSync(statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects duplicate current invocation ids even with migration provenance', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 2,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      terminationHistory: [],
+      migrationCompatibility: 'issue-29-legacy-anomaly-v1',
+      cycleResults: [1, 1].map((reviewInvocation) => ({
+        reviewInvocation,
+        result: 'PASS',
+        classifications: [],
+        generalizedRules: [],
+        repositoryChanged: false,
+      })),
+    };
+    writeFileSync(statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('creates initial state only when the state file is absent', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');

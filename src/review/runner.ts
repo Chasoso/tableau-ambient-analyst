@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -43,6 +44,12 @@ const legacyIssue29Base = 'main';
 const legacyIssue29ReviewInvocations = 6;
 const legacyIssue29AutoFixCycles = 1;
 const currentAccountingEpoch = 'issue-29-accounting-v2';
+const issue29LegacyMigration = 'issue-29-legacy-anomaly-v1';
+const issue29ValidationPhaseResume = 'issue-29-validation-review-phase-separation-v1';
+const issue29LegacyCyclePrefixHash =
+  '138e37352853185663c4ecd50e8c1f1c0843794a1aab4558bee7d376d0f7af36';
+const issue29LegacyHistoryPrefixHash =
+  'b830b2505609a758c27a489994d540176ca3f79b6bfdea2a778d498cbc808b65';
 const accountingLockRetryCount = 1000;
 const accountingLockRetryMs = 10;
 
@@ -602,8 +609,7 @@ function runBoundedReviewFixLoopUnsafe(
         (initialAccounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
           initialAccounting.resumeAfterPolicyChange === 'issue-29-review-budget-v2') ||
         (initialAccounting.terminationReason === 'MAX_AUTO_FIX_CYCLES' &&
-          initialAccounting.resumeAfterPolicyChange ===
-            'issue-29-validation-review-phase-separation-v1')) &&
+          initialAccounting.resumeAfterPolicyChange === issue29ValidationPhaseResume)) &&
       dependencies.recordResume
     ) {
       dependencies.recordResume(input.cwd, input.base);
@@ -1484,6 +1490,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'terminationHistory',
     'terminationReason',
     'resumeAfterPolicyChange',
+    'migrationCompatibility',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -1514,7 +1521,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     !state.terminationHistory.every(isTerminationReason) ||
     (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) ||
     (state.resumeAfterPolicyChange !== undefined &&
-      typeof state.resumeAfterPolicyChange !== 'string')
+      typeof state.resumeAfterPolicyChange !== 'string') ||
+    (state.migrationCompatibility !== undefined && typeof state.migrationCompatibility !== 'string')
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -1522,16 +1530,21 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   const cycleResults = state.cycleResults as ReviewCycleRecord[];
   const generalizedRuleHistory = state.generalizedRuleHistory as string[];
   const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
+  const legacyMigration = isIssue29LegacyMigrationState(
+    state,
+    cycleResults,
+    generalizedRuleHistory,
+  );
   const expectedAutoFixCycles = cycleResults.filter(
     (record) => record.repositoryChanged === true,
   ).length;
   const cycleInvocationsAreConsistent = cycleResults.every(
     (record, index) =>
       record.reviewInvocation <= (state.reviewInvocationCount as number) &&
-      // The pre-v2 accounting history contains one duplicated invocation id
-      // (invocation 8). Preserve that audit record instead of rewriting it;
-      // new reservations still use the monotonically increasing counter.
-      (index === 0 || record.reviewInvocation >= cycleResults[index - 1]!.reviewInvocation),
+      (index === 0 ||
+        (legacyMigration && index < 14
+          ? record.reviewInvocation >= cycleResults[index - 1]!.reviewInvocation
+          : record.reviewInvocation > cycleResults[index - 1]!.reviewInvocation)),
   );
   const lastCycle = cycleResults.at(-1);
   const expectedConsecutiveRepeatCount = lastCycle
@@ -1543,7 +1556,9 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   if (
     cycleResults.length > (state.reviewInvocationCount as number) ||
     !cycleInvocationsAreConsistent ||
-    !isOrderedHistorySubset(generalizedRuleHistory, expectedRuleHistory) ||
+    (legacyMigration
+      ? !isIssue29LegacyHistoryConsistent(generalizedRuleHistory, expectedRuleHistory, cycleResults)
+      : JSON.stringify(generalizedRuleHistory) !== JSON.stringify(expectedRuleHistory)) ||
     expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
     expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
     (state.terminationReason !== undefined &&
@@ -1566,7 +1581,17 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       ? (state.terminationHistory as TerminationReason[])
       : [],
     resumeAfterPolicyChange:
-      typeof state.resumeAfterPolicyChange === 'string' ? state.resumeAfterPolicyChange : undefined,
+      typeof state.resumeAfterPolicyChange === 'string'
+        ? state.resumeAfterPolicyChange
+        : legacyMigration
+          ? issue29ValidationPhaseResume
+          : undefined,
+    migrationCompatibility:
+      typeof state.migrationCompatibility === 'string'
+        ? state.migrationCompatibility
+        : legacyMigration
+          ? issue29LegacyMigration
+          : undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -1577,16 +1602,51 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   return { branch: state.branch, base: state.base, accounting };
 }
 
-function isOrderedHistorySubset(history: string[], expected: string[]): boolean {
-  let expectedIndex = 0;
-  for (const rule of history) {
-    while (expectedIndex < expected.length && expected[expectedIndex] !== rule) {
-      expectedIndex += 1;
-    }
-    if (expectedIndex === expected.length) return false;
-    expectedIndex += 1;
-  }
-  return true;
+function isIssue29LegacyMigrationState(
+  state: Record<string, unknown>,
+  cycleResults: ReviewCycleRecord[],
+  history: string[],
+): boolean {
+  const knownShape =
+    state.branch === legacyIssue29Branch &&
+    state.base === legacyIssue29Base &&
+    state.legacyReviewInvocations === legacyIssue29ReviewInvocations &&
+    state.legacyAutoFixCycles === legacyIssue29AutoFixCycles &&
+    state.accountingEpochStart === currentAccountingEpoch &&
+    state.autoFixCycleCount === maxAutoFixCycles &&
+    Number.isInteger(state.reviewInvocationCount) &&
+    (state.reviewInvocationCount as number) >= 15 &&
+    (state.reviewInvocationCount as number) <= maxReviewInvocations &&
+    (cycleResults.length === (state.reviewInvocationCount as number) - 1 ||
+      cycleResults.length === (state.reviewInvocationCount as number)) &&
+    cycleResults.length >= 14 &&
+    history.length >= 20 &&
+    sha256(JSON.stringify(cycleResults.slice(0, 14))) === issue29LegacyCyclePrefixHash &&
+    sha256(JSON.stringify(history.slice(0, 20))) === issue29LegacyHistoryPrefixHash;
+  return (
+    knownShape &&
+    (state.migrationCompatibility === undefined ||
+      state.migrationCompatibility === issue29LegacyMigration)
+  );
+}
+
+function isIssue29LegacyHistoryConsistent(
+  history: string[],
+  expected: string[],
+  cycleResults: ReviewCycleRecord[],
+): boolean {
+  const legacyHistoryLength = 20;
+  const postMigrationRules = cycleResults.slice(14).flatMap((record) => record.generalizedRules);
+  return (
+    history.length === legacyHistoryLength + postMigrationRules.length &&
+    JSON.stringify(history.slice(legacyHistoryLength)) === JSON.stringify(postMigrationRules) &&
+    JSON.stringify(history.slice(0, legacyHistoryLength)) !==
+      JSON.stringify(expected.slice(0, legacyHistoryLength))
+  );
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function stateForBranch(value: unknown, branch: string, base: string): ReviewAccounting {
