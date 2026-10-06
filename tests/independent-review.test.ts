@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +19,7 @@ import {
   type ReviewAccounting,
 } from '../src/review/gate.js';
 import {
+  autoFixAllowedPaths,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
@@ -330,26 +332,30 @@ describe('independent review runner control flow', () => {
         const rules = review.blockingFindings
           .filter((finding) => typeof finding !== 'string')
           .map(normalizedFindingCategory);
-        const nextRule = rules[0];
-        const previousRule = accounting.generalizedRuleHistory.at(-1);
+        const nextRules = [...new Set(rules)];
+        const consecutiveRepeatCount = nextRules.reduce((maximum, rule) => {
+          let count = 0;
+          for (let index = accounting.cycleResults.length - 1; index >= 0; index -= 1) {
+            const record = accounting.cycleResults[index];
+            if (!record || !record.generalizedRules.includes(rule)) break;
+            count += 1;
+          }
+          return Math.max(maximum, count + 1);
+        }, 0);
         accounting = {
           ...accounting,
           reviewInvocationCount: accounting.reviewInvocationCount + 1,
-          generalizedRuleHistory: nextRule
-            ? [...accounting.generalizedRuleHistory, nextRule]
+          generalizedRuleHistory: rules.length
+            ? [...accounting.generalizedRuleHistory, ...rules]
             : accounting.generalizedRuleHistory,
-          consecutiveRepeatCount: nextRule
-            ? previousRule === nextRule
-              ? accounting.consecutiveRepeatCount + 1
-              : 1
-            : 0,
+          consecutiveRepeatCount,
           cycleResults: [
             ...accounting.cycleResults,
             {
               reviewInvocation: accounting.reviewInvocationCount + 1,
               result: review.result,
               classifications: [],
-              generalizedRules: [],
+              generalizedRules: rules,
               repositoryChanged: null,
             },
           ],
@@ -696,6 +702,48 @@ describe('independent review runner control flow', () => {
     expect(fixes).toBe(2);
   });
 
+  it('tracks a repeated generalized rule when it is not the first finding', () => {
+    let reviews = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          reviews += 1;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'CHANGES_REQUIRED',
+              blockingFindings: [
+                {
+                  severity: 'blocking',
+                  classification: 'AUTO_FIX',
+                  finding: 'First finding',
+                  generalized_rule: `different rule ${reviews}`,
+                  affected_locations: ['src/example.ts'],
+                  recommended_fix: 'Apply the deterministic rule.',
+                },
+                {
+                  severity: 'blocking',
+                  classification: 'AUTO_FIX',
+                  finding: 'Repeated finding',
+                  generalized_rule: 'repeated second rule',
+                  affected_locations: ['src/example.ts'],
+                  recommended_fix: 'Apply the deterministic rule.',
+                },
+              ],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+            }),
+          );
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
+    expect(reviews).toBe(3);
+  });
+
   it('escalates when AUTO_FIX makes no repository change', () => {
     const result = runBoundedReviewFixLoop(
       input,
@@ -851,6 +899,33 @@ describe('review cycle state', () => {
       JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: 1.5 }),
     ],
     ['negative cycles', JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: -1 })],
+    [
+      'unknown termination reason',
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationReason: 'UNKNOWN',
+      }),
+    ],
+    [
+      'malformed cycle record',
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [{ reviewInvocation: 1, result: 'PASS' }],
+      }),
+    ],
   ])('fails closed for %s without resetting the state', (_description, contents) => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
@@ -877,6 +952,58 @@ describe('review cycle state', () => {
 
     try {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AUTO_FIX path scope', () => {
+  it('rejects absolute, traversal, .git, symlink, and untracked targets', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-paths-'));
+    mkdirSync(join(directory, 'src'), { recursive: true });
+    writeFileSync(join(directory, 'src', 'tracked.ts'), 'export {};\n');
+    symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+    execFileSync('git', ['add', '.'], { cwd: directory });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
+      { cwd: directory },
+    );
+    writeFileSync(join(directory, 'outside.ts'), 'export {};\n');
+
+    const finding = (location: string) => ({
+      result: 'CHANGES_REQUIRED' as const,
+      blockingFindings: [
+        {
+          severity: 'blocking' as const,
+          classification: 'AUTO_FIX' as const,
+          finding: 'finding',
+          generalized_rule: 'rule',
+          affected_locations: [location],
+          recommended_fix: 'fix',
+        },
+      ],
+      nonBlockingFindings: [],
+      escalationRequired: false,
+    });
+
+    try {
+      for (const location of [
+        `${join(directory, 'src', 'tracked.ts')}:1`,
+        '../src/tracked.ts:1',
+        '.git/config:1',
+        'src/link.ts:1',
+        'outside.ts:1',
+      ]) {
+        expect(autoFixAllowedPaths(finding(location), directory, 'main')).toBe(
+          'AUTO_FIX finding contains an invalid repository path.',
+        );
+      }
+      expect(autoFixAllowedPaths(finding('src/tracked.ts:1'), directory, 'main')).toEqual([
+        'src/tracked.ts',
+      ]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

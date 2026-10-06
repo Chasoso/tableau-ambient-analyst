@@ -1,6 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import {
   canContinueAutoFix,
@@ -14,7 +21,10 @@ import {
   reviewerInvocationFailure,
   requiresHumanDecision,
   terminationResult,
+  terminationReasons,
   validationFailure,
+  reviewResults,
+  findingClassifications,
   type ReviewAccounting,
   type ReviewCycleRecord,
   type ReviewGateResult,
@@ -276,7 +286,7 @@ function applyCodexAutoFix(
 ): string | ApplyAutoFixResult {
   if (!canContinueAutoFix(review)) return 'Review was not eligible for AUTO_FIX.';
 
-  const allowedPaths = autoFixAllowedPaths(review);
+  const allowedPaths = autoFixAllowedPaths(review, input.cwd, input.base);
   if (typeof allowedPaths === 'string') return allowedPaths;
 
   let beforeHead: string;
@@ -371,7 +381,30 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
   return { changedRepository: true };
 }
 
-function autoFixAllowedPaths(review: ReviewGateResult): string[] | string {
+export function autoFixAllowedPaths(
+  review: ReviewGateResult,
+  cwd: string,
+  base: string,
+): string[] | string {
+  let repositoryRoot: string;
+  let trackedPaths: Set<string>;
+  try {
+    repositoryRoot = realpathSync(
+      execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
+    );
+    const basePaths = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', base], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    });
+    const indexPaths = execFileSync('git', ['ls-files', '-z', '--cached'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    });
+    trackedPaths = new Set(`${basePaths}\0${indexPaths}`.split('\0').filter(Boolean));
+  } catch {
+    return 'AUTO_FIX repository path scope could not be validated.';
+  }
+
   const paths = new Set<string>();
   for (const finding of review.blockingFindings) {
     if (typeof finding === 'string') return 'AUTO_FIX finding locations are not structured.';
@@ -382,11 +415,56 @@ function autoFixAllowedPaths(review: ReviewGateResult): string[] | string {
       if (
         !normalizedPath ||
         isAbsolute(normalizedPath) ||
-        normalizedPath.split(/[\\/]/).includes('..')
+        win32.isAbsolute(normalizedPath) ||
+        normalizedPath.split(/[\\/]/).some((part) => part === '..' || part === '.')
       ) {
         return 'AUTO_FIX finding contains an invalid repository path.';
       }
-      paths.add(normalizedPath.replaceAll('\\', '/'));
+      const repositoryPath = normalizedPath.replaceAll('\\', '/');
+      const segments = repositoryPath.split('/');
+      if (
+        segments.some((part) => !part) ||
+        segments.includes('.git') ||
+        !trackedPaths.has(repositoryPath)
+      ) {
+        return 'AUTO_FIX finding contains an invalid repository path.';
+      }
+
+      const absolutePath = resolve(repositoryRoot, repositoryPath);
+      const relativePath = relative(repositoryRoot, absolutePath).replaceAll('\\', '/');
+      if (
+        relativePath !== repositoryPath ||
+        relativePath.startsWith('../') ||
+        relativePath === '..'
+      ) {
+        return 'AUTO_FIX finding contains an invalid repository path.';
+      }
+
+      let currentPath = repositoryRoot;
+      try {
+        for (const segment of segments) {
+          currentPath = resolve(currentPath, segment);
+          if (lstatSync(currentPath).isSymbolicLink()) {
+            return 'AUTO_FIX finding contains an invalid repository path.';
+          }
+        }
+        const resolvedPath = realpathSync(absolutePath);
+        const resolvedRelativePath = relative(repositoryRoot, resolvedPath);
+        if (
+          resolvedRelativePath.startsWith('../') ||
+          resolvedRelativePath === '..' ||
+          isAbsolute(resolvedRelativePath)
+        ) {
+          return 'AUTO_FIX finding contains an invalid repository path.';
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return 'AUTO_FIX finding contains an invalid repository path.';
+        }
+        // A tracked file may be deleted in the working tree. Its existing
+        // parent was still checked above, so retain explicit deleted-file support.
+      }
+      paths.add(repositoryPath);
     }
   }
   return paths.size ? [...paths] : 'AUTO_FIX finding allowlist is empty.';
@@ -616,7 +694,15 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
   }
   if (state.branch !== branch || state.base !== base) return emptyAccounting();
 
-  if (Number.isInteger(state.cyclesUsed) && (state.cyclesUsed as number) >= 0) {
+  if (state.cyclesUsed !== undefined) {
+    if (
+      !Number.isInteger(state.cyclesUsed) ||
+      (state.cyclesUsed as number) < 0 ||
+      (state.cyclesUsed as number) > maxReviewInvocations ||
+      state.terminationReason !== undefined
+    ) {
+      throw new Error('Review accounting state is invalid; human recovery is required.');
+    }
     return { ...emptyAccounting(), reviewInvocationCount: state.cyclesUsed as number };
   }
 
@@ -624,15 +710,19 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
     !Number.isInteger(state.reviewInvocationCount) ||
     !Number.isInteger(state.autoFixCycleCount) ||
     (state.reviewInvocationCount as number) < 0 ||
+    (state.reviewInvocationCount as number) > maxReviewInvocations ||
     (state.autoFixCycleCount as number) < 0 ||
+    (state.autoFixCycleCount as number) > maxAutoFixCycles ||
     !Array.isArray(state.generalizedRuleHistory) ||
     !state.generalizedRuleHistory.every((rule) => typeof rule === 'string') ||
     !Number.isInteger(state.consecutiveRepeatCount) ||
     (state.consecutiveRepeatCount as number) < 0 ||
+    (state.consecutiveRepeatCount as number) > (state.reviewInvocationCount as number) ||
     !(
       state.lastFixChangedRepository === null || typeof state.lastFixChangedRepository === 'boolean'
     ) ||
-    !Array.isArray(state.cycleResults)
+    !Array.isArray(state.cycleResults) ||
+    !state.cycleResults.every(isReviewCycleRecord)
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -645,10 +735,46 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
     lastFixChangedRepository: state.lastFixChangedRepository as boolean | null,
     cycleResults: state.cycleResults as ReviewCycleRecord[],
   };
-  if (typeof state.terminationReason === 'string') {
+  if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
+    throw new Error('Review accounting state is invalid; human recovery is required.');
+  }
+  if (state.terminationReason !== undefined) {
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
   return accounting;
+}
+
+function isTerminationReason(value: unknown): value is TerminationReason {
+  return typeof value === 'string' && terminationReasons.includes(value as TerminationReason);
+}
+
+function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'reviewInvocation',
+    'result',
+    'classifications',
+    'generalizedRules',
+    'repositoryChanged',
+  ]);
+  return (
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    Number.isInteger(record.reviewInvocation) &&
+    (record.reviewInvocation as number) >= 1 &&
+    (record.reviewInvocation as number) <= maxReviewInvocations &&
+    typeof record.result === 'string' &&
+    reviewResults.includes(record.result as (typeof reviewResults)[number]) &&
+    Array.isArray(record.classifications) &&
+    record.classifications.every(
+      (classification) =>
+        typeof classification === 'string' &&
+        findingClassifications.includes(classification as (typeof findingClassifications)[number]),
+    ) &&
+    Array.isArray(record.generalizedRules) &&
+    record.generalizedRules.every((rule) => typeof rule === 'string') &&
+    (record.repositoryChanged === null || typeof record.repositoryChanged === 'boolean')
+  );
 }
 
 export function readReviewAccountingAtPath(
@@ -715,18 +841,17 @@ function recordReviewAccounting(
     const rules = findings
       .filter((finding) => typeof finding !== 'string')
       .map((finding) => normalizedFindingCategory(finding));
-    const nextRule = rules[0];
-    const previousRule = accounting.generalizedRuleHistory.at(-1);
+    const nextRules = [...new Set(rules)];
+    const consecutiveRepeatCount = nextRules.reduce(
+      (maximum, rule) => Math.max(maximum, consecutiveRuleCount(accounting.cycleResults, rule) + 1),
+      0,
+    );
     return {
       ...accounting,
-      generalizedRuleHistory: nextRule
-        ? [...accounting.generalizedRuleHistory, nextRule]
+      generalizedRuleHistory: rules.length
+        ? [...accounting.generalizedRuleHistory, ...rules]
         : accounting.generalizedRuleHistory,
-      consecutiveRepeatCount: nextRule
-        ? previousRule === nextRule
-          ? accounting.consecutiveRepeatCount + 1
-          : 1
-        : 0,
+      consecutiveRepeatCount,
       cycleResults: [
         ...accounting.cycleResults,
         {
@@ -739,6 +864,16 @@ function recordReviewAccounting(
       ],
     };
   });
+}
+
+function consecutiveRuleCount(cycleResults: ReviewCycleRecord[], rule: string): number {
+  let count = 0;
+  for (let index = cycleResults.length - 1; index >= 0; index -= 1) {
+    const record = cycleResults[index];
+    if (!record || !record.generalizedRules.includes(rule)) break;
+    count += 1;
+  }
+  return count;
 }
 
 function recordAutoFixAccounting(

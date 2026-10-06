@@ -253,6 +253,8 @@ function terminationMessage(reason: TerminationReason, accounting: ReviewAccount
       return 'Independent reviewer execution failed.';
     case 'HUMAN_DECISION_REQUIRED':
       return 'A finding requires a human-owned decision.';
+    default:
+      return 'Review accounting state is invalid; human recovery is required.';
   }
 }
 
