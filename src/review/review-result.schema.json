@@ -24,7 +24,7 @@
       "additionalProperties": false,
       "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
       "properties": {
-        "severity": { "const": "blocking" },
+        "severity": { "type": "string", "enum": ["blocking"] },
         "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
         "finding": { "type": "string" },
         "generalized_rule": { "type": "string" },
@@ -37,7 +37,7 @@
       "additionalProperties": false,
       "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
       "properties": {
-        "severity": { "const": "non-blocking" },
+        "severity": { "type": "string", "enum": ["non-blocking"] },
         "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
         "finding": { "type": "string" },
         "generalized_rule": { "type": "string" },
