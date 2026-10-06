@@ -14,6 +14,7 @@ import {
   parseReviewResult,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
+  terminationResult,
   requiresHumanDecision,
   validationFailure,
   type ReviewAccounting,
@@ -199,6 +200,31 @@ describe('independent review gate contract', () => {
     expect(canOpenPullRequest(true, result)).toBe(false);
   });
 
+  it('uses structured findings on failure and escalation paths', () => {
+    const accounting: ReviewAccounting = {
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+    };
+
+    const results = [
+      reviewerInvocationFailure('reviewer unavailable'),
+      validationFailure('validation failed'),
+      reviewCycleLimitExceeded(maxReviewCycles + 1),
+      terminationResult('BLOCKED', accounting, ['legacy string finding']),
+    ];
+
+    for (const result of results) {
+      expect(result.blockingFindings.every((finding) => typeof finding !== 'string')).toBe(true);
+    }
+  });
+
   it('allows only explicit AUTO_FIX findings to continue without human approval', () => {
     const autoFix = parseReviewResult(
       JSON.stringify({
@@ -301,6 +327,9 @@ describe('independent review runner control flow', () => {
     overrides: Partial<ReviewRunnerDependencies> = {},
   ): ReviewRunnerDependencies {
     let accounting: ReviewAccounting = {
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
       reviewInvocationCount: 0,
       autoFixCycleCount: 0,
       generalizedRuleHistory: [] as string[],
@@ -619,6 +648,27 @@ describe('independent review runner control flow', () => {
     expect(fixes).toBe(0);
   });
 
+  it('fails closed with a structured result when accounting persistence fails', () => {
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        recordReview: () => {
+          throw new Error('state write failed');
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.executionStatus).toBe('FAILED');
+    expect(result.escalationRequired).toBe(true);
+    expect(result.blockingFindings).toHaveLength(1);
+    expect(result.blockingFindings[0]).toMatchObject({
+      classification: 'BLOCKED',
+      generalized_rule: expect.stringContaining('reviewer execution'),
+    });
+  });
+
   it('stops the AUTO_FIX loop when the bounded cycle limit is reached', () => {
     let fixes = 0;
     let reviews = 0;
@@ -640,7 +690,8 @@ describe('independent review runner control flow', () => {
     expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
     expect(
       result.blockingFindings.some(
-        (finding) => typeof finding === 'string' && finding.includes('AUTO_FIX cycle limit'),
+        (finding) =>
+          typeof finding !== 'string' && finding.finding.includes('AUTO_FIX cycle limit'),
       ),
     ).toBe(true);
     expect(fixes).toBe(maxAutoFixCycles);
@@ -770,6 +821,9 @@ describe('independent review runner control flow', () => {
   it('does not run another review after a persisted terminal state', () => {
     let invoked = 0;
     const accounting: ReviewAccounting = {
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
       reviewInvocationCount: 3,
       autoFixCycleCount: 2,
       generalizedRuleHistory: ['same rule'],
@@ -797,6 +851,9 @@ describe('independent review runner control flow', () => {
   it('stops at the independent review invocation limit separately from AUTO_FIX cycles', () => {
     let reviews = 0;
     const limitAccounting = {
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
       reviewInvocationCount: 11,
       autoFixCycleCount: 0,
       generalizedRuleHistory: [] as string[],
@@ -863,8 +920,10 @@ describe('review cycle state', () => {
       expect(
         readReviewAccountingAtPath(statePath, 'feat/issue-29-autonomous-issue-to-pr', 'main'),
       ).toMatchObject({
-        reviewInvocationCount: 6,
-        autoFixCycleCount: 1,
+        legacyReviewInvocations: 6,
+        legacyAutoFixCycles: 1,
+        reviewInvocationCount: 0,
+        autoFixCycleCount: 0,
         generalizedRuleHistory: [],
       });
     } finally {
@@ -888,6 +947,41 @@ describe('review cycle state', () => {
     }
   });
 
+  it('resumes current epoch counts separately from retained legacy history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feat/issue-29-autonomous-issue-to-pr',
+        base: 'main',
+        legacyReviewInvocations: 6,
+        legacyAutoFixCycles: 1,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 6,
+        autoFixCycleCount: 5,
+        generalizedRuleHistory: ['legacy rule'],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: true,
+        cycleResults: [],
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        readReviewAccountingAtPath(statePath, 'feat/issue-29-autonomous-issue-to-pr', 'main'),
+      ).toMatchObject({
+        legacyReviewInvocations: 6,
+        reviewInvocationCount: 6,
+        legacyAutoFixCycles: 1,
+        autoFixCycleCount: 5,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('creates initial state only when the state file is absent', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
@@ -897,6 +991,9 @@ describe('review cycle state', () => {
       expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual({
         branch: 'feature/review',
         base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
         reviewInvocationCount: 1,
         autoFixCycleCount: 0,
         generalizedRuleHistory: [],
@@ -971,6 +1068,9 @@ describe('review cycle state', () => {
       JSON.stringify({
         branch: 'feature/review',
         base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
         reviewInvocationCount: maxReviewCycles,
         autoFixCycleCount: 0,
         generalizedRuleHistory: [],

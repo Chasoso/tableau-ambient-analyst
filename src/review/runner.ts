@@ -38,6 +38,7 @@ const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
 const legacyIssue29Base = 'main';
 const legacyIssue29ReviewInvocations = 6;
 const legacyIssue29AutoFixCycles = 1;
+const currentAccountingEpoch = 'issue-29-accounting-v2';
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -410,6 +411,22 @@ export function runReviewControlFlow(
  * caller supplies the in-scope implementer that applies an explicit AUTO_FIX.
  */
 export function runBoundedReviewFixLoop(
+  input: IndependentReviewInput,
+  dependencies: ReviewRunnerDependencies,
+  applyAutoFix: ApplyAutoFix,
+): ReviewGateResult {
+  try {
+    return runBoundedReviewFixLoopUnsafe(input, dependencies, applyAutoFix);
+  } catch (error) {
+    return reviewerInvocationFailure(
+      `Review accounting persistence failed closed: ${
+        error instanceof Error ? error.message : 'unknown state error'
+      }`,
+    );
+  }
+}
+
+function runBoundedReviewFixLoopUnsafe(
   input: IndependentReviewInput,
   dependencies: ReviewRunnerDependencies,
   applyAutoFix: ApplyAutoFix,
@@ -908,6 +925,9 @@ function resolveReviewStatePath(cwd: string): string | undefined {
 
 function emptyAccounting(): ReviewAccounting {
   return {
+    legacyReviewInvocations: 0,
+    legacyAutoFixCycles: 0,
+    accountingEpochStart: currentAccountingEpoch,
     reviewInvocationCount: 0,
     autoFixCycleCount: 0,
     generalizedRuleHistory: [],
@@ -942,14 +962,17 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
     }
     return {
       ...emptyAccounting(),
-      reviewInvocationCount: legacyIssue29ReviewInvocations,
-      autoFixCycleCount: legacyIssue29AutoFixCycles,
+      legacyReviewInvocations: legacyIssue29ReviewInvocations,
+      legacyAutoFixCycles: legacyIssue29AutoFixCycles,
     };
   }
 
   if (
     !Number.isInteger(state.reviewInvocationCount) ||
     !Number.isInteger(state.autoFixCycleCount) ||
+    !Number.isInteger(state.legacyReviewInvocations) ||
+    !Number.isInteger(state.legacyAutoFixCycles) ||
+    typeof state.accountingEpochStart !== 'string' ||
     (state.reviewInvocationCount as number) < 0 ||
     (state.reviewInvocationCount as number) > maxReviewInvocations ||
     (state.autoFixCycleCount as number) < 0 ||
@@ -969,6 +992,9 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
   }
 
   const accounting: ReviewAccounting = {
+    legacyReviewInvocations: state.legacyReviewInvocations as number,
+    legacyAutoFixCycles: state.legacyAutoFixCycles as number,
+    accountingEpochStart: state.accountingEpochStart as string,
     reviewInvocationCount: state.reviewInvocationCount as number,
     autoFixCycleCount: state.autoFixCycleCount as number,
     generalizedRuleHistory: state.generalizedRuleHistory as string[],

@@ -40,6 +40,9 @@ export type ReviewCycleRecord = {
 };
 
 export type ReviewAccounting = {
+  legacyReviewInvocations: number;
+  legacyAutoFixCycles: number;
+  accountingEpochStart: string;
   reviewInvocationCount: number;
   autoFixCycleCount: number;
   generalizedRuleHistory: string[];
@@ -159,7 +162,16 @@ export function parseReviewResult(raw: string): ReviewGateResult {
 export function reviewerInvocationFailure(message: string): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
-    blockingFindings: [`Reviewer invocation failed: ${message}`],
+    blockingFindings: [
+      structuredFinding(
+        'blocking',
+        'BLOCKED',
+        message,
+        'reviewer execution or prerequisite failure',
+        [],
+        'Provide the missing reviewer prerequisite or recover the reviewer process.',
+      ),
+    ],
     nonBlockingFindings: [],
     escalationRequired: true,
     executionStatus: 'FAILED',
@@ -169,7 +181,16 @@ export function reviewerInvocationFailure(message: string): ReviewGateResult {
 export function validationFailure(message: string): ReviewGateResult {
   return {
     result: 'CHANGES_REQUIRED',
-    blockingFindings: [`Deterministic validation failed: ${message}`],
+    blockingFindings: [
+      structuredFinding(
+        'blocking',
+        'AUTO_FIX',
+        message,
+        'deterministic validation must pass before review',
+        [],
+        'Fix the validation failure and rerun deterministic validation.',
+      ),
+    ],
     nonBlockingFindings: [],
     escalationRequired: false,
   };
@@ -179,7 +200,14 @@ export function reviewCycleLimitExceeded(cycle: number): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
     blockingFindings: [
-      `Review invocation ${cycle} exceeds the maximum of ${maxReviewInvocations}.`,
+      structuredFinding(
+        'blocking',
+        'BLOCKED',
+        `Review invocation ${cycle} exceeds the maximum of ${maxReviewInvocations}.`,
+        'bounded review execution must stop at its configured invocation limit',
+        [],
+        'Report the accounting and obtain an authorized continuation or scope decision.',
+      ),
     ],
     nonBlockingFindings: [],
     escalationRequired: true,
@@ -194,9 +222,25 @@ export function terminationResult(
   message?: string,
 ): ReviewGateResult {
   const detail = message ?? terminationMessage(reason, accounting);
+  const classification: FindingClassification =
+    reason === 'HUMAN_DECISION_REQUIRED' ? 'HUMAN_DECISION_REQUIRED' : 'BLOCKED';
   return {
     result: 'HUMAN_DECISION_REQUIRED',
-    blockingFindings: [...unresolvedFindings, detail],
+    blockingFindings: [
+      ...unresolvedFindings.map((finding) =>
+        typeof finding === 'string'
+          ? structuredFinding(
+              'blocking',
+              classification,
+              finding,
+              `termination/${reason}`,
+              [],
+              detail,
+            )
+          : finding,
+      ),
+      structuredFinding('blocking', classification, detail, `termination/${reason}`, [], detail),
+    ],
     nonBlockingFindings: [],
     escalationRequired: true,
     accounting,
@@ -258,6 +302,24 @@ function terminationMessage(reason: TerminationReason, accounting: ReviewAccount
   }
 }
 
+function structuredFinding(
+  severity: ReviewFinding['severity'],
+  classification: FindingClassification,
+  finding: string,
+  generalized_rule: string,
+  affected_locations: string[],
+  recommended_fix: string,
+): ReviewFinding {
+  return {
+    severity,
+    classification,
+    finding,
+    generalized_rule,
+    affected_locations,
+    recommended_fix,
+  };
+}
+
 export function requiresHumanDecision(review: ReviewGateResult): boolean {
   const findings = [...review.blockingFindings, ...review.nonBlockingFindings];
   return (
@@ -274,7 +336,16 @@ export function requiresHumanDecision(review: ReviewGateResult): boolean {
 function malformedResult(message: string): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
-    blockingFindings: [message],
+    blockingFindings: [
+      structuredFinding(
+        'blocking',
+        'BLOCKED',
+        message,
+        'review result must match the structured gate contract',
+        [],
+        'Fix the reviewer output or schema contract and rerun the independent review.',
+      ),
+    ],
     nonBlockingFindings: [],
     escalationRequired: true,
     executionStatus: 'FAILED',

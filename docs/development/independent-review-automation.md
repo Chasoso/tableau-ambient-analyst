@@ -142,11 +142,18 @@ rename, and an existing malformed or invalid state fails closed with
 `HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
 
 The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
-known prior state of 6 invocations and 1 completed AUTO_FIX is carried into the
-new accounting state. The legacy state did not retain per-cycle rule history,
-so that history starts empty after this migration. Any other legacy shape is
-rejected as unrecoverable rather than resetting or guessing the AUTO_FIX
-counter; this preserves the configured total bound across restarts.
+known prior state of 6 invocations and 1 completed AUTO_FIX is retained as
+legacy audit history. It does not consume the new accounting epoch's limits.
+The current epoch is explicit (`issue-29-accounting-v2`) and stores its own
+review invocation count, AUTO_FIX count, generalized-rule history, and cycle
+records. When the model was activated for the in-progress Issue #29 run, the
+current epoch resumed at 6 review invocations and 5 AUTO_FIX cycles; it was not
+reset to zero and the legacy six were not double-counted. Legacy termination
+metadata remains auditable but cannot block the current epoch. The legacy state
+did not retain per-cycle rule history, so that history starts empty after this
+migration. Any other legacy shape is rejected as unrecoverable rather than
+resetting or guessing the AUTO_FIX counter; this preserves the configured total
+bound across restarts.
 
 ## Gate result contract
 

@@ -45,7 +45,9 @@ Missing credentials, services, fixtures, or repository prerequisites are
 moving. The default limits are 12 independent review invocations and 8
 AUTO_FIX cycles. Track them separately. Escalate after the same normalized
 generalized rule repeats three times, or when an AUTO_FIX reports no material
-repository change. On any limit or convergence stop, report unresolved
+repository change. Legacy review history is retained for audit but is separate
+from the current accounting epoch and does not consume its limits or
+convergence history. On any limit or convergence stop, report unresolved
 findings, repeated categories, per-cycle results, and why convergence failed.
 
 The PR gate requires deterministic validation, a fresh independent `PASS`, no
