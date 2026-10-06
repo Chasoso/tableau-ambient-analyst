@@ -49,6 +49,7 @@ export type ReviewAccounting = {
   consecutiveRepeatCount: number;
   lastFixChangedRepository: boolean | null;
   cycleResults: ReviewCycleRecord[];
+  terminationHistory?: TerminationReason[];
   terminationReason?: TerminationReason;
 };
 
