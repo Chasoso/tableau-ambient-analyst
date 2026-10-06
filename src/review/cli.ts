@@ -1,5 +1,6 @@
 import {
   resolveWorkingDirectory,
+  runIssueToPullRequest,
   runIndependentReview,
   type IndependentReviewInput,
 } from './runner.js';
@@ -24,7 +25,8 @@ const input: IndependentReviewInput = {
   issue: requiredArgument('issue'),
 };
 
-const result = runIndependentReview(input);
+const reviewOnly = rawArguments.includes('--review-only');
+const result = reviewOnly ? runIndependentReview(input) : runIssueToPullRequest(input);
 console.log(JSON.stringify(result, null, 2));
 
 if (result.result !== 'PASS') {

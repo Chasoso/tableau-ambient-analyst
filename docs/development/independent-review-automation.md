@@ -91,27 +91,37 @@ additional credential, or new infrastructure was investigated or introduced.
 
 ## Selected minimum path
 
-The repository provides an opt-in local command:
+The repository provides an opt-in local Issue-to-PR command:
 
 ```bash
 npm run review:independent -- \
-  --issue 26 \
+  --issue 29 \
   --base main
 ```
 
-The command builds the small runner, re-runs deterministic validation, fetches
-the Issue body, and starts a fresh read-only Codex process. It exits non-zero
-unless the reviewer returns a valid `PASS` result. The runner stores only a
+The command builds the small runner, fetches the Issue body, requires a clean
+`main` checkout, creates a deterministic feature branch, and starts a fresh
+workspace-write Codex implementer. It validates and commits the implementation,
+then starts the bounded independent read-only review/fix loop. Only after a
+validated `PASS` does it push the feature branch and create a pull request with
+`Closes #<issue>`. It never merges the pull request. The runner stores only a
 small branch/base accounting state in the local, untracked
 `.git/tableau-ambient-review-state.json` file and stops after 12 review
 invocations or 8 AUTO_FIX cycles across process restarts. This command is not
 called by `npm run validate` and is not added to
 ordinary CI. Before validation or reviewer invocation, the runner requires a
-non-base feature branch, an existing base ref, a clean committed working tree,
-and a non-empty diff against that base. This prevents uncommitted or omitted
-working-tree changes from being reported as a complete review.
+clean base branch and an existing base ref. This prevents uncommitted changes
+from entering the autonomous handoff.
 
-The runner is a bounded review/fix loop, not a general workflow engine. When
+For an already-prepared committed feature branch, the review-only mode remains
+available:
+
+```bash
+npm run review:independent -- --review-only --issue 29 --base main
+```
+
+The runner is a bounded Issue-to-PR workflow with a bounded review/fix loop.
+When
 all blocking findings are structured `AUTO_FIX`, a separate workspace-write
 Codex implementer applies only those deterministic fixes, creates a
 Conventional Commit, and returns to validation and a fresh read-only review.

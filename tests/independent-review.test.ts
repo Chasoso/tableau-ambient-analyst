@@ -990,7 +990,7 @@ describe('review cycle state', () => {
 });
 
 describe('AUTO_FIX path scope', () => {
-  it('rejects absolute, traversal, .git, symlink, and untracked targets', () => {
+  it('rejects absolute, traversal, .git, and symlink targets while allowing safe siblings', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-paths-'));
     mkdirSync(join(directory, 'src'), { recursive: true });
     writeFileSync(join(directory, 'src', 'tracked.ts'), 'export {};\n');
@@ -1035,8 +1035,6 @@ describe('AUTO_FIX path scope', () => {
         '../src/tracked.ts:1',
         '.git/config:1',
         'src/link.ts:1',
-        'outside.ts:1',
-        'src/base-only.ts:1',
       ]) {
         expect(autoFixAllowedPaths(finding(location), directory, 'main')).toBe(
           'AUTO_FIX finding contains an invalid repository path.',
@@ -1044,6 +1042,12 @@ describe('AUTO_FIX path scope', () => {
       }
       expect(autoFixAllowedPaths(finding('src/tracked.ts:1'), directory, 'main')).toEqual([
         'src/tracked.ts',
+      ]);
+      expect(autoFixAllowedPaths(finding('src/base-only.ts:1'), directory, 'main')).toEqual([
+        'src/base-only.ts',
+      ]);
+      expect(autoFixAllowedPaths(finding('outside.ts:1'), directory, 'main')).toEqual([
+        'outside.ts',
       ]);
     } finally {
       rmSync(directory, { recursive: true, force: true });

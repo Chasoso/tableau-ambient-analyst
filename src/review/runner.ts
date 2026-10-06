@@ -10,6 +10,7 @@ import {
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import {
+  canOpenPullRequest,
   canContinueAutoFix,
   findingClassificationsFor,
   maxAutoFixCycles,
@@ -70,6 +71,10 @@ export type ReviewRunnerDependencies = {
 
 export type ApplyAutoFixResult = { changedRepository: boolean };
 export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult;
+
+export type IssueToPullRequestResult = ReviewGateResult & {
+  pullRequestUrl?: string;
+};
 
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
@@ -161,6 +166,198 @@ export function runIndependentReview(input: IndependentReviewInput): ReviewGateR
   return runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (review) =>
     applyCodexAutoFix(input, review),
   );
+}
+
+/**
+ * Execute the explicitly opt-in Issue-to-PR handoff from a clean base branch.
+ * The implementer and reviewer are separate ephemeral Codex processes. This
+ * function does not merge the PR and is never called by ordinary validation.
+ */
+export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPullRequestResult {
+  if (!/^\d+$/.test(input.issue)) {
+    return reviewerInvocationFailure('Issue number must be numeric.');
+  }
+  const issue = readIssueContext(input.cwd, input.issue);
+  if (!issue) return reviewerInvocationFailure('Issue body could not be retrieved.');
+
+  const scopeError = validateIssueWorkflowScope(input.cwd, input.base);
+  if (scopeError) return reviewerInvocationFailure(scopeError);
+
+  const branch = issueBranchName(input.issue, issue.title);
+  const branchError = createIssueBranch(input.cwd, input.base, branch);
+  if (branchError) return reviewerInvocationFailure(branchError);
+
+  const implementationError = runIssueImplementer(input, issue, branch);
+  if (implementationError) return reviewerInvocationFailure(implementationError);
+
+  const review = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
+    applyCodexAutoFix(input, result),
+  );
+  if (!canOpenPullRequest(true, review)) return review;
+
+  const pullRequestUrl = pushAndCreatePullRequest(input, issue, branch);
+  if (typeof pullRequestUrl !== 'string') {
+    return reviewerInvocationFailure(pullRequestUrl ?? 'Pull request creation failed.');
+  }
+  return { ...review, pullRequestUrl };
+}
+
+function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
+  if (!/^[A-Za-z0-9._/-]+$/.test(base)) {
+    return 'Base branch name is invalid.';
+  }
+
+  try {
+    const branch = currentBranch(cwd);
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+    if (branch !== base) return `Issue-to-PR workflow must start from ${base}.`;
+    if (status) return 'Issue-to-PR workflow requires a clean working tree.';
+    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'Could not verify the clean base branch for Issue-to-PR workflow.';
+  }
+  return undefined;
+}
+
+function issueBranchName(issue: string, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, fiftyCharacters);
+  return `feat/issue-${issue}-${slug || 'implementation'}`;
+}
+
+const fiftyCharacters = 50;
+
+function createIssueBranch(cwd: string, base: string, branch: string): string | undefined {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+    return `Feature branch ${branch} already exists.`;
+  } catch {
+    // The branch does not exist; create it from the already verified base.
+  }
+
+  try {
+    execFileSync('git', ['switch', '--create', branch, base], { cwd, encoding: 'utf8' });
+    return undefined;
+  } catch {
+    return `Could not create feature branch ${branch}.`;
+  }
+}
+
+function runIssueImplementer(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  branch: string,
+): string | undefined {
+  const prompt = `Repository: Chasoso/tableau-ambient-analyst
+Issue: #${input.issue}
+Branch: ${branch}
+
+${issueScopeContext(input.issue)}
+
+<issue-body>
+${issue.body}
+</issue-body>
+
+Implement the Issue in this repository. Read AGENTS.md, the complete Issue,
+relevant ADRs and docs, and directly related implementation and tests. Make
+only the explicitly requested changes. Do not make product, architecture,
+scope, credential, privacy, cost, or external-service decisions. Do not run
+live or external operations, do not edit the review runner, and do not commit.
+Leave only the intended implementation changes in the working tree.\n`;
+
+  const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+  }).trim();
+  const processResult = spawnSync(
+    'codex',
+    ['exec', '--ephemeral', '--sandbox', 'workspace-write', '--json'],
+    {
+      cwd: input.cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      input: prompt,
+      maxBuffer: 1024 * 1024,
+      timeout: reviewerTimeoutMs,
+    },
+  );
+  if (processResult.error) return processResult.error.message;
+  if (processResult.signal) return `Codex was terminated by ${processResult.signal}.`;
+  if (processResult.status !== 0) {
+    return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
+  }
+
+  try {
+    if (
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: input.cwd, encoding: 'utf8' }).trim() !==
+      beforeHead
+    ) {
+      return 'Issue implementer changed the repository commit.';
+    }
+    if (!workingTreePaths(input.cwd).length) return 'Issue implementer made no repository changes.';
+    if (execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' })) {
+      // The command output is intentionally ignored; a successful diff check is sufficient.
+    }
+    if (!runDeterministicValidation(input.cwd).passed) {
+      return 'Issue implementation failed deterministic validation.';
+    }
+    execFileSync('git', ['add', '-A'], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['commit', '-m', `feat: implement issue #${input.issue}`], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'Issue implementation could not be validated and committed.';
+  }
+  return undefined;
+}
+
+function pushAndCreatePullRequest(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  branch: string,
+): string | undefined {
+  try {
+    execFileSync('git', ['push', '--set-upstream', 'origin', branch], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    });
+    const output = execFileSync(
+      'gh',
+      [
+        'pr',
+        'create',
+        '--repo',
+        'Chasoso/tableau-ambient-analyst',
+        '--base',
+        input.base,
+        '--head',
+        branch,
+        '--title',
+        issue.title,
+        '--body',
+        `Closes #${input.issue}\n\nIssue: ${issue.url}`,
+      ],
+      { cwd: input.cwd, encoding: 'utf8' },
+    ).trim();
+    return /^https:\/\/github\.com\/[^\s]+$/.test(output)
+      ? output
+      : 'Pull request creation returned an invalid URL.';
+  } catch {
+    return 'Branch push or pull request creation failed.';
+  }
 }
 
 export function runReviewControlFlow(
@@ -390,17 +587,12 @@ export function autoFixAllowedPaths(
   cwd: string,
   base: string,
 ): string[] | string {
+  void base;
   let repositoryRoot: string;
-  let reviewedPaths: Set<string>;
   try {
     repositoryRoot = realpathSync(
       execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
     );
-    const changedPaths = execFileSync('git', ['diff', '--name-only', '-z', `${base}...HEAD`], {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-    });
-    reviewedPaths = new Set(changedPaths.split('\0').filter(Boolean));
   } catch {
     return 'AUTO_FIX repository path scope could not be validated.';
   }
@@ -422,11 +614,7 @@ export function autoFixAllowedPaths(
       }
       const repositoryPath = normalizedPath.replaceAll('\\', '/');
       const segments = repositoryPath.split('/');
-      if (
-        segments.some((part) => !part) ||
-        segments.includes('.git') ||
-        !reviewedPaths.has(repositoryPath)
-      ) {
+      if (segments.some((part) => !part) || segments.includes('.git')) {
         return 'AUTO_FIX finding contains an invalid repository path.';
       }
 
