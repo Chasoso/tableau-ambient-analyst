@@ -50,7 +50,8 @@ export type ReviewAccounting = {
   lastFixChangedRepository: boolean | null;
   cycleResults: ReviewCycleRecord[];
   terminationHistory?: TerminationReason[];
-  terminationReason?: TerminationReason;
+  resumeAfterPolicyChange?: string | undefined;
+  terminationReason?: TerminationReason | undefined;
 };
 
 export type ReviewGateResult = {

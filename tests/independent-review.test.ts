@@ -27,6 +27,7 @@ import {
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runReviewControlFlow,
+  validateAutoFixChanges,
   verifyImplementerSelfReview,
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
@@ -202,6 +203,7 @@ describe('independent review gate contract', () => {
               unfinishedWork: true,
             },
           },
+          changes: [{ path: 'src/example.ts', reason: 'affected_location' }],
         }),
       },
     });
@@ -395,6 +397,7 @@ describe('independent review runner control flow', () => {
 
   function dependencies(
     overrides: Partial<ReviewRunnerDependencies> = {},
+    initialAccounting: Partial<ReviewAccounting> = {},
   ): ReviewRunnerDependencies {
     let accounting: ReviewAccounting = {
       legacyReviewInvocations: 0,
@@ -406,6 +409,7 @@ describe('independent review runner control flow', () => {
       consecutiveRepeatCount: 0,
       lastFixChangedRepository: null as boolean | null,
       cycleResults: [],
+      ...initialAccounting,
     };
     return {
       validateScope: () => undefined,
@@ -436,6 +440,7 @@ describe('independent review runner control flow', () => {
           let count = 0;
           for (let index = accounting.cycleResults.length - 1; index >= 0; index -= 1) {
             const record = accounting.cycleResults[index];
+            if (record?.repositoryChanged === true) break;
             if (!record || !record.generalizedRules.includes(rule)) break;
             count += 1;
           }
@@ -466,6 +471,11 @@ describe('independent review runner control flow', () => {
           ...accounting,
           autoFixCycleCount: accounting.autoFixCycleCount + (changedRepository ? 1 : 0),
           lastFixChangedRepository: changedRepository,
+          cycleResults: accounting.cycleResults.map((record, index) =>
+            index === accounting.cycleResults.length - 1
+              ? { ...record, repositoryChanged: changedRepository }
+              : record,
+          ),
         };
         return accounting;
       },
@@ -806,7 +816,7 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.consecutiveRepeatCount).toBe(0);
   });
 
-  it('escalates after the same generalized rule repeats three times', () => {
+  it('allows the same generalized rule when each cycle makes progress', () => {
     let fixes = 0;
     const result = runBoundedReviewFixLoop(
       input,
@@ -818,9 +828,9 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
-    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
-    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
-    expect(fixes).toBe(2);
+    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
+    expect(fixes).toBe(maxAutoFixCycles);
   });
 
   it('tracks a repeated generalized rule when it is not the first finding', () => {
@@ -860,9 +870,41 @@ describe('independent review runner control flow', () => {
       () => ({ changedRepository: true }),
     );
 
+    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
+    expect(reviews).toBe(maxAutoFixCycles + 1);
+  });
+
+  it('escalates repeated rules only when prior cycles made no progress', () => {
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies(
+        { invokeReviewer: () => autoFixReview('same concrete issue') },
+        {
+          reviewInvocationCount: 2,
+          cycleResults: [
+            {
+              reviewInvocation: 1,
+              result: 'CHANGES_REQUIRED',
+              classifications: ['AUTO_FIX'],
+              generalizedRules: ['same concrete issue'],
+              repositoryChanged: null,
+            },
+            {
+              reviewInvocation: 2,
+              result: 'CHANGES_REQUIRED',
+              classifications: ['AUTO_FIX'],
+              generalizedRules: ['same concrete issue'],
+              repositoryChanged: null,
+            },
+          ],
+        },
+      ),
+      () => ({ changedRepository: true }),
+    );
+
     expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
     expect(result.accounting?.consecutiveRepeatCount).toBe(3);
-    expect(reviews).toBe(3);
   });
 
   it('escalates when AUTO_FIX makes no repository change', () => {
@@ -1164,8 +1206,11 @@ describe('AUTO_FIX path scope', () => {
   it('rejects absolute, traversal, .git, and symlink targets while allowing safe siblings', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-paths-'));
     mkdirSync(join(directory, 'src'), { recursive: true });
+    mkdirSync(join(directory, 'tests'), { recursive: true });
     writeFileSync(join(directory, 'src', 'tracked.ts'), 'export {};\n');
     writeFileSync(join(directory, 'src', 'base-only.ts'), 'export {};\n');
+    writeFileSync(join(directory, 'src', 'helper.ts'), 'export {};\n');
+    writeFileSync(join(directory, 'tests', 'related.test.ts'), 'test();\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
     execFileSync('git', ['add', '.'], { cwd: directory });
@@ -1220,6 +1265,18 @@ describe('AUTO_FIX path scope', () => {
       expect(autoFixAllowedPaths(finding('outside.ts:1'), directory, 'main')).toBe(
         'AUTO_FIX finding path is outside the Issue-scoped file set.',
       );
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+          { path: 'tests/related.test.ts', reason: 'direct_test' },
+          { path: 'src/helper.ts', reason: 'required_supporting_change' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'src/base-only.ts', reason: 'affected_location' },
+        ]),
+      ).toContain('no valid bounded reason');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

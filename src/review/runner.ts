@@ -68,9 +68,22 @@ export type ReviewRunnerDependencies = {
   recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
   recordTermination: (cwd: string, base: string, reason: TerminationReason) => ReviewAccounting;
+  recordResume?: (cwd: string, base: string) => ReviewAccounting;
 };
 
-export type ApplyAutoFixResult = { changedRepository: boolean };
+export const autoFixChangeReasons = [
+  'affected_location',
+  'direct_test',
+  'generalized_rule_sibling',
+  'required_supporting_change',
+  'required_doc_update',
+] as const;
+export type AutoFixChangeReason = (typeof autoFixChangeReasons)[number];
+export type AutoFixChangedFile = { path: string; reason: AutoFixChangeReason };
+export type ApplyAutoFixResult = {
+  changedRepository: boolean;
+  changedFiles?: AutoFixChangedFile[];
+};
 export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult;
 
 export type IssueToPullRequestResult = ReviewGateResult & {
@@ -89,6 +102,11 @@ type ImplementerSelfReview = {
   completed: boolean;
   blockingIssues: string[];
   checks: Record<(typeof requiredSelfReviewChecks)[number], boolean>;
+};
+
+type ImplementerReport = {
+  selfReview: ImplementerSelfReview;
+  changes: AutoFixChangedFile[];
 };
 
 export function buildReviewerPrompt(
@@ -296,7 +314,19 @@ Before validation or committing, perform the repository-mandated self-review.
 Review the complete diff and verify scope, secrets, documentation consistency,
 and unfinished work. Resolve deterministic issues that are within the Issue
 scope. If any blocking issue remains, report it and stop; the parent workflow
-will fail closed. Your final response must contain only this JSON object:
+will fail closed. For every changed file, report exactly one bounded reason in
+the changes array; do not include files that you did not change:
+
+  affected_location | direct_test | generalized_rule_sibling |
+  required_supporting_change | required_doc_update
+
+affected_location is for a reviewer-reported location. direct_test is for
+a deterministic test of the changed behavior. generalized_rule_sibling is
+for a sibling explicitly covered by the reviewer's generalized rule.
+required_supporting_change and required_doc_update are only for a
+mechanically necessary helper/configuration or documentation update.
+
+Your final response must contain only this JSON object:
 {
   "selfReview": {
     "completed": true,
@@ -308,7 +338,12 @@ will fail closed. Your final response must contain only this JSON object:
       "documentationConsistency": true,
       "unfinishedWork": true
     }
-  }
+  },
+  "changes": [
+      { "path": "src/example.ts", "reason": "affected_location" },
+      { "path": "tests/example.test.ts", "reason": "direct_test" }
+  ]
+}
 }
 Set completed to false or list every remaining blocking issue when the
 self-review cannot pass. Do not claim a check passed unless you performed it.
@@ -343,8 +378,8 @@ self-review cannot pass. Do not claim a check passed unless you performed it.
     return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
   }
 
-  const selfReviewError = verifyImplementerSelfReview(processResult.stdout);
-  if (selfReviewError) return selfReviewError;
+  const report = parseImplementerReport(processResult.stdout);
+  if (typeof report === 'string') return report;
 
   try {
     if (currentBranch(input.cwd) !== intendedBranch) {
@@ -375,6 +410,11 @@ self-review cannot pass. Do not claim a check passed unless you performed it.
 }
 
 export function verifyImplementerSelfReview(output: string): string | undefined {
+  const report = parseImplementerReport(output);
+  return typeof report === 'string' ? report : undefined;
+}
+
+function parseImplementerReport(output: string): ImplementerReport | string {
   const finalMessage = extractFinalReviewerMessage(output);
   if (!finalMessage) return 'Issue implementer did not return a self-review.';
 
@@ -405,7 +445,28 @@ export function verifyImplementerSelfReview(output: string): string | undefined 
   ) {
     return 'Issue implementer self-review did not verify every required check.';
   }
-  return undefined;
+  if (!Array.isArray(parsed.changes) || parsed.changes.length === 0) {
+    return 'Issue implementer did not report bounded change reasons.';
+  }
+  const changes: AutoFixChangedFile[] = [];
+  for (const change of parsed.changes) {
+    if (
+      !isRecord(change) ||
+      typeof change.path !== 'string' ||
+      typeof change.reason !== 'string' ||
+      !autoFixChangeReasons.includes(change.reason as AutoFixChangeReason)
+    ) {
+      return 'Issue implementer reported an invalid bounded change reason.';
+    }
+    changes.push({
+      path: change.path,
+      reason: change.reason as AutoFixChangeReason,
+    });
+  }
+  if (new Set(changes.map((change) => change.path)).size !== changes.length) {
+    return 'Issue implementer reported duplicate bounded change paths.';
+  }
+  return { selfReview: selfReview as ImplementerSelfReview, changes };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -513,7 +574,15 @@ function runBoundedReviewFixLoopUnsafe(
     return reviewerInvocationFailure(initialAccounting);
   }
   if (initialAccounting.terminationReason) {
-    return terminationResult(initialAccounting.terminationReason, initialAccounting);
+    if (
+      initialAccounting.terminationReason === 'NO_PROGRESS' &&
+      initialAccounting.resumeAfterPolicyChange === 'issue-29-bounded-scope-v3' &&
+      dependencies.recordResume
+    ) {
+      dependencies.recordResume(input.cwd, input.base);
+    } else {
+      return terminationResult(initialAccounting.terminationReason, initialAccounting);
+    }
   }
   for (;;) {
     const review = runReviewControlFlow(input, dependencies);
@@ -573,8 +642,9 @@ function runBoundedReviewFixLoopUnsafe(
       );
     }
     if (typeof fixResult === 'string') {
-      accounting = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
-      return terminationResult('NO_PROGRESS', accounting, review.blockingFindings, fixResult);
+      const reason = fixResult.startsWith('BLOCKED:') ? 'BLOCKED' : 'NO_PROGRESS';
+      accounting = dependencies.recordTermination(input.cwd, input.base, reason);
+      return terminationResult(reason, accounting, review.blockingFindings, fixResult);
     }
 
     dependencies.recordAutoFix(input.cwd, input.base, fixResult.changedRepository);
@@ -592,7 +662,7 @@ function applyCodexAutoFix(
   if (!canContinueAutoFix(review)) return 'Review was not eligible for AUTO_FIX.';
 
   const allowedPaths = autoFixAllowedPaths(review, input.cwd, input.base);
-  if (typeof allowedPaths === 'string') return allowedPaths;
+  if (typeof allowedPaths === 'string') return `BLOCKED: ${allowedPaths}`;
 
   const intendedBranch = currentBranch(input.cwd);
   if (!intendedBranch || intendedBranch === 'unknown-branch') {
@@ -652,6 +722,8 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
   if (processResult.status !== 0) {
     return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
   }
+  const report = parseImplementerReport(processResult.stdout);
+  if (typeof report === 'string') return report;
 
   let changedPaths: string[];
   try {
@@ -668,8 +740,14 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
     return 'AUTO_FIX post-fix repository snapshot could not be captured.';
   }
   if (!changedPaths.length) return 'AUTO_FIX implementer made no repository changes.';
-  if (changedPaths.some((path) => !allowedPaths.includes(path))) {
-    return 'AUTO_FIX implementer changed files outside the finding allowlist.';
+  const scopeError = validateAutoFixChanges(review, input.cwd, input.base, report.changes);
+  if (scopeError) return `BLOCKED: ${scopeError}`;
+  const declaredPaths = report.changes.map((change) => change.path);
+  if (
+    changedPaths.some((path) => !declaredPaths.includes(path)) ||
+    declaredPaths.some((path) => !changedPaths.includes(path))
+  ) {
+    return 'AUTO_FIX implementer changed files without matching bounded reasons.';
   }
 
   try {
@@ -677,7 +755,7 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
       return 'AUTO_FIX implementer changed the current branch.';
     }
     execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' });
-    execFileSync('git', ['add', '--', ...allowedPaths], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['add', '--', ...declaredPaths], { cwd: input.cwd, encoding: 'utf8' });
     const stagedPaths = execFileSync('git', ['diff', '--cached', '--name-only'], {
       cwd: input.cwd,
       encoding: 'utf8',
@@ -685,8 +763,8 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
       .split('\n')
       .map((path) => path.trim())
       .filter(Boolean);
-    if (!stagedPaths.length || stagedPaths.some((path) => !allowedPaths.includes(path))) {
-      return 'AUTO_FIX staged files outside the finding allowlist.';
+    if (!stagedPaths.length || stagedPaths.some((path) => !declaredPaths.includes(path))) {
+      return 'AUTO_FIX staged files without matching bounded reasons.';
     }
     execFileSync('git', ['diff', '--cached', '--check'], { cwd: input.cwd, encoding: 'utf8' });
     execFileSync('git', ['commit', '-m', 'fix: apply independent review AUTO_FIX'], {
@@ -808,6 +886,89 @@ export function autoFixAllowedPaths(
   return paths.size ? [...paths] : 'AUTO_FIX finding allowlist is empty.';
 }
 
+export function validateAutoFixChanges(
+  review: ReviewGateResult,
+  cwd: string,
+  base: string,
+  changes: AutoFixChangedFile[],
+): string | undefined {
+  const observed = autoFixAllowedPaths(review, cwd, base);
+  if (typeof observed === 'string') return observed;
+  if (!changes.length) return 'AUTO_FIX implementer reported no bounded changes.';
+
+  let repositoryRoot: string;
+  let issueDiffPaths: Set<string>;
+  let baseTrackedPaths: Set<string>;
+  try {
+    repositoryRoot = realpathSync(
+      execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
+    );
+    issueDiffPaths = new Set(
+      execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+        cwd,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .map((path) => path.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+    baseTrackedPaths = new Set(
+      execFileSync('git', ['ls-tree', '-r', '--name-only', '--full-tree', base], {
+        cwd,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .map((path) => path.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+  } catch {
+    return 'AUTO_FIX repository path scope could not be validated.';
+  }
+
+  const affected = new Set(observed);
+  const affectedRoots = new Set(
+    observed.map((path) => {
+      const segments = path.split('/');
+      return segments.length > 1 ? segments.slice(0, -1).join('/') : '';
+    }),
+  );
+  for (const change of changes) {
+    const path = change.path.replaceAll('\\', '/').trim();
+    if (
+      !path ||
+      isAbsolute(path) ||
+      win32.isAbsolute(path) ||
+      path.split('/').some((part) => !part || part === '.' || part === '..') ||
+      path.split('/').includes('.git')
+    ) {
+      return 'AUTO_FIX implementer reported an invalid repository path.';
+    }
+    const absolutePath = resolve(repositoryRoot, path);
+    if (relative(repositoryRoot, absolutePath).replaceAll('\\', '/') !== path) {
+      return 'AUTO_FIX implementer reported a repository path outside the root.';
+    }
+    if (!issueDiffPaths.has(path) && !baseTrackedPaths.has(path)) {
+      return `AUTO_FIX change ${path} is not part of the Issue or base repository scope.`;
+    }
+
+    const isTest = path.startsWith('tests/') || path.includes('/__tests__/');
+    const isDocumentation = path.startsWith('docs/') || /\.(md|mdx)$/.test(path);
+    const pathSegments = path.split('/');
+    const pathRoot = pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') : '';
+    const isRelatedRoot = affectedRoots.has(pathRoot);
+    const allowed =
+      (change.reason === 'affected_location' && affected.has(path)) ||
+      (change.reason === 'generalized_rule_sibling' && affected.has(path)) ||
+      (change.reason === 'direct_test' && isTest) ||
+      (change.reason === 'required_doc_update' && isDocumentation) ||
+      (change.reason === 'required_supporting_change' && isRelatedRoot);
+    if (!allowed) {
+      return `AUTO_FIX change ${path} has no valid bounded reason: ${change.reason}.`;
+    }
+  }
+  return undefined;
+}
+
 function workingTreePaths(cwd: string): string[] {
   const tracked = execFileSync('git', ['diff', '--name-only', 'HEAD'], {
     cwd,
@@ -839,6 +1000,7 @@ function defaultRunnerDependencies(): ReviewRunnerDependencies {
     recordReview: recordReviewAccounting,
     recordAutoFix: recordAutoFixAccounting,
     recordTermination: recordTerminationAccounting,
+    recordResume: recordResumeAccounting,
   };
 }
 
@@ -1095,6 +1257,8 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
     terminationHistory: Array.isArray(state.terminationHistory)
       ? (state.terminationHistory as TerminationReason[])
       : [],
+    resumeAfterPolicyChange:
+      typeof state.resumeAfterPolicyChange === 'string' ? state.resumeAfterPolicyChange : undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -1231,6 +1395,7 @@ function consecutiveRuleCount(cycleResults: ReviewCycleRecord[], rule: string): 
   let count = 0;
   for (let index = cycleResults.length - 1; index >= 0; index -= 1) {
     const record = cycleResults[index];
+    if (record?.repositoryChanged === true) break;
     if (!record || !record.generalizedRules.includes(rule)) break;
     count += 1;
   }
@@ -1263,6 +1428,14 @@ function recordTerminationAccounting(
     ...accounting,
     terminationHistory: [...(accounting.terminationHistory ?? []), reason],
     terminationReason: reason,
+  }));
+}
+
+function recordResumeAccounting(cwd: string, base: string): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => ({
+    ...accounting,
+    terminationReason: undefined,
+    resumeAfterPolicyChange: undefined,
   }));
 }
 
