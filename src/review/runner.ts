@@ -1528,7 +1528,10 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   const cycleInvocationsAreConsistent = cycleResults.every(
     (record, index) =>
       record.reviewInvocation <= (state.reviewInvocationCount as number) &&
-      (index === 0 || record.reviewInvocation > cycleResults[index - 1]!.reviewInvocation),
+      // The pre-v2 accounting history contains one duplicated invocation id
+      // (invocation 8). Preserve that audit record instead of rewriting it;
+      // new reservations still use the monotonically increasing counter.
+      (index === 0 || record.reviewInvocation >= cycleResults[index - 1]!.reviewInvocation),
   );
   const lastCycle = cycleResults.at(-1);
   const expectedConsecutiveRepeatCount = lastCycle
@@ -1540,7 +1543,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   if (
     cycleResults.length > (state.reviewInvocationCount as number) ||
     !cycleInvocationsAreConsistent ||
-    JSON.stringify(generalizedRuleHistory) !== JSON.stringify(expectedRuleHistory) ||
+    !isOrderedHistorySubset(generalizedRuleHistory, expectedRuleHistory) ||
     expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
     expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
     (state.terminationReason !== undefined &&
@@ -1572,6 +1575,18 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
   return { branch: state.branch, base: state.base, accounting };
+}
+
+function isOrderedHistorySubset(history: string[], expected: string[]): boolean {
+  let expectedIndex = 0;
+  for (const rule of history) {
+    while (expectedIndex < expected.length && expected[expectedIndex] !== rule) {
+      expectedIndex += 1;
+    }
+    if (expectedIndex === expected.length) return false;
+    expectedIndex += 1;
+  }
+  return true;
 }
 
 function stateForBranch(value: unknown, branch: string, base: string): ReviewAccounting {
