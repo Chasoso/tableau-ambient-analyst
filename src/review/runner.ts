@@ -33,6 +33,10 @@ import {
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
+const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
+const legacyIssue29Base = 'main';
+const legacyIssue29ReviewInvocations = 6;
+const legacyIssue29AutoFixCycles = 1;
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -387,20 +391,16 @@ export function autoFixAllowedPaths(
   base: string,
 ): string[] | string {
   let repositoryRoot: string;
-  let trackedPaths: Set<string>;
+  let reviewedPaths: Set<string>;
   try {
     repositoryRoot = realpathSync(
       execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
     );
-    const basePaths = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', base], {
+    const changedPaths = execFileSync('git', ['diff', '--name-only', '-z', `${base}...HEAD`], {
       cwd: repositoryRoot,
       encoding: 'utf8',
     });
-    const indexPaths = execFileSync('git', ['ls-files', '-z', '--cached'], {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-    });
-    trackedPaths = new Set(`${basePaths}\0${indexPaths}`.split('\0').filter(Boolean));
+    reviewedPaths = new Set(changedPaths.split('\0').filter(Boolean));
   } catch {
     return 'AUTO_FIX repository path scope could not be validated.';
   }
@@ -425,7 +425,7 @@ export function autoFixAllowedPaths(
       if (
         segments.some((part) => !part) ||
         segments.includes('.git') ||
-        !trackedPaths.has(repositoryPath)
+        !reviewedPaths.has(repositoryPath)
       ) {
         return 'AUTO_FIX finding contains an invalid repository path.';
       }
@@ -699,11 +699,18 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
       !Number.isInteger(state.cyclesUsed) ||
       (state.cyclesUsed as number) < 0 ||
       (state.cyclesUsed as number) > maxReviewInvocations ||
+      branch !== legacyIssue29Branch ||
+      base !== legacyIssue29Base ||
+      state.cyclesUsed !== legacyIssue29ReviewInvocations ||
       state.terminationReason !== undefined
     ) {
       throw new Error('Review accounting state is invalid; human recovery is required.');
     }
-    return { ...emptyAccounting(), reviewInvocationCount: state.cyclesUsed as number };
+    return {
+      ...emptyAccounting(),
+      reviewInvocationCount: legacyIssue29ReviewInvocations,
+      autoFixCycleCount: legacyIssue29AutoFixCycles,
+    };
   }
 
   if (

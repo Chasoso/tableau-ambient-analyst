@@ -131,11 +131,12 @@ use their actual git directory. It is created with a temporary file and
 rename, and an existing malformed or invalid state fails closed with
 `HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
 
-The old `cyclesUsed` field migrates to `reviewInvocationCount` without being
-reset. The Issue #29 branch's prior state of 6 invocations and the prior run
-report of 1 actual AUTO_FIX are carried into the new accounting state; the
-legacy state did not retain per-cycle rule history, so that history starts
-empty after the explicit migration.
+The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
+known prior state of 6 invocations and 1 completed AUTO_FIX is carried into the
+new accounting state. The legacy state did not retain per-cycle rule history,
+so that history starts empty after this migration. Any other legacy shape is
+rejected as unrecoverable rather than resetting or guessing the AUTO_FIX
+counter; this preserves the configured total bound across restarts.
 
 ## Gate result contract
 

@@ -846,21 +846,43 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
-  it('migrates legacy cyclesUsed without resetting review invocations', () => {
+  it('migrates the known Issue #29 legacy state without resetting either bound', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
     writeFileSync(
       statePath,
-      JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: 6 }),
+      JSON.stringify({
+        branch: 'feat/issue-29-autonomous-issue-to-pr',
+        base: 'main',
+        cyclesUsed: 6,
+      }),
       'utf8',
     );
 
     try {
-      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+      expect(
+        readReviewAccountingAtPath(statePath, 'feat/issue-29-autonomous-issue-to-pr', 'main'),
+      ).toMatchObject({
         reviewInvocationCount: 6,
-        autoFixCycleCount: 0,
+        autoFixCycleCount: 1,
         generalizedRuleHistory: [],
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when legacy AUTO_FIX accounting cannot be recovered', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const contents = JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: 6 });
+    writeFileSync(statePath, contents, 'utf8');
+
+    try {
+      expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+        'invalid',
+      );
+      expect(readFileSync(statePath, 'utf8')).toBe(contents);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -946,7 +968,16 @@ describe('review cycle state', () => {
     const statePath = join(directory, 'state.json');
     writeFileSync(
       statePath,
-      JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: maxReviewCycles }),
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        reviewInvocationCount: maxReviewCycles,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+      }),
       'utf8',
     );
 
@@ -963,6 +994,7 @@ describe('AUTO_FIX path scope', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-paths-'));
     mkdirSync(join(directory, 'src'), { recursive: true });
     writeFileSync(join(directory, 'src', 'tracked.ts'), 'export {};\n');
+    writeFileSync(join(directory, 'src', 'base-only.ts'), 'export {};\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
     execFileSync('git', ['add', '.'], { cwd: directory });
@@ -972,6 +1004,14 @@ describe('AUTO_FIX path scope', () => {
       { cwd: directory },
     );
     writeFileSync(join(directory, 'outside.ts'), 'export {};\n');
+    execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
+    writeFileSync(join(directory, 'src', 'tracked.ts'), 'export { changed };\n');
+    execFileSync('git', ['add', 'src/tracked.ts'], { cwd: directory });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'change'],
+      { cwd: directory },
+    );
 
     const finding = (location: string) => ({
       result: 'CHANGES_REQUIRED' as const,
@@ -996,6 +1036,7 @@ describe('AUTO_FIX path scope', () => {
         '.git/config:1',
         'src/link.ts:1',
         'outside.ts:1',
+        'src/base-only.ts:1',
       ]) {
         expect(autoFixAllowedPaths(finding(location), directory, 'main')).toBe(
           'AUTO_FIX finding contains an invalid repository path.',
