@@ -91,42 +91,78 @@ additional credential, or new infrastructure was investigated or introduced.
 
 ## Selected minimum path
 
-The repository provides an opt-in local command:
+The repository provides an opt-in local Issue-to-PR command:
 
 ```bash
 npm run review:independent -- \
-  --issue 26 \
+  --issue 29 \
   --base main
 ```
 
-The command builds the small runner, re-runs deterministic validation, fetches
-the Issue body, and starts a fresh read-only Codex process. It exits non-zero
-unless the reviewer returns a valid `PASS` result. The runner stores only a
-small branch/base cycle counter in the local, untracked
-`.git/tableau-ambient-review-state.json` file and stops after six invocations across process
-restarts. This command is not called by `npm run validate` and is not added to
+The command builds the small runner, fetches the Issue body, requires a clean
+`main` checkout, creates a deterministic feature branch, and starts a fresh
+workspace-write Codex implementer. It validates and commits the implementation,
+then starts the bounded independent read-only review/fix loop. Only after a
+validated `PASS` does it push the feature branch and create a pull request with
+`Closes #<issue>`. It never merges the pull request. The runner stores only a
+small branch/base accounting state in the local, untracked
+`.git/tableau-ambient-review-state.json` file and stops after 16 review
+invocations or 8 AUTO_FIX cycles across process restarts. This command is not
+called by `npm run validate` and is not added to
 ordinary CI. Before validation or reviewer invocation, the runner requires a
-non-base feature branch, an existing base ref, a clean committed working tree,
-and a non-empty diff against that base. This prevents uncommitted or omitted
-working-tree changes from being reported as a complete review.
+clean base branch and an existing base ref. This prevents uncommitted changes
+from entering the autonomous handoff.
 
-The runner is intentionally one review invocation rather than a general
-orchestrator. The implementer handles an in-scope fix after
-`CHANGES_REQUIRED`, reruns validation, and invokes the command again from the
-updated branch. The documented maximum is six independent review cycles for
-this spike because the implementation itself required several corrective
-reviews; the bound remains explicit and easy to revise after pilot evidence.
-Remaining blocking findings then become `HUMAN_DECISION_REQUIRED`.
+For an already-prepared committed feature branch, the review-only mode remains
+available:
+
+```bash
+npm run review:independent -- --review-only --issue 29 --base main
+```
+
+`--review-only` performs validation and exactly one read-only Independent
+Reviewer invocation. It never launches the workspace-write implementer,
+creates a commit, pushes, or creates a pull request. The bounded AUTO_FIX loop
+is available only to the full Issue-to-PR path.
+
+The runner is a bounded Issue-to-PR workflow with a bounded review/fix loop.
+When
+all blocking findings are structured `AUTO_FIX`, a separate workspace-write
+Codex implementer applies only those deterministic fixes, creates a
+Conventional Commit, and returns to validation and a fresh read-only review.
+The reviewer process never edits files. The default maximum is 16 independent
+review invocations and 8 actual AUTO_FIX cycles. Repeated normalized
+generalized rules and concrete finding identities are tracked; the third
+consecutive repeat terminates as `NON_CONVERGING_REVIEW` only when the same
+concrete problem has had no meaningful repository progress. A newly discovered
+sibling or a meaningful repository change resets that convergence streak. An
+AUTO_FIX with no material repository change terminates as `NO_PROGRESS`.
 
 Cycle state is reserved only after the deterministic validation succeeds and
 the Issue context has been retrieved, immediately before the Codex process is
 started. A validation failure or Issue retrieval failure therefore returns a
-closed result without consuming a review cycle. Each runner invocation
-reserves at most one cycle; the cycle-limit result is returned before Codex is
-started. The state file is resolved through Git so linked worktrees use their
-actual git directory. It is created with a temporary file and rename, and an
-existing malformed or invalid state fails closed with
-`HUMAN_DECISION_REQUIRED` rather than resetting the counter.
+closed result without consuming a review invocation. Each runner invocation
+reserves at most one review invocation; result capture retries do not consume
+an AUTO_FIX cycle. The state file is resolved through Git so linked worktrees
+use their actual git directory. It is created with a temporary file and
+rename, and an existing malformed or invalid state fails closed with
+`HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
+
+The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
+known prior state of 6 invocations and 1 completed AUTO_FIX is retained as
+legacy counter audit history. That legacy shape did not contain termination
+metadata, so no legacy termination metadata is reconstructed or claimed; only
+the current epoch's termination history is retained and enforced. The legacy
+counters do not consume the new accounting epoch's limits.
+The current epoch is explicit (`issue-29-accounting-v2`) and stores its own
+review invocation count, AUTO_FIX count, generalized-rule history, and cycle
+records. When the model was activated for the in-progress Issue #29 run, the
+current epoch resumed at 6 review invocations and 5 AUTO_FIX cycles; it was not
+reset to zero and the legacy six were not double-counted. The legacy state did
+not retain per-cycle rule history, so that history starts empty after this
+migration. Any other legacy shape is rejected as unrecoverable rather than
+resetting or guessing the AUTO_FIX counter; this preserves the configured total
+bound across restarts.
 
 ## Gate result contract
 
@@ -191,13 +227,21 @@ uncertainty.
 - validation failure: reviewer is not invoked and the gate remains closed;
 - process failure or timeout: `HUMAN_DECISION_REQUIRED`-equivalent stop;
 - malformed reviewer output: not PASS;
-- `CHANGES_REQUIRED`: return blocking findings, fix in scope, rerun validation,
-  and start a fresh review;
+- `CHANGES_REQUIRED` with AUTO_FIX-only findings: invoke the separate
+  implementer, commit the in-scope correction, rerun validation, and start a
+  fresh review;
+- `CHANGES_REQUIRED` with HUMAN_DECISION_REQUIRED or BLOCKED findings: stop;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
-- six review cycles with unresolved blocking findings: stop and escalate.
+- 8 AUTO_FIX cycles: stop and escalate with the accounting report;
+- 16 review invocations: stop and escalate with the accounting report;
+- the same generalized rule and concrete finding, with no meaningful progress,
+  repeated to the threshold: `NON_CONVERGING_REVIEW`; new sibling findings or
+  meaningful repository progress continue within the bounds;
+- an AUTO_FIX with no repository change: `NO_PROGRESS`.
 
 Non-blocking findings are returned for recording and do not automatically cause
-implementation churn.
+implementation churn. A result-capture retry is part of one reviewer
+invocation and never increments the AUTO_FIX count.
 
 ## Security and network boundary
 

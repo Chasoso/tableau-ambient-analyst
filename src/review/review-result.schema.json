@@ -10,12 +10,40 @@
     },
     "blockingFindings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "$ref": "#/$defs/blockingFinding" }
     },
     "nonBlockingFindings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "$ref": "#/$defs/nonBlockingFinding" }
     },
     "escalationRequired": { "type": "boolean" }
+  },
+  "$defs": {
+    "blockingFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["blocking"] },
+        "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
+        "finding": { "type": "string" },
+        "generalized_rule": { "type": "string" },
+        "affected_locations": { "type": "array", "items": { "type": "string" } },
+        "recommended_fix": { "type": "string" }
+      }
+    },
+    "nonBlockingFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["non-blocking"] },
+        "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
+        "finding": { "type": "string" },
+        "generalized_rule": { "type": "string" },
+        "affected_locations": { "type": "array", "items": { "type": "string" } },
+        "recommended_fix": { "type": "string" }
+      }
+    }
   }
 }

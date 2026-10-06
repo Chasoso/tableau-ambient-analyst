@@ -19,6 +19,12 @@ Implement
   -> create PR
 ```
 
+Deterministic validation is a pre-review phase. If it fails, the reviewer is
+not invoked and no review invocation, review cycle record, generalized-rule
+history entry, or AUTO_FIX cycle is consumed. Any deterministic repair must
+return to validation before the independent reviewer starts. Only an actual
+reviewer execution enters the independent-review accounting.
+
 The process is intended for a manual or scriptable pilot. It does not require
 an agent framework, a review bot, a paid API, or live external integration.
 
@@ -85,14 +91,22 @@ Use this sequence:
    criteria, `AGENTS.md`, relevant policies, the complete diff against the
    intended base, changed files, necessary surrounding code/docs, and relevant
    ADRs.
-7. The reviewer returns `PASS` or `CHANGES_REQUIRED` using the output contract
-   below.
-8. If the result is `CHANGES_REQUIRED`, return the findings to the implementer,
-   apply only necessary in-scope fixes, and rerun deterministic validation.
-9. Start another fresh independent review against the updated complete diff.
-10. Repeat until the result is `PASS`, blocking findings are zero, and no
+7. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
+   `HUMAN_DECISION_REQUIRED` using the output contract below. Every finding is
+   classified as `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`.
+8. The reviewer generalizes each finding, searches the complete diff and
+   directly related implementation for siblings, and returns consolidated
+   findings. Keep the search bounded to the Issue scope.
+9. If every blocking finding is `AUTO_FIX`, apply the deterministic in-scope
+   fixes without human approval and rerun deterministic validation. The
+   authorized path set includes files in the committed Issue diff and
+   directly related sibling files reported by the reviewer when those sibling
+   paths are tracked by the base revision. Repository-boundary, traversal,
+   `.git`, and symlink checks still apply.
+10. Start another fresh independent review against the updated complete diff.
+11. Repeat until the result is `PASS`, blocking findings are zero, and no
     unresolved human escalation remains.
-11. Only then create the PR or, when an existing draft is being used for the
+12. Only then create the PR or, when an existing draft is being used for the
     bootstrap exception below, mark it ready for normal review.
 
 A minimal handoff should contain factual metadata such as:
@@ -231,28 +245,33 @@ current Issue.
 
 ## Reviewer output contract
 
-The reviewer must return an unambiguous gate result in this form or an
-equivalent structure:
+The reviewer must return JSON matching
+`src/review/review-result.schema.json`. The independent reviewer wire format
+is structured-only. The TypeScript parser also accepts legacy string findings
+when called directly by older local callers, but those strings are not valid
+output for the reviewer CLI schema. New reviewer findings must use this shape:
 
-```text
-Review result: PASS | CHANGES_REQUIRED
-
-Blocking findings:
-- <finding, or "none">
-
-Non-blocking findings:
-- <finding, or "none">
-
-Acceptance criteria:
-- satisfied | not satisfied | human decision required
-
-Validation reviewed:
-- <commands and results actually inspected>
-
-Escalation required:
-- yes | no
-- <decision needed, if any>
+```json
+{
+  "result": "CHANGES_REQUIRED",
+  "blockingFindings": [{
+    "severity": "blocking",
+    "classification": "AUTO_FIX",
+    "finding": "...",
+    "generalized_rule": "...",
+    "affected_locations": ["src/example.ts:10", "src/other.ts:20"],
+    "recommended_fix": "..."
+  }],
+  "nonBlockingFindings": [],
+  "escalationRequired": false
+}
 ```
+
+`AUTO_FIX` means the correction is already determined by repository rules or
+the Issue. `HUMAN_DECISION_REQUIRED` must state what must be decided, why the
+repository cannot decide it, viable options, and a recommendation. `BLOCKED`
+identifies a missing execution prerequisite. Either latter classification
+requires human escalation.
 
 `PASS` is valid for the PR gate only when blocking findings are none,
 deterministic validation has passed, and no unresolved human escalation
@@ -263,13 +282,27 @@ remains. `CHANGES_REQUIRED` means the PR must not be created yet.
 When a reviewer reports a blocking finding:
 
 1. return the finding to the implementer;
-2. make only the necessary in-scope correction, or stop for human direction;
+2. if and only if every blocking finding is `AUTO_FIX`, make the necessary
+   in-scope correction; otherwise stop for human direction or the missing
+   prerequisite;
 3. rerun deterministic validation and review the updated complete diff;
 4. start an independent review again in a fresh context; and
-5. repeat until the result is `PASS` or a human decision is required.
+5. repeat until the result is `PASS`, a human decision/blocker is required, or
+   the 16-review-invocation or 8-AUTO_FIX limit is reached. On the limit or
+   convergence stop, report invocation count, AUTO_FIX count, each cycle's
+   result/classification/rule/change status, unresolved findings, repeated
+   categories, and why automation did not converge.
 
 The implementation context must not self-certify that its own fix resolved a
 blocking finding. A changed diff always requires independent re-review.
+
+The executable runner exposes `runBoundedReviewFixLoop`. It calls the existing
+validation and fresh-review path, hands AUTO_FIX-only results to an
+implementer callback, and repeats up to 16 review invocations and 8 actual
+AUTO_FIX cycles. The callback is the
+Implementer Codex responsibility; the read-only reviewer never edits files.
+Callback failure, validation failure, HUMAN_DECISION_REQUIRED, BLOCKED,
+non-convergence, no-progress, and either limit remain closed gates.
 
 ## Human escalation
 
@@ -330,25 +363,10 @@ correctness or safety problem, reveal a material scope or documentation
 failure, require missing validation, or require a human-owned decision. Keep
 style preferences and optional future work non-blocking.
 
-Return exactly:
-
-Review result: PASS | CHANGES_REQUIRED
-
-Blocking findings:
-- ...
-
-Non-blocking findings:
-- ...
-
-Acceptance criteria:
-- satisfied / not satisfied / human decision required
-
-Validation reviewed:
-- ...
-
-Escalation required:
-- yes / no
-- ...
+Return JSON matching `src/review/review-result.schema.json`, including the
+generalized rule and sibling locations for every finding. Use the same
+`AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, and `BLOCKED` classifications. Do not
+approve PR creation when blocking findings remain.
 
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
