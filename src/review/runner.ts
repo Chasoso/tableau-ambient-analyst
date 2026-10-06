@@ -180,6 +180,9 @@ export function runBoundedReviewFixLoop(
     const review = runReviewControlFlow(input, dependencies);
 
     if (review.result === 'PASS' || !canContinueAutoFix(review)) return review;
+    if (cycle === maxReviewCycles - 1) {
+      return reviewCycleLimitExceeded(maxReviewCycles);
+    }
 
     const fixError = applyAutoFix(review);
     if (fixError) {
