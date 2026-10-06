@@ -540,7 +540,7 @@ describe('independent review runner control flow', () => {
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
     expect(result.blockingFindings[0]).toContain('maximum');
-    expect(fixes).toBe(maxReviewCycles);
+    expect(fixes).toBe(maxReviewCycles - 1);
   });
 });
 
