@@ -99,6 +99,48 @@ describe('independent review gate contract', () => {
     expect(canOpenPullRequest(true, result)).toBe(false);
   });
 
+  it('fails closed for inconsistent severity and hidden escalation', () => {
+    const finding = {
+      severity: 'non-blocking',
+      classification: 'AUTO_FIX',
+      finding: 'Finding',
+      generalized_rule: 'Rule',
+      affected_locations: ['src/example.ts'],
+      recommended_fix: 'Fix',
+    };
+    expect(
+      parseReviewResult(
+        JSON.stringify({
+          result: 'CHANGES_REQUIRED',
+          blockingFindings: [finding],
+          nonBlockingFindings: [],
+          escalationRequired: false,
+        }),
+      ).executionStatus,
+    ).toBe('FAILED');
+
+    const humanFinding = { ...finding, classification: 'HUMAN_DECISION_REQUIRED' };
+    const hiddenHuman = parseReviewResult(
+      JSON.stringify({
+        result: 'PASS',
+        blockingFindings: [],
+        nonBlockingFindings: [{ ...humanFinding, severity: 'non-blocking' }],
+        escalationRequired: false,
+      }),
+    );
+    expect(hiddenHuman.executionStatus).toBe('FAILED');
+
+    const hiddenResultEscalation = parseReviewResult(
+      JSON.stringify({
+        result: 'HUMAN_DECISION_REQUIRED',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+    expect(hiddenResultEscalation.executionStatus).toBe('FAILED');
+  });
+
   it('extracts the final structured message from Codex JSONL output', () => {
     const output = [
       JSON.stringify({ type: 'turn.started' }),

@@ -85,6 +85,33 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('PASS cannot include blocking findings or escalation.');
   }
 
+  if (
+    blockingFindings.some(
+      (finding) => typeof finding !== 'string' && finding.severity !== 'blocking',
+    ) ||
+    nonBlockingFindings.some(
+      (finding) => typeof finding !== 'string' && finding.severity !== 'non-blocking',
+    )
+  ) {
+    return malformedResult('Finding severity must match its result array.');
+  }
+
+  const allFindings = [...blockingFindings, ...nonBlockingFindings];
+  const hasHumanFinding = allFindings.some(
+    (finding) =>
+      typeof finding !== 'string' &&
+      (finding.classification === 'HUMAN_DECISION_REQUIRED' ||
+        finding.classification === 'BLOCKED'),
+  );
+
+  if (result === 'HUMAN_DECISION_REQUIRED' && !escalationRequired) {
+    return malformedResult('HUMAN_DECISION_REQUIRED must require escalation.');
+  }
+
+  if (hasHumanFinding && !escalationRequired) {
+    return malformedResult('Human decision and blocked findings must require escalation.');
+  }
+
   return {
     result,
     blockingFindings,
@@ -127,7 +154,7 @@ export function canOpenPullRequest(validationPassed: boolean, review: ReviewGate
     validationPassed &&
     review.result === 'PASS' &&
     review.blockingFindings.length === 0 &&
-    !review.escalationRequired
+    !requiresHumanDecision(review)
   );
 }
 
