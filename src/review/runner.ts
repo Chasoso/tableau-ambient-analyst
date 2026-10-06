@@ -10,6 +10,7 @@ import {
   normalizedFindingCategory,
   parseReviewResult,
   repeatedRuleThreshold,
+  reviewCycleLimitExceeded,
   reviewerInvocationFailure,
   requiresHumanDecision,
   terminationResult,
@@ -54,7 +55,7 @@ export type ReviewRunnerDependencies = {
 };
 
 export type ApplyAutoFixResult = { changedRepository: boolean };
-export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult | undefined;
+export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult;
 
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
@@ -171,6 +172,9 @@ export function runReviewControlFlow(
   const cycleError = dependencies.reserveCycle(input.cwd, input.base);
 
   if (cycleError) {
+    if (cycleError.startsWith('Review invocation limit ')) {
+      return reviewCycleLimitExceeded(maxReviewInvocations);
+    }
     return reviewerInvocationFailure(cycleError);
   }
 
@@ -193,8 +197,21 @@ export function runBoundedReviewFixLoop(
   if (typeof initialAccounting === 'string') {
     return reviewerInvocationFailure(initialAccounting);
   }
+  if (initialAccounting.terminationReason) {
+    return terminationResult(initialAccounting.terminationReason, initialAccounting);
+  }
   for (;;) {
     const review = runReviewControlFlow(input, dependencies);
+    if (review.terminationReason) {
+      const accounting = dependencies.readAccounting(input.cwd, input.base);
+      if (typeof accounting === 'string') return reviewerInvocationFailure(accounting);
+      const terminated = dependencies.recordTermination(
+        input.cwd,
+        input.base,
+        review.terminationReason,
+      );
+      return terminationResult(review.terminationReason, terminated, review.blockingFindings);
+    }
     let accounting = dependencies.recordReview(input.cwd, input.base, review);
     const withAccounting = { ...review, accounting };
 
@@ -230,20 +247,25 @@ export function runBoundedReviewFixLoop(
       return terminationResult('MAX_AUTO_FIX_CYCLES', accounting, review.blockingFindings);
     }
 
-    const fixError = applyAutoFix(review);
-    if (fixError) {
-      if (typeof fixError === 'string') {
-        accounting = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
-        return terminationResult('NO_PROGRESS', accounting, review.blockingFindings, fixError);
-      }
+    const fixResult = applyAutoFix(review);
+    if (!fixResult) {
+      accounting = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
+      return terminationResult(
+        'NO_PROGRESS',
+        accounting,
+        review.blockingFindings,
+        'AUTO_FIX implementer returned no verifiable result.',
+      );
+    }
+    if (typeof fixResult === 'string') {
+      accounting = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
+      return terminationResult('NO_PROGRESS', accounting, review.blockingFindings, fixResult);
+    }
 
-      dependencies.recordAutoFix(input.cwd, input.base, fixError.changedRepository);
-      if (!fixError.changedRepository) {
-        const terminated = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
-        return terminationResult('NO_PROGRESS', terminated, review.blockingFindings);
-      }
-    } else {
-      dependencies.recordAutoFix(input.cwd, input.base, true);
+    dependencies.recordAutoFix(input.cwd, input.base, fixResult.changedRepository);
+    if (!fixResult.changedRepository) {
+      const terminated = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
+      return terminationResult('NO_PROGRESS', terminated, review.blockingFindings);
     }
   }
 }
@@ -251,8 +273,26 @@ export function runBoundedReviewFixLoop(
 function applyCodexAutoFix(
   input: IndependentReviewInput,
   review: ReviewGateResult,
-): string | ApplyAutoFixResult | undefined {
+): string | ApplyAutoFixResult {
   if (!canContinueAutoFix(review)) return 'Review was not eligible for AUTO_FIX.';
+
+  const allowedPaths = autoFixAllowedPaths(review);
+  if (typeof allowedPaths === 'string') return allowedPaths;
+
+  let beforeHead: string;
+  let beforeChangedPaths: string[];
+  try {
+    beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
+    beforeChangedPaths = workingTreePaths(input.cwd);
+  } catch {
+    return 'AUTO_FIX pre-fix repository snapshot could not be captured.';
+  }
+  if (beforeChangedPaths.length > 0) {
+    return 'AUTO_FIX requires an unchanged working tree before the implementer runs.';
+  }
 
   const prompt = `Repository: Chasoso/tableau-ambient-analyst
 Issue: #${input.issue}
@@ -290,15 +330,36 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
     return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
   }
 
-  const status = execFileSync('git', ['status', '--porcelain'], {
-    cwd: input.cwd,
-    encoding: 'utf8',
-  }).trim();
-  if (!status) return 'AUTO_FIX implementer made no repository changes.';
+  let changedPaths: string[];
+  try {
+    const afterHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
+    if (afterHead !== beforeHead) return 'AUTO_FIX implementer changed the repository commit.';
+    changedPaths = workingTreePaths(input.cwd);
+  } catch {
+    return 'AUTO_FIX post-fix repository snapshot could not be captured.';
+  }
+  if (!changedPaths.length) return 'AUTO_FIX implementer made no repository changes.';
+  if (changedPaths.some((path) => !allowedPaths.includes(path))) {
+    return 'AUTO_FIX implementer changed files outside the finding allowlist.';
+  }
 
   try {
     execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' });
-    execFileSync('git', ['add', '--all', '--', '.'], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['add', '--', ...allowedPaths], { cwd: input.cwd, encoding: 'utf8' });
+    const stagedPaths = execFileSync('git', ['diff', '--cached', '--name-only'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .map((path) => path.trim())
+      .filter(Boolean);
+    if (!stagedPaths.length || stagedPaths.some((path) => !allowedPaths.includes(path))) {
+      return 'AUTO_FIX staged files outside the finding allowlist.';
+    }
+    execFileSync('git', ['diff', '--cached', '--check'], { cwd: input.cwd, encoding: 'utf8' });
     execFileSync('git', ['commit', '-m', 'fix: apply independent review AUTO_FIX'], {
       cwd: input.cwd,
       encoding: 'utf8',
@@ -308,6 +369,46 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
   }
 
   return { changedRepository: true };
+}
+
+function autoFixAllowedPaths(review: ReviewGateResult): string[] | string {
+  const paths = new Set<string>();
+  for (const finding of review.blockingFindings) {
+    if (typeof finding === 'string') return 'AUTO_FIX finding locations are not structured.';
+    for (const location of finding.affected_locations) {
+      const path = location.split(':', 1)[0];
+      if (!path) return 'AUTO_FIX finding contains an invalid repository path.';
+      const normalizedPath = path.trim();
+      if (
+        !normalizedPath ||
+        isAbsolute(normalizedPath) ||
+        normalizedPath.split(/[\\/]/).includes('..')
+      ) {
+        return 'AUTO_FIX finding contains an invalid repository path.';
+      }
+      paths.add(normalizedPath.replaceAll('\\', '/'));
+    }
+  }
+  return paths.size ? [...paths] : 'AUTO_FIX finding allowlist is empty.';
+}
+
+function workingTreePaths(cwd: string): string[] {
+  const tracked = execFileSync('git', ['diff', '--name-only', 'HEAD'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return [
+    ...new Set(
+      `${tracked}\n${untracked}`
+        .split('\n')
+        .map((path) => path.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function defaultRunnerDependencies(): ReviewRunnerDependencies {

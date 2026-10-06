@@ -498,7 +498,7 @@ describe('independent review runner control flow', () => {
     const result = runReviewControlFlow(
       input,
       dependencies({
-        reserveCycle: () => 'Review cycle limit reached.',
+        reserveCycle: () => 'Review invocation limit of 12 reached for feature/review.',
         invokeReviewer: () => {
           invoked += 1;
           return reviewerInvocationFailure('unexpected invocation');
@@ -507,6 +507,7 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.terminationReason).toBe('MAX_REVIEW_INVOCATIONS');
     expect(invoked).toBe(0);
   });
 
@@ -573,7 +574,7 @@ describe('independent review runner control flow', () => {
       }),
       () => {
         fixes += 1;
-        return undefined;
+        return { changedRepository: true };
       },
     );
 
@@ -625,7 +626,7 @@ describe('independent review runner control flow', () => {
       }),
       () => {
         fixes += 1;
-        return undefined;
+        return { changedRepository: true };
       },
     );
 
@@ -705,6 +706,44 @@ describe('independent review runner control flow', () => {
     expect(result.terminationReason).toBe('NO_PROGRESS');
     expect(result.accounting?.autoFixCycleCount).toBe(0);
     expect(result.accounting?.lastFixChangedRepository).toBe(false);
+  });
+
+  it('escalates when the AUTO_FIX callback returns no result', () => {
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({ invokeReviewer: () => autoFixReview('missing explicit result') }),
+      () => undefined as never,
+    );
+
+    expect(result.terminationReason).toBe('NO_PROGRESS');
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
+  });
+
+  it('does not run another review after a persisted terminal state', () => {
+    let invoked = 0;
+    const accounting: ReviewAccounting = {
+      reviewInvocationCount: 3,
+      autoFixCycleCount: 2,
+      generalizedRuleHistory: ['same rule'],
+      consecutiveRepeatCount: 3,
+      lastFixChangedRepository: true,
+      cycleResults: [],
+      terminationReason: 'NON_CONVERGING_REVIEW',
+    };
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        readAccounting: () => accounting,
+        invokeReviewer: () => {
+          invoked += 1;
+          return autoFixReview('unexpected');
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
+    expect(invoked).toBe(0);
   });
 
   it('stops at the independent review invocation limit separately from AUTO_FIX cycles', () => {
