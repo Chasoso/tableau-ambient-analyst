@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   chmodSync,
   mkdtempSync,
@@ -1083,10 +1083,17 @@ describe('review cycle state', () => {
         accountingEpochStart: 'issue-29-accounting-v2',
         reviewInvocationCount: 6,
         autoFixCycleCount: 5,
-        generalizedRuleHistory: ['legacy rule'],
+        generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: true,
-        cycleResults: [],
+        terminationHistory: [],
+        cycleResults: [1, 2, 3, 4, 5].map((reviewInvocation) => ({
+          reviewInvocation,
+          result: 'CHANGES_REQUIRED',
+          classifications: [],
+          generalizedRules: [],
+          repositoryChanged: true,
+        })),
       }),
       'utf8',
     );
@@ -1156,6 +1163,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
+        terminationHistory: [],
         cycleResults: [],
         terminationReason: 'UNKNOWN',
       }),
@@ -1204,6 +1212,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
+        terminationHistory: [],
         cycleResults: [],
       }),
       'utf8',
@@ -1211,6 +1220,102 @@ describe('review cycle state', () => {
 
     try {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['reset counter', { reviewInvocationCount: 0, autoFixCycleCount: 0 }],
+    ['wrong epoch', { accountingEpochStart: 'old-epoch' }],
+    ['empty entry set', { entries: [] }],
+    ['unknown state field', { unexpected: true }],
+    ['legacy review counter out of bounds', { legacyReviewInvocations: maxReviewInvocations + 1 }],
+    ['inconsistent AUTO_FIX count', { autoFixCycleCount: 1 }],
+    [
+      'inconsistent generalized-rule history',
+      { generalizedRuleHistory: ['rule-that-has-no-cycle'] },
+    ],
+  ])('fails closed for a %s', (_description, mutation) => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      terminationHistory: [],
+      cycleResults: [
+        {
+          reviewInvocation: 1,
+          result: 'PASS',
+          classifications: [],
+          generalizedRules: [],
+          repositoryChanged: false,
+        },
+      ],
+      ...mutation,
+    };
+    const contents = JSON.stringify(state);
+    writeFileSync(statePath, contents, 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+      expect(readFileSync(statePath, 'utf8')).toBe(contents);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes concurrent reservations without exceeding the invocation bound', async () => {
+    execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const workerPath = join(directory, 'reserve-worker.mjs');
+    writeFileSync(
+      workerPath,
+      `import { reserveReviewCycleAtPath } from ${JSON.stringify(
+        join(process.cwd(), 'dist/review/runner.js'),
+      )};
+const result = reserveReviewCycleAtPath(process.argv[2], 'feature/review', 'main');
+process.stdout.write(result === undefined ? 'reserved' : 'limited');
+`,
+      'utf8',
+    );
+
+    try {
+      const workers = Array.from(
+        { length: maxReviewInvocations * 2 },
+        () =>
+          new Promise<string>((resolve, reject) => {
+            const child = spawn(process.execPath, [workerPath, statePath], {
+              cwd: process.cwd(),
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            let output = '';
+            child.stdout.on('data', (chunk: Buffer) => {
+              output += chunk.toString();
+            });
+            child.on('error', reject);
+            child.on('close', (code) => {
+              if (code === 0) resolve(output);
+              else reject(new Error(`reservation worker exited with ${code}`));
+            });
+          }),
+      );
+      const results = await Promise.all(workers);
+
+      expect(results.filter((result) => result === 'reserved')).toHaveLength(maxReviewInvocations);
+      expect(results.filter((result) => result === 'limited')).toHaveLength(maxReviewInvocations);
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: maxReviewInvocations,
+      });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1253,10 +1358,11 @@ describe('review cycle state', () => {
         legacyAutoFixCycles: 0,
         accountingEpochStart: 'issue-29-accounting-v2',
         reviewInvocationCount: 15,
-        autoFixCycleCount: 7,
+        autoFixCycleCount: 0,
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
-        lastFixChangedRepository: true,
+        lastFixChangedRepository: null,
+        terminationHistory: [],
         cycleResults: [],
       }),
       'utf8',
@@ -1266,7 +1372,7 @@ describe('review cycle state', () => {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewInvocationCount: 16,
-        autoFixCycleCount: 7,
+        autoFixCycleCount: 0,
       });
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
     } finally {

@@ -1,10 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
+  openSync,
   lstatSync,
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
@@ -40,6 +43,8 @@ const legacyIssue29Base = 'main';
 const legacyIssue29ReviewInvocations = 6;
 const legacyIssue29AutoFixCycles = 1;
 const currentAccountingEpoch = 'issue-29-accounting-v2';
+const accountingLockRetryCount = 1000;
+const accountingLockRetryMs = 10;
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -1396,17 +1401,26 @@ function accountingStateEntries(value: unknown): AccountingStateEntry[] {
   }
   const state = value as Record<string, unknown>;
   if (state.entries !== undefined) {
+    if (Object.keys(state).some((key) => key !== 'entries')) {
+      throw new Error('Review accounting state is invalid; human recovery is required.');
+    }
     if (
       !Array.isArray(state.entries) ||
+      state.entries.length === 0 ||
       !state.entries.every(
         (entry) => typeof entry === 'object' && entry !== null && !Array.isArray(entry),
       )
     ) {
       throw new Error('Review accounting state is invalid; human recovery is required.');
     }
-    return state.entries.map((entry) =>
+    const entries = state.entries.map((entry) =>
       parseAccountingStateEntry(entry as Record<string, unknown>),
     );
+    const entryKeys = entries.map((entry) => `${entry.branch}\u0000${entry.base}`);
+    if (new Set(entryKeys).size !== entryKeys.length) {
+      throw new Error('Review accounting state is invalid; human recovery is required.');
+    }
+    return entries;
   }
   return [parseAccountingStateEntry(state)];
 }
@@ -1417,6 +1431,9 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
   }
 
   if (state.cyclesUsed !== undefined) {
+    if (Object.keys(state).some((key) => !['branch', 'base', 'cyclesUsed'].includes(key))) {
+      throw new Error('Review accounting state is invalid; human recovery is required.');
+    }
     if (
       !Number.isInteger(state.cyclesUsed) ||
       (state.cyclesUsed as number) < 0 ||
@@ -1439,12 +1456,33 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     };
   }
 
+  const allowedKeys = new Set([
+    'branch',
+    'base',
+    'legacyReviewInvocations',
+    'legacyAutoFixCycles',
+    'accountingEpochStart',
+    'reviewInvocationCount',
+    'autoFixCycleCount',
+    'generalizedRuleHistory',
+    'consecutiveRepeatCount',
+    'lastFixChangedRepository',
+    'cycleResults',
+    'terminationHistory',
+    'terminationReason',
+    'resumeAfterPolicyChange',
+  ]);
   if (
+    Object.keys(state).some((key) => !allowedKeys.has(key)) ||
     !Number.isInteger(state.reviewInvocationCount) ||
     !Number.isInteger(state.autoFixCycleCount) ||
     !Number.isInteger(state.legacyReviewInvocations) ||
     !Number.isInteger(state.legacyAutoFixCycles) ||
-    typeof state.accountingEpochStart !== 'string' ||
+    state.accountingEpochStart !== currentAccountingEpoch ||
+    (state.legacyReviewInvocations as number) < 0 ||
+    (state.legacyReviewInvocations as number) > maxReviewInvocations ||
+    (state.legacyAutoFixCycles as number) < 0 ||
+    (state.legacyAutoFixCycles as number) > maxAutoFixCycles ||
     (state.reviewInvocationCount as number) < 0 ||
     (state.reviewInvocationCount as number) > maxReviewInvocations ||
     (state.autoFixCycleCount as number) < 0 ||
@@ -1459,9 +1497,41 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     ) ||
     !Array.isArray(state.cycleResults) ||
     !state.cycleResults.every(isReviewCycleRecord) ||
-    (state.terminationHistory !== undefined &&
-      (!Array.isArray(state.terminationHistory) ||
-        !state.terminationHistory.every(isTerminationReason)))
+    !Array.isArray(state.terminationHistory) ||
+    !state.terminationHistory.every(isTerminationReason) ||
+    (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) ||
+    (state.resumeAfterPolicyChange !== undefined &&
+      typeof state.resumeAfterPolicyChange !== 'string')
+  ) {
+    throw new Error('Review accounting state is invalid; human recovery is required.');
+  }
+
+  const cycleResults = state.cycleResults as ReviewCycleRecord[];
+  const generalizedRuleHistory = state.generalizedRuleHistory as string[];
+  const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
+  const expectedAutoFixCycles = cycleResults.filter(
+    (record) => record.repositoryChanged === true,
+  ).length;
+  const cycleInvocationsAreConsistent = cycleResults.every(
+    (record, index) =>
+      record.reviewInvocation <= (state.reviewInvocationCount as number) &&
+      (index === 0 || record.reviewInvocation > cycleResults[index - 1]!.reviewInvocation),
+  );
+  const lastCycle = cycleResults.at(-1);
+  const expectedConsecutiveRepeatCount = lastCycle
+    ? [...new Set(lastCycle.generalizedRules)].reduce(
+        (maximum, rule) => Math.max(maximum, consecutiveRuleCount(cycleResults, rule)),
+        0,
+      )
+    : 0;
+  if (
+    cycleResults.length > (state.reviewInvocationCount as number) ||
+    !cycleInvocationsAreConsistent ||
+    JSON.stringify(generalizedRuleHistory) !== JSON.stringify(expectedRuleHistory) ||
+    expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
+    expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
+    (state.terminationReason !== undefined &&
+      state.terminationHistory.at(-1) !== state.terminationReason)
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -1513,6 +1583,7 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
     'repositoryChanged',
   ]);
   return (
+    Object.keys(record).length === allowedKeys.size &&
     Object.keys(record).every((key) => allowedKeys.has(key)) &&
     Number.isInteger(record.reviewInvocation) &&
     (record.reviewInvocation as number) >= 1 &&
@@ -1560,6 +1631,7 @@ function writeAccountingAtPath(
     : undefined;
   const entries = accountingStateEntries(currentValue);
   const nextEntry = { branch, base, accounting };
+  parseAccountingStateEntry({ branch, base, ...accounting });
   const nextEntries = [
     ...entries.filter((entry) => entry.branch !== branch || entry.base !== base),
     nextEntry,
@@ -1574,6 +1646,32 @@ function writeAccountingAtPath(
   const temporaryPath = `${statePath}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, state, 'utf8');
   renameSync(temporaryPath, statePath);
+}
+
+function withAccountingLock<T>(statePath: string, operation: () => T): T {
+  const lockPath = `${statePath}.lock`;
+  let lockHandle: number | undefined;
+  try {
+    for (let attempt = 0; attempt < accountingLockRetryCount; attempt += 1) {
+      try {
+        lockHandle = openSync(lockPath, 'wx');
+        writeFileSync(lockHandle, `${process.pid}\n`, 'utf8');
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, accountingLockRetryMs);
+      }
+    }
+    if (lockHandle === undefined) {
+      throw new Error('Review accounting state is locked; human recovery is required.');
+    }
+    return operation();
+  } finally {
+    if (lockHandle !== undefined) {
+      closeSync(lockHandle);
+      unlinkSync(lockPath);
+    }
+  }
 }
 
 function readReviewAccounting(cwd: string, base: string): ReviewAccounting | string {
@@ -1594,10 +1692,12 @@ function updateAccounting(
   const statePath = resolveReviewStatePath(cwd);
   if (!statePath)
     throw new Error('Could not resolve the repository git directory for review state.');
-  const branch = currentBranch(cwd);
-  const next = update(readReviewAccountingAtPath(statePath, branch, base));
-  writeAccountingAtPath(statePath, branch, base, next);
-  return next;
+  return withAccountingLock(statePath, () => {
+    const branch = currentBranch(cwd);
+    const next = update(readReviewAccountingAtPath(statePath, branch, base));
+    writeAccountingAtPath(statePath, branch, base, next);
+    return next;
+  });
 }
 
 function recordReviewAccounting(
@@ -1687,22 +1787,22 @@ function reserveReviewInvocationAtPath(
   branch: string,
   base: string,
 ): string | undefined {
-  let accounting: ReviewAccounting;
   try {
-    accounting = readReviewAccountingAtPath(statePath, branch, base);
-  } catch (error) {
-    return error instanceof Error ? error.message : 'Review accounting state is invalid.';
-  }
-  if (accounting.reviewInvocationCount >= maxReviewInvocations) {
-    return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
-  }
-  try {
-    writeAccountingAtPath(statePath, branch, base, {
-      ...accounting,
-      reviewInvocationCount: accounting.reviewInvocationCount + 1,
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+        return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
+      }
+      writeAccountingAtPath(statePath, branch, base, {
+        ...accounting,
+        reviewInvocationCount: accounting.reviewInvocationCount + 1,
+      });
+      return undefined;
     });
-  } catch {
-    return 'Could not persist the bounded review accounting state.';
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the bounded review accounting state.';
   }
   return undefined;
 }
