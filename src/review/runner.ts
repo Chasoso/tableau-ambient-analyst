@@ -275,7 +275,7 @@ Implement the Issue in this repository. Read AGENTS.md, the complete Issue,
 relevant ADRs and docs, and directly related implementation and tests. Make
 only the explicitly requested changes. Do not make product, architecture,
 scope, credential, privacy, cost, or external-service decisions. Do not run
-live or external operations, do not edit the review runner, and do not commit.
+live or external operations and do not commit.
 Leave only the intended implementation changes in the working tree.\n`;
 
   const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -641,10 +641,20 @@ export function autoFixAllowedPaths(
     return 'AUTO_FIX repository path scope could not be validated.';
   }
 
-  let issueScopedPaths: Set<string>;
+  let issueDiffPaths: Set<string>;
+  let baseTrackedPaths: Set<string>;
   try {
-    issueScopedPaths = new Set(
+    issueDiffPaths = new Set(
       execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+        cwd,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .map((path) => path.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+    baseTrackedPaths = new Set(
+      execFileSync('git', ['ls-tree', '-r', '--name-only', '--full-tree', base], {
         cwd,
         encoding: 'utf8',
       })
@@ -655,7 +665,7 @@ export function autoFixAllowedPaths(
   } catch {
     return 'AUTO_FIX repository path scope could not be validated.';
   }
-  if (!issueScopedPaths.size) return 'AUTO_FIX Issue-scoped file allowlist is empty.';
+  if (!issueDiffPaths.size) return 'AUTO_FIX Issue-scoped file allowlist is empty.';
 
   const paths = new Set<string>();
   for (const finding of review.blockingFindings) {
@@ -712,8 +722,8 @@ export function autoFixAllowedPaths(
         // A tracked file may be deleted in the working tree. Its existing
         // parent was still checked above, so retain explicit deleted-file support.
       }
-      if (!issueScopedPaths.has(repositoryPath)) {
-        return 'AUTO_FIX finding path is outside the committed Issue diff.';
+      if (!issueDiffPaths.has(repositoryPath) && !baseTrackedPaths.has(repositoryPath)) {
+        return 'AUTO_FIX finding path is outside the Issue-scoped file set.';
       }
       paths.add(repositoryPath);
     }

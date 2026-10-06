@@ -92,7 +92,11 @@ Use this sequence:
    directly related implementation for siblings, and returns consolidated
    findings. Keep the search bounded to the Issue scope.
 9. If every blocking finding is `AUTO_FIX`, apply the deterministic in-scope
-   fixes without human approval and rerun deterministic validation.
+   fixes without human approval and rerun deterministic validation. The
+   authorized path set includes files in the committed Issue diff and
+   directly related sibling files reported by the reviewer when those sibling
+   paths are tracked by the base revision. Repository-boundary, traversal,
+   `.git`, and symlink checks still apply.
 10. Start another fresh independent review against the updated complete diff.
 11. Repeat until the result is `PASS`, blocking findings are zero, and no
     unresolved human escalation remains.
