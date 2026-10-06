@@ -3,13 +3,21 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
 import {
-  maxReviewCycles,
   canContinueAutoFix,
+  findingClassificationsFor,
+  maxAutoFixCycles,
+  maxReviewInvocations,
+  normalizedFindingCategory,
   parseReviewResult,
-  reviewCycleLimitExceeded,
+  repeatedRuleThreshold,
   reviewerInvocationFailure,
+  requiresHumanDecision,
+  terminationResult,
   validationFailure,
+  type ReviewAccounting,
+  type ReviewCycleRecord,
   type ReviewGateResult,
+  type TerminationReason,
 } from './gate.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
@@ -39,9 +47,14 @@ export type ReviewRunnerDependencies = {
     branch: string,
   ) => ReviewGateResult;
   currentBranch: (cwd: string) => string;
+  readAccounting: (cwd: string, base: string) => ReviewAccounting | string;
+  recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
+  recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
+  recordTermination: (cwd: string, base: string, reason: TerminationReason) => ReviewAccounting;
 };
 
-export type ApplyAutoFix = (review: ReviewGateResult) => string | undefined;
+export type ApplyAutoFixResult = { changedRepository: boolean };
+export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult | undefined;
 
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
@@ -176,27 +189,69 @@ export function runBoundedReviewFixLoop(
   dependencies: ReviewRunnerDependencies,
   applyAutoFix: ApplyAutoFix,
 ): ReviewGateResult {
-  for (let cycle = 0; cycle < maxReviewCycles; cycle += 1) {
+  const initialAccounting = dependencies.readAccounting(input.cwd, input.base);
+  if (typeof initialAccounting === 'string') {
+    return reviewerInvocationFailure(initialAccounting);
+  }
+  for (;;) {
     const review = runReviewControlFlow(input, dependencies);
+    let accounting = dependencies.recordReview(input.cwd, input.base, review);
+    const withAccounting = { ...review, accounting };
 
-    if (review.result === 'PASS' || !canContinueAutoFix(review)) return review;
-    if (cycle === maxReviewCycles - 1) {
-      return reviewCycleLimitExceeded(maxReviewCycles);
+    if (review.result === 'PASS') {
+      return withAccounting;
+    }
+    if (!canContinueAutoFix(review)) {
+      if (requiresHumanDecision(review)) {
+        const reason =
+          review.executionStatus === 'FAILED'
+            ? 'REVIEWER_FAILURE'
+            : review.blockingFindings.some(
+                  (finding) => typeof finding !== 'string' && finding.classification === 'BLOCKED',
+                )
+              ? 'BLOCKED'
+              : 'HUMAN_DECISION_REQUIRED';
+        accounting = dependencies.recordTermination(input.cwd, input.base, reason);
+        return terminationResult(reason, accounting, review.blockingFindings);
+      }
+      return withAccounting;
+    }
+
+    if (accounting.consecutiveRepeatCount >= repeatedRuleThreshold) {
+      accounting = dependencies.recordTermination(input.cwd, input.base, 'NON_CONVERGING_REVIEW');
+      return terminationResult('NON_CONVERGING_REVIEW', accounting, review.blockingFindings);
+    }
+    if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+      accounting = dependencies.recordTermination(input.cwd, input.base, 'MAX_REVIEW_INVOCATIONS');
+      return terminationResult('MAX_REVIEW_INVOCATIONS', accounting, review.blockingFindings);
+    }
+    if (accounting.autoFixCycleCount >= maxAutoFixCycles) {
+      accounting = dependencies.recordTermination(input.cwd, input.base, 'MAX_AUTO_FIX_CYCLES');
+      return terminationResult('MAX_AUTO_FIX_CYCLES', accounting, review.blockingFindings);
     }
 
     const fixError = applyAutoFix(review);
     if (fixError) {
-      return reviewerInvocationFailure(`AUTO_FIX implementation failed: ${fixError}`);
+      if (typeof fixError === 'string') {
+        accounting = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
+        return terminationResult('NO_PROGRESS', accounting, review.blockingFindings, fixError);
+      }
+
+      dependencies.recordAutoFix(input.cwd, input.base, fixError.changedRepository);
+      if (!fixError.changedRepository) {
+        const terminated = dependencies.recordTermination(input.cwd, input.base, 'NO_PROGRESS');
+        return terminationResult('NO_PROGRESS', terminated, review.blockingFindings);
+      }
+    } else {
+      dependencies.recordAutoFix(input.cwd, input.base, true);
     }
   }
-
-  return reviewCycleLimitExceeded(maxReviewCycles);
 }
 
 function applyCodexAutoFix(
   input: IndependentReviewInput,
   review: ReviewGateResult,
-): string | undefined {
+): string | ApplyAutoFixResult | undefined {
   if (!canContinueAutoFix(review)) return 'Review was not eligible for AUTO_FIX.';
 
   const prompt = `Repository: Chasoso/tableau-ambient-analyst
@@ -252,7 +307,7 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
     return 'AUTO_FIX changes could not be validated and committed.';
   }
 
-  return undefined;
+  return { changedRepository: true };
 }
 
 function defaultRunnerDependencies(): ReviewRunnerDependencies {
@@ -263,6 +318,10 @@ function defaultRunnerDependencies(): ReviewRunnerDependencies {
     reserveCycle: reserveReviewCycle,
     invokeReviewer: invokeCodexReviewer,
     currentBranch,
+    readAccounting: readReviewAccounting,
+    recordReview: recordReviewAccounting,
+    recordAutoFix: recordAutoFixAccounting,
+    recordTermination: recordTerminationAccounting,
   };
 }
 
@@ -407,22 +466,9 @@ function validateReviewScope(cwd: string, base: string): string | undefined {
 }
 
 function reserveReviewCycle(cwd: string, base: string): string | undefined {
-  const branch = currentBranch(cwd);
-  let statePath: string;
-
-  try {
-    statePath = resolve(
-      cwd,
-      execFileSync('git', ['rev-parse', '--git-path', reviewStateFile], {
-        cwd,
-        encoding: 'utf8',
-      }).trim(),
-    );
-  } catch {
-    return 'Could not resolve the repository git directory for review-cycle state.';
-  }
-
-  return reserveReviewCycleAtPath(statePath, branch, base);
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath) return 'Could not resolve the repository git directory for review state.';
+  return reserveReviewInvocationAtPath(statePath, currentBranch(cwd), base);
 }
 
 export function reserveReviewCycleAtPath(
@@ -430,46 +476,220 @@ export function reserveReviewCycleAtPath(
   branch: string,
   base: string,
 ): string | undefined {
-  let cyclesUsed = 0;
+  return reserveReviewInvocationAtPath(statePath, branch, base);
+}
 
-  if (existsSync(statePath)) {
-    try {
-      const value: unknown = JSON.parse(readFileSync(statePath, 'utf8'));
-
-      if (
-        typeof value !== 'object' ||
-        value === null ||
-        Array.isArray(value) ||
-        typeof (value as { branch?: unknown }).branch !== 'string' ||
-        typeof (value as { base?: unknown }).base !== 'string' ||
-        !Number.isInteger((value as { cyclesUsed?: unknown }).cyclesUsed) ||
-        (value as { cyclesUsed: number }).cyclesUsed < 0
-      ) {
-        return 'Review-cycle state is invalid; human recovery is required.';
-      }
-
-      const state = value as { branch: string; base: string; cyclesUsed: number };
-      if (state.branch === branch && state.base === base) {
-        cyclesUsed = state.cyclesUsed;
-      }
-    } catch {
-      return 'Review-cycle state is invalid; human recovery is required.';
-    }
-  }
-
-  if (cyclesUsed >= maxReviewCycles) {
-    return `Review cycle limit of ${maxReviewCycles} reached for ${branch}.`;
-  }
-
+function resolveReviewStatePath(cwd: string): string | undefined {
   try {
-    const state = JSON.stringify({ branch, base, cyclesUsed: cyclesUsed + 1 });
-    const temporaryPath = `${statePath}.tmp-${process.pid}`;
-    writeFileSync(temporaryPath, state, 'utf8');
-    renameSync(temporaryPath, statePath);
+    return resolve(
+      cwd,
+      execFileSync('git', ['rev-parse', '--git-path', reviewStateFile], {
+        cwd,
+        encoding: 'utf8',
+      }).trim(),
+    );
   } catch {
-    return 'Could not persist the bounded review-cycle state.';
+    return undefined;
+  }
+}
+
+function emptyAccounting(): ReviewAccounting {
+  return {
+    reviewInvocationCount: 0,
+    autoFixCycleCount: 0,
+    generalizedRuleHistory: [],
+    consecutiveRepeatCount: 0,
+    lastFixChangedRepository: null,
+    cycleResults: [],
+  };
+}
+
+function stateForBranch(value: unknown, branch: string, base: string): ReviewAccounting {
+  if (value === undefined) return emptyAccounting();
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Review accounting state is invalid; human recovery is required.');
+  }
+  const state = value as Record<string, unknown>;
+  if (typeof state.branch !== 'string' || typeof state.base !== 'string') {
+    throw new Error('Review accounting state is invalid; human recovery is required.');
+  }
+  if (state.branch !== branch || state.base !== base) return emptyAccounting();
+
+  if (Number.isInteger(state.cyclesUsed) && (state.cyclesUsed as number) >= 0) {
+    return { ...emptyAccounting(), reviewInvocationCount: state.cyclesUsed as number };
   }
 
+  if (
+    !Number.isInteger(state.reviewInvocationCount) ||
+    !Number.isInteger(state.autoFixCycleCount) ||
+    (state.reviewInvocationCount as number) < 0 ||
+    (state.autoFixCycleCount as number) < 0 ||
+    !Array.isArray(state.generalizedRuleHistory) ||
+    !state.generalizedRuleHistory.every((rule) => typeof rule === 'string') ||
+    !Number.isInteger(state.consecutiveRepeatCount) ||
+    (state.consecutiveRepeatCount as number) < 0 ||
+    !(
+      state.lastFixChangedRepository === null || typeof state.lastFixChangedRepository === 'boolean'
+    ) ||
+    !Array.isArray(state.cycleResults)
+  ) {
+    throw new Error('Review accounting state is invalid; human recovery is required.');
+  }
+
+  const accounting: ReviewAccounting = {
+    reviewInvocationCount: state.reviewInvocationCount as number,
+    autoFixCycleCount: state.autoFixCycleCount as number,
+    generalizedRuleHistory: state.generalizedRuleHistory as string[],
+    consecutiveRepeatCount: state.consecutiveRepeatCount as number,
+    lastFixChangedRepository: state.lastFixChangedRepository as boolean | null,
+    cycleResults: state.cycleResults as ReviewCycleRecord[],
+  };
+  if (typeof state.terminationReason === 'string') {
+    accounting.terminationReason = state.terminationReason as TerminationReason;
+  }
+  return accounting;
+}
+
+export function readReviewAccountingAtPath(
+  statePath: string,
+  branch: string,
+  base: string,
+): ReviewAccounting {
+  try {
+    return stateForBranch(
+      existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
+      branch,
+      base,
+    );
+  } catch (error) {
+    throw new Error('Review accounting state is invalid; human recovery is required.', {
+      cause: error,
+    });
+  }
+}
+
+function writeAccountingAtPath(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const state = JSON.stringify({ branch, base, ...accounting });
+  const temporaryPath = `${statePath}.tmp-${process.pid}`;
+  writeFileSync(temporaryPath, state, 'utf8');
+  renameSync(temporaryPath, statePath);
+}
+
+function readReviewAccounting(cwd: string, base: string): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath) return 'Could not resolve the repository git directory for review state.';
+  try {
+    return readReviewAccountingAtPath(statePath, currentBranch(cwd), base);
+  } catch {
+    return 'Review accounting state is invalid; human recovery is required.';
+  }
+}
+
+function updateAccounting(
+  cwd: string,
+  base: string,
+  update: (accounting: ReviewAccounting) => ReviewAccounting,
+): ReviewAccounting {
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath)
+    throw new Error('Could not resolve the repository git directory for review state.');
+  const branch = currentBranch(cwd);
+  const next = update(readReviewAccountingAtPath(statePath, branch, base));
+  writeAccountingAtPath(statePath, branch, base, next);
+  return next;
+}
+
+function recordReviewAccounting(
+  cwd: string,
+  base: string,
+  review: ReviewGateResult,
+): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => {
+    const findings = [...review.blockingFindings, ...review.nonBlockingFindings];
+    const rules = findings
+      .filter((finding) => typeof finding !== 'string')
+      .map((finding) => normalizedFindingCategory(finding));
+    const nextRule = rules[0];
+    const previousRule = accounting.generalizedRuleHistory.at(-1);
+    return {
+      ...accounting,
+      generalizedRuleHistory: nextRule
+        ? [...accounting.generalizedRuleHistory, nextRule]
+        : accounting.generalizedRuleHistory,
+      consecutiveRepeatCount: nextRule
+        ? previousRule === nextRule
+          ? accounting.consecutiveRepeatCount + 1
+          : 1
+        : 0,
+      cycleResults: [
+        ...accounting.cycleResults,
+        {
+          reviewInvocation: accounting.reviewInvocationCount,
+          result: review.result,
+          classifications: findingClassificationsFor(findings),
+          generalizedRules: rules,
+          repositoryChanged: null,
+        },
+      ],
+    };
+  });
+}
+
+function recordAutoFixAccounting(
+  cwd: string,
+  base: string,
+  changedRepository: boolean,
+): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => ({
+    ...accounting,
+    autoFixCycleCount: accounting.autoFixCycleCount + (changedRepository ? 1 : 0),
+    lastFixChangedRepository: changedRepository,
+    cycleResults: accounting.cycleResults.map((record, index) =>
+      index === accounting.cycleResults.length - 1
+        ? { ...record, repositoryChanged: changedRepository }
+        : record,
+    ),
+  }));
+}
+
+function recordTerminationAccounting(
+  cwd: string,
+  base: string,
+  reason: TerminationReason,
+): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => ({
+    ...accounting,
+    terminationReason: reason,
+  }));
+}
+
+function reserveReviewInvocationAtPath(
+  statePath: string,
+  branch: string,
+  base: string,
+): string | undefined {
+  let accounting: ReviewAccounting;
+  try {
+    accounting = readReviewAccountingAtPath(statePath, branch, base);
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Review accounting state is invalid.';
+  }
+  if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+    return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
+  }
+  try {
+    writeAccountingAtPath(statePath, branch, base, {
+      ...accounting,
+      reviewInvocationCount: accounting.reviewInvocationCount + 1,
+    });
+  } catch {
+    return 'Could not persist the bounded review accounting state.';
+  }
   return undefined;
 }
 

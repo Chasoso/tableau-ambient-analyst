@@ -42,8 +42,11 @@ existing Human Decision is `HUMAN_DECISION_REQUIRED`; report what must be
 decided, why repository rules cannot decide it, options, and a recommendation.
 Missing credentials, services, fixtures, or repository prerequisites are
 `BLOCKED`, not decisions. Never weaken safety boundaries to keep the loop
-moving. The review cycle limit is six; on exhaustion stop and report unresolved
-findings, repeated categories, and why convergence failed.
+moving. The default limits are 12 independent review invocations and 8
+AUTO_FIX cycles. Track them separately. Escalate after the same normalized
+generalized rule repeats three times, or when an AUTO_FIX reports no material
+repository change. On any limit or convergence stop, report unresolved
+findings, repeated categories, per-cycle results, and why convergence failed.
 
 The PR gate requires deterministic validation, a fresh independent `PASS`, no
 blocking findings, and no unresolved human escalation. Preserve the secret

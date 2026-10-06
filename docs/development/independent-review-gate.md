@@ -278,18 +278,21 @@ When a reviewer reports a blocking finding:
 3. rerun deterministic validation and review the updated complete diff;
 4. start an independent review again in a fresh context; and
 5. repeat until the result is `PASS`, a human decision/blocker is required, or
-   the six-cycle limit is reached. On the limit, report unresolved findings,
-   repeated finding categories, and why automation did not converge.
+   the 12-review-invocation or 8-AUTO_FIX limit is reached. On the limit or
+   convergence stop, report invocation count, AUTO_FIX count, each cycle's
+   result/classification/rule/change status, unresolved findings, repeated
+   categories, and why automation did not converge.
 
 The implementation context must not self-certify that its own fix resolved a
 blocking finding. A changed diff always requires independent re-review.
 
 The executable runner exposes `runBoundedReviewFixLoop`. It calls the existing
 validation and fresh-review path, hands AUTO_FIX-only results to an
-implementer callback, and repeats up to six cycles. The callback is the
+implementer callback, and repeats up to 12 review invocations and 8 actual
+AUTO_FIX cycles. The callback is the
 Implementer Codex responsibility; the read-only reviewer never edits files.
-Callback failure, validation failure, HUMAN_DECISION_REQUIRED, BLOCKED, and
-cycle exhaustion remain closed gates.
+Callback failure, validation failure, HUMAN_DECISION_REQUIRED, BLOCKED,
+non-convergence, no-progress, and either limit remain closed gates.
 
 ## Human escalation
 

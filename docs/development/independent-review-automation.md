@@ -102,9 +102,10 @@ npm run review:independent -- \
 The command builds the small runner, re-runs deterministic validation, fetches
 the Issue body, and starts a fresh read-only Codex process. It exits non-zero
 unless the reviewer returns a valid `PASS` result. The runner stores only a
-small branch/base cycle counter in the local, untracked
-`.git/tableau-ambient-review-state.json` file and stops after six invocations across process
-restarts. This command is not called by `npm run validate` and is not added to
+small branch/base accounting state in the local, untracked
+`.git/tableau-ambient-review-state.json` file and stops after 12 review
+invocations or 8 AUTO_FIX cycles across process restarts. This command is not
+called by `npm run validate` and is not added to
 ordinary CI. Before validation or reviewer invocation, the runner requires a
 non-base feature branch, an existing base ref, a clean committed working tree,
 and a non-empty diff against that base. This prevents uncommitted or omitted
@@ -114,19 +115,27 @@ The runner is a bounded review/fix loop, not a general workflow engine. When
 all blocking findings are structured `AUTO_FIX`, a separate workspace-write
 Codex implementer applies only those deterministic fixes, creates a
 Conventional Commit, and returns to validation and a fresh read-only review.
-The reviewer process never edits files. The documented maximum is six
-independent review cycles; remaining blocking findings then become
-`HUMAN_DECISION_REQUIRED`.
+The reviewer process never edits files. The default maximum is 12 independent
+review invocations and 8 actual AUTO_FIX cycles. Repeated normalized
+generalized rules are tracked; the third consecutive repeat terminates as
+`NON_CONVERGING_REVIEW`. An AUTO_FIX with no material repository change
+terminates as `NO_PROGRESS`.
 
 Cycle state is reserved only after the deterministic validation succeeds and
 the Issue context has been retrieved, immediately before the Codex process is
 started. A validation failure or Issue retrieval failure therefore returns a
-closed result without consuming a review cycle. Each runner invocation
-reserves at most one cycle; the cycle-limit result is returned before Codex is
-started. The state file is resolved through Git so linked worktrees use their
-actual git directory. It is created with a temporary file and rename, and an
-existing malformed or invalid state fails closed with
-`HUMAN_DECISION_REQUIRED` rather than resetting the counter.
+closed result without consuming a review invocation. Each runner invocation
+reserves at most one review invocation; result capture retries do not consume
+an AUTO_FIX cycle. The state file is resolved through Git so linked worktrees
+use their actual git directory. It is created with a temporary file and
+rename, and an existing malformed or invalid state fails closed with
+`HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
+
+The old `cyclesUsed` field migrates to `reviewInvocationCount` without being
+reset. The Issue #29 branch's prior state of 6 invocations and the prior run
+report of 1 actual AUTO_FIX are carried into the new accounting state; the
+legacy state did not retain per-cycle rule history, so that history starts
+empty after the explicit migration.
 
 ## Gate result contract
 
@@ -196,10 +205,14 @@ uncertainty.
   fresh review;
 - `CHANGES_REQUIRED` with HUMAN_DECISION_REQUIRED or BLOCKED findings: stop;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
-- six review cycles with unresolved blocking findings: stop and escalate.
+- 8 AUTO_FIX cycles: stop and escalate with the accounting report;
+- 12 review invocations: stop and escalate with the accounting report;
+- the same generalized rule three times consecutively: `NON_CONVERGING_REVIEW`;
+- an AUTO_FIX with no repository change: `NO_PROGRESS`.
 
 Non-blocking findings are returned for recording and do not automatically cause
-implementation churn.
+implementation churn. A result-capture retry is part of one reviewer
+invocation and never increments the AUTO_FIX count.
 
 ## Security and network boundary
 

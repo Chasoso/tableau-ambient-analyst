@@ -7,17 +7,21 @@ import { describe, expect, it } from 'vitest';
 import {
   canOpenPullRequest,
   canContinueAutoFix,
+  maxAutoFixCycles,
   maxReviewCycles,
+  normalizedFindingCategory,
   parseReviewResult,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
   requiresHumanDecision,
   validationFailure,
+  type ReviewAccounting,
 } from '../src/review/gate.js';
 import {
   buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
+  readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runReviewControlFlow,
   type IndependentReviewInput,
@@ -271,9 +275,37 @@ describe('independent review runner control flow', () => {
     issue: '26',
   };
 
+  function autoFixReview(rule: string): ReturnType<typeof parseReviewResult> {
+    return parseReviewResult(
+      JSON.stringify({
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'AUTO_FIX',
+            finding: `Finding for ${rule}`,
+            generalized_rule: rule,
+            affected_locations: ['src/example.ts'],
+            recommended_fix: 'Apply the deterministic repository rule.',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+  }
+
   function dependencies(
     overrides: Partial<ReviewRunnerDependencies> = {},
   ): ReviewRunnerDependencies {
+    let accounting: ReviewAccounting = {
+      reviewInvocationCount: 0,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [] as string[],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null as boolean | null,
+      cycleResults: [],
+    };
     return {
       validateScope: () => undefined,
       runValidation: () => true,
@@ -293,6 +325,49 @@ describe('independent review runner control flow', () => {
           }),
         ),
       currentBranch: () => 'feature/review',
+      readAccounting: () => accounting,
+      recordReview: (_cwd, _base, review) => {
+        const rules = review.blockingFindings
+          .filter((finding) => typeof finding !== 'string')
+          .map(normalizedFindingCategory);
+        const nextRule = rules[0];
+        const previousRule = accounting.generalizedRuleHistory.at(-1);
+        accounting = {
+          ...accounting,
+          reviewInvocationCount: accounting.reviewInvocationCount + 1,
+          generalizedRuleHistory: nextRule
+            ? [...accounting.generalizedRuleHistory, nextRule]
+            : accounting.generalizedRuleHistory,
+          consecutiveRepeatCount: nextRule
+            ? previousRule === nextRule
+              ? accounting.consecutiveRepeatCount + 1
+              : 1
+            : 0,
+          cycleResults: [
+            ...accounting.cycleResults,
+            {
+              reviewInvocation: accounting.reviewInvocationCount + 1,
+              result: review.result,
+              classifications: [],
+              generalizedRules: [],
+              repositoryChanged: null,
+            },
+          ],
+        };
+        return accounting;
+      },
+      recordAutoFix: (_cwd, _base, changedRepository) => {
+        accounting = {
+          ...accounting,
+          autoFixCycleCount: accounting.autoFixCycleCount + (changedRepository ? 1 : 0),
+          lastFixChangedRepository: changedRepository,
+        };
+        return accounting;
+      },
+      recordTermination: (_cwd, _base, terminationReason) => {
+        if (terminationReason) accounting = { ...accounting, terminationReason };
+        return accounting;
+      },
       ...overrides,
     };
   }
@@ -506,9 +581,11 @@ describe('independent review runner control flow', () => {
     expect(fixes).toBe(1);
     expect(validations).toBe(2);
     expect(reviews).toBe(2);
+    expect(result.accounting?.reviewInvocationCount).toBe(2);
+    expect(result.accounting?.autoFixCycleCount).toBe(1);
   });
 
-  it('stops the AUTO_FIX loop when the bounded cycle limit is reached', () => {
+  it('does not count a PASS or result-capture retry as an AUTO_FIX cycle', () => {
     let fixes = 0;
     const result = runBoundedReviewFixLoop(
       input,
@@ -516,21 +593,35 @@ describe('independent review runner control flow', () => {
         invokeReviewer: () =>
           parseReviewResult(
             JSON.stringify({
-              result: 'CHANGES_REQUIRED',
-              blockingFindings: [
-                {
-                  severity: 'blocking',
-                  classification: 'AUTO_FIX',
-                  finding: 'Repeating finding',
-                  generalized_rule: 'The same rule remains unmet.',
-                  affected_locations: ['src/a.ts'],
-                  recommended_fix: 'Apply the rule.',
-                },
-              ],
+              result: 'PASS',
+              blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
             }),
           ),
+      }),
+      () => {
+        fixes += 1;
+        return { changedRepository: true };
+      },
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(result.accounting?.reviewInvocationCount).toBe(1);
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
+    expect(fixes).toBe(0);
+  });
+
+  it('stops the AUTO_FIX loop when the bounded cycle limit is reached', () => {
+    let fixes = 0;
+    let reviews = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          reviews += 1;
+          return autoFixReview(`distinct rule ${reviews}`);
+        },
       }),
       () => {
         fixes += 1;
@@ -539,8 +630,114 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
-    expect(result.blockingFindings[0]).toContain('maximum');
-    expect(fixes).toBe(maxReviewCycles - 1);
+    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
+    expect(
+      result.blockingFindings.some(
+        (finding) => typeof finding === 'string' && finding.includes('AUTO_FIX cycle limit'),
+      ),
+    ).toBe(true);
+    expect(fixes).toBe(maxAutoFixCycles);
+  });
+
+  it('continues across different generalized rules within both limits', () => {
+    const rules = [
+      'schema validation',
+      'stale documentation',
+      'dependency pinning',
+      'evidence verifier',
+    ];
+    let reviews = 0;
+    let fixes = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          const rule = rules[reviews];
+          reviews += 1;
+          return rule
+            ? autoFixReview(rule)
+            : parseReviewResult(
+                JSON.stringify({
+                  result: 'PASS',
+                  blockingFindings: [],
+                  nonBlockingFindings: [],
+                  escalationRequired: false,
+                }),
+              );
+        },
+      }),
+      () => {
+        fixes += 1;
+        return { changedRepository: true };
+      },
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(reviews).toBe(5);
+    expect(fixes).toBe(4);
+    expect(result.accounting?.consecutiveRepeatCount).toBe(0);
+  });
+
+  it('escalates after the same generalized rule repeats three times', () => {
+    let fixes = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({ invokeReviewer: () => autoFixReview('same external-boundary rule') }),
+      () => {
+        fixes += 1;
+        return { changedRepository: true };
+      },
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
+    expect(fixes).toBe(2);
+  });
+
+  it('escalates when AUTO_FIX makes no repository change', () => {
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({ invokeReviewer: () => autoFixReview('missing fail-closed handling') }),
+      () => ({ changedRepository: false }),
+    );
+
+    expect(result.terminationReason).toBe('NO_PROGRESS');
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
+    expect(result.accounting?.lastFixChangedRepository).toBe(false);
+  });
+
+  it('stops at the independent review invocation limit separately from AUTO_FIX cycles', () => {
+    let reviews = 0;
+    const limitAccounting = {
+      reviewInvocationCount: 11,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [] as string[],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null as boolean | null,
+      cycleResults: [],
+    };
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        readAccounting: () => limitAccounting,
+        recordReview: () => ({ ...limitAccounting, reviewInvocationCount: 12 }),
+        recordTermination: () => ({
+          ...limitAccounting,
+          reviewInvocationCount: 12,
+          terminationReason: 'MAX_REVIEW_INVOCATIONS' as const,
+        }),
+        invokeReviewer: () => {
+          reviews += 1;
+          return autoFixReview(`rule-${reviews}`);
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.terminationReason).toBe('MAX_REVIEW_INVOCATIONS');
+    expect(result.accounting?.reviewInvocationCount).toBe(12);
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
   });
 });
 
@@ -562,6 +759,26 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
+  it('migrates legacy cyclesUsed without resetting review invocations', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({ branch: 'feature/review', base: 'main', cyclesUsed: 6 }),
+      'utf8',
+    );
+
+    try {
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: 6,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('creates initial state only when the state file is absent', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
@@ -571,7 +788,12 @@ describe('review cycle state', () => {
       expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual({
         branch: 'feature/review',
         base: 'main',
-        cyclesUsed: 1,
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });

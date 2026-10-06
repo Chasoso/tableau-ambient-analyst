@@ -1,6 +1,10 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
 export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const;
-export const maxReviewCycles = 6;
+export const maxReviewInvocations = 12;
+export const maxAutoFixCycles = 8;
+export const repeatedRuleThreshold = 3;
+/** @deprecated Use maxReviewInvocations. */
+export const maxReviewCycles = maxReviewInvocations;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 export type FindingClassification = (typeof findingClassifications)[number];
@@ -16,12 +20,43 @@ export type ReviewFinding = {
 
 export type ReviewFindingValue = string | ReviewFinding;
 
+export const terminationReasons = [
+  'MAX_AUTO_FIX_CYCLES',
+  'MAX_REVIEW_INVOCATIONS',
+  'NON_CONVERGING_REVIEW',
+  'NO_PROGRESS',
+  'HUMAN_DECISION_REQUIRED',
+  'BLOCKED',
+  'REVIEWER_FAILURE',
+] as const;
+export type TerminationReason = (typeof terminationReasons)[number];
+
+export type ReviewCycleRecord = {
+  reviewInvocation: number;
+  result: ReviewResultName;
+  classifications: FindingClassification[];
+  generalizedRules: string[];
+  repositoryChanged: boolean | null;
+};
+
+export type ReviewAccounting = {
+  reviewInvocationCount: number;
+  autoFixCycleCount: number;
+  generalizedRuleHistory: string[];
+  consecutiveRepeatCount: number;
+  lastFixChangedRepository: boolean | null;
+  cycleResults: ReviewCycleRecord[];
+  terminationReason?: TerminationReason;
+};
+
 export type ReviewGateResult = {
   result: ReviewResultName;
   blockingFindings: ReviewFindingValue[];
   nonBlockingFindings: ReviewFindingValue[];
   escalationRequired: boolean;
   executionStatus?: 'COMPLETED' | 'FAILED';
+  accounting?: ReviewAccounting;
+  terminationReason?: TerminationReason;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -143,9 +178,29 @@ export function validationFailure(message: string): ReviewGateResult {
 export function reviewCycleLimitExceeded(cycle: number): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
-    blockingFindings: [`Review cycle ${cycle} exceeds the maximum of ${maxReviewCycles}.`],
+    blockingFindings: [
+      `Review invocation ${cycle} exceeds the maximum of ${maxReviewInvocations}.`,
+    ],
     nonBlockingFindings: [],
     escalationRequired: true,
+    terminationReason: 'MAX_REVIEW_INVOCATIONS',
+  };
+}
+
+export function terminationResult(
+  reason: TerminationReason,
+  accounting: ReviewAccounting,
+  unresolvedFindings: ReviewFindingValue[] = [],
+  message?: string,
+): ReviewGateResult {
+  const detail = message ?? terminationMessage(reason, accounting);
+  return {
+    result: 'HUMAN_DECISION_REQUIRED',
+    blockingFindings: [...unresolvedFindings, detail],
+    nonBlockingFindings: [],
+    escalationRequired: true,
+    accounting,
+    terminationReason: reason,
   };
 }
 
@@ -169,6 +224,36 @@ export function canContinueAutoFix(review: ReviewGateResult): boolean {
       (finding) => typeof finding !== 'string' && finding.classification === 'AUTO_FIX',
     )
   );
+}
+
+export function normalizedFindingCategory(finding: ReviewFindingValue): string {
+  const value = typeof finding === 'string' ? finding : finding.generalized_rule;
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function findingClassificationsFor(findings: ReviewFindingValue[]): FindingClassification[] {
+  return findings.flatMap((finding) =>
+    typeof finding === 'string' ? [] : [finding.classification],
+  );
+}
+
+function terminationMessage(reason: TerminationReason, accounting: ReviewAccounting): string {
+  switch (reason) {
+    case 'MAX_AUTO_FIX_CYCLES':
+      return `AUTO_FIX cycle limit of ${maxAutoFixCycles} reached.`;
+    case 'MAX_REVIEW_INVOCATIONS':
+      return `Review invocation limit of ${maxReviewInvocations} reached.`;
+    case 'NON_CONVERGING_REVIEW':
+      return `The same generalized finding rule repeated ${accounting.consecutiveRepeatCount} times.`;
+    case 'NO_PROGRESS':
+      return 'AUTO_FIX reported success without a material repository change.';
+    case 'BLOCKED':
+      return 'A required execution prerequisite is unavailable.';
+    case 'REVIEWER_FAILURE':
+      return 'Independent reviewer execution failed.';
+    case 'HUMAN_DECISION_REQUIRED':
+      return 'A finding requires a human-owned decision.';
+  }
 }
 
 export function requiresHumanDecision(review: ReviewGateResult): boolean {
