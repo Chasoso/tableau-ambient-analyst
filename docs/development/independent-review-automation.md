@@ -110,13 +110,13 @@ non-base feature branch, an existing base ref, a clean committed working tree,
 and a non-empty diff against that base. This prevents uncommitted or omitted
 working-tree changes from being reported as a complete review.
 
-The runner is intentionally one review invocation rather than a general
-orchestrator. The implementer handles an in-scope fix after
-`CHANGES_REQUIRED`, reruns validation, and invokes the command again from the
-updated branch. The documented maximum is six independent review cycles for
-this spike because the implementation itself required several corrective
-reviews; the bound remains explicit and easy to revise after pilot evidence.
-Remaining blocking findings then become `HUMAN_DECISION_REQUIRED`.
+The runner is a bounded review/fix loop, not a general workflow engine. When
+all blocking findings are structured `AUTO_FIX`, a separate workspace-write
+Codex implementer applies only those deterministic fixes, creates a
+Conventional Commit, and returns to validation and a fresh read-only review.
+The reviewer process never edits files. The documented maximum is six
+independent review cycles; remaining blocking findings then become
+`HUMAN_DECISION_REQUIRED`.
 
 Cycle state is reserved only after the deterministic validation succeeds and
 the Issue context has been retrieved, immediately before the Codex process is
@@ -191,8 +191,10 @@ uncertainty.
 - validation failure: reviewer is not invoked and the gate remains closed;
 - process failure or timeout: `HUMAN_DECISION_REQUIRED`-equivalent stop;
 - malformed reviewer output: not PASS;
-- `CHANGES_REQUIRED`: return blocking findings, fix in scope, rerun validation,
-  and start a fresh review;
+- `CHANGES_REQUIRED` with AUTO_FIX-only findings: invoke the separate
+  implementer, commit the in-scope correction, rerun validation, and start a
+  fresh review;
+- `CHANGES_REQUIRED` with HUMAN_DECISION_REQUIRED or BLOCKED findings: stop;
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
 - six review cycles with unresolved blocking findings: stop and escalate.
 

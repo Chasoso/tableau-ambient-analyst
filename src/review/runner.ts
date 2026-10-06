@@ -130,7 +130,9 @@ the review result.
 }
 
 export function runIndependentReview(input: IndependentReviewInput): ReviewGateResult {
-  return runReviewControlFlow(input, defaultRunnerDependencies());
+  return runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (review) =>
+    applyCodexAutoFix(input, review),
+  );
 }
 
 export function runReviewControlFlow(
@@ -185,7 +187,69 @@ export function runBoundedReviewFixLoop(
     }
   }
 
-  return reviewCycleLimitExceeded(maxReviewCycles + 1);
+  return reviewCycleLimitExceeded(maxReviewCycles);
+}
+
+function applyCodexAutoFix(
+  input: IndependentReviewInput,
+  review: ReviewGateResult,
+): string | undefined {
+  if (!canContinueAutoFix(review)) return 'Review was not eligible for AUTO_FIX.';
+
+  const prompt = `Repository: Chasoso/tableau-ambient-analyst
+Issue: #${input.issue}
+
+The independent read-only reviewer found only deterministic AUTO_FIX findings.
+Apply those fixes in the repository. Read AGENTS.md, the Issue, relevant ADRs,
+docs, changed files, and directly related siblings. Implement only the
+explicitly decided fixes represented below; do not make product, architecture,
+scope, credential, privacy, cost, or external-service decisions. Do not edit
+the review runner to suppress findings. Keep safety boundaries and validation
+strict. Do not use --no-verify or perform live/external operations.
+
+Findings:
+${JSON.stringify(review.blockingFindings, null, 2)}
+
+After editing, leave the working tree with only the in-scope AUTO_FIX changes.
+`;
+
+  const processResult = spawnSync(
+    'codex',
+    ['exec', '--ephemeral', '--sandbox', 'workspace-write', '--json'],
+    {
+      cwd: input.cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      input: prompt,
+      maxBuffer: 1024 * 1024,
+      timeout: reviewerTimeoutMs,
+    },
+  );
+
+  if (processResult.error) return processResult.error.message;
+  if (processResult.signal) return `Codex was terminated by ${processResult.signal}.`;
+  if (processResult.status !== 0) {
+    return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
+  }
+
+  const status = execFileSync('git', ['status', '--porcelain'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+  }).trim();
+  if (!status) return 'AUTO_FIX implementer made no repository changes.';
+
+  try {
+    execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['add', '--all', '--', '.'], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['commit', '-m', 'fix: apply independent review AUTO_FIX'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'AUTO_FIX changes could not be validated and committed.';
+  }
+
+  return undefined;
 }
 
 function defaultRunnerDependencies(): ReviewRunnerDependencies {
