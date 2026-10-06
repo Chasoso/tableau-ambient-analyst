@@ -91,6 +91,8 @@ export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
 };
 
+type PullRequestCreationResult = { ok: true; url: string } | { ok: false; error: string };
+
 const requiredSelfReviewChecks = [
   'scope',
   'completeDiff',
@@ -230,10 +232,10 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   if (!canOpenPullRequest(true, review)) return review;
 
   const pullRequestUrl = pushAndCreatePullRequest(input, issue, branch);
-  if (typeof pullRequestUrl !== 'string') {
-    return reviewerInvocationFailure(pullRequestUrl ?? 'Pull request creation failed.');
+  if (!pullRequestUrl.ok) {
+    return reviewerInvocationFailure(pullRequestUrl.error);
   }
-  return { ...review, pullRequestUrl };
+  return { ...review, pullRequestUrl: pullRequestUrl.url };
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
@@ -392,14 +394,29 @@ self-review cannot pass. Do not claim a check passed unless you performed it.
     ) {
       return 'Issue implementer changed the repository commit.';
     }
-    if (!workingTreePaths(input.cwd).length) return 'Issue implementer made no repository changes.';
+    const declaredChangesError = validateImplementerChanges(input.cwd, input.base, report.changes);
+    if (declaredChangesError) return declaredChangesError;
     if (execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' })) {
       // The command output is intentionally ignored; a successful diff check is sufficient.
     }
     if (!runDeterministicValidation(input.cwd).passed) {
       return 'Issue implementation failed deterministic validation.';
     }
-    execFileSync('git', ['add', '-A'], { cwd: input.cwd, encoding: 'utf8' });
+    const declaredPaths = report.changes.map((change) => change.path);
+    execFileSync('git', ['add', '--', ...declaredPaths], { cwd: input.cwd, encoding: 'utf8' });
+    const stagedPaths = execFileSync('git', ['diff', '--cached', '--name-only'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .map((path) => path.trim())
+      .filter(Boolean);
+    if (
+      stagedPaths.length !== declaredPaths.length ||
+      stagedPaths.some((path) => !declaredPaths.includes(path))
+    ) {
+      return 'Issue implementer staged files without matching bounded reasons.';
+    }
     execFileSync('git', ['commit', '-m', `feat: implement issue #${input.issue}`], {
       cwd: input.cwd,
       encoding: 'utf8',
@@ -474,11 +491,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function pushAndCreatePullRequest(
+export function pushAndCreatePullRequest(
   input: IndependentReviewInput,
   issue: IssueContext,
   branch: string,
-): string | undefined {
+): PullRequestCreationResult {
   try {
     execFileSync('git', ['push', '--set-upstream', 'origin', branch], {
       cwd: input.cwd,
@@ -503,10 +520,10 @@ function pushAndCreatePullRequest(
       { cwd: input.cwd, encoding: 'utf8' },
     ).trim();
     return /^https:\/\/github\.com\/[^\s]+$/.test(output)
-      ? output
-      : 'Pull request creation returned an invalid URL.';
+      ? { ok: true, url: output }
+      : { ok: false, error: 'Pull request creation returned an invalid URL.' };
   } catch {
-    return 'Branch push or pull request creation failed.';
+    return { ok: false, error: 'Branch push or pull request creation failed.' };
   }
 }
 
@@ -1118,6 +1135,58 @@ function workingTreePaths(cwd: string): string[] {
   ];
 }
 
+export function validateImplementerChanges(
+  cwd: string,
+  base: string,
+  changes: AutoFixChangedFile[],
+): string | undefined {
+  if (!changes.length) return 'Issue implementer did not report bounded changes.';
+
+  let repositoryRoot: string;
+  let changedPaths: string[];
+  try {
+    repositoryRoot = realpathSync(
+      execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
+    );
+    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+    changedPaths = workingTreePaths(cwd);
+  } catch {
+    return 'Issue implementer repository snapshot could not be validated.';
+  }
+
+  const declaredPaths = changes.map((change) => change.path);
+  for (const path of declaredPaths) {
+    if (
+      !path ||
+      isAbsolute(path) ||
+      win32.isAbsolute(path) ||
+      path.split('/').some((part) => !part || part === '.' || part === '..') ||
+      path.split('/').includes('.git')
+    ) {
+      return 'Issue implementer reported an invalid repository path.';
+    }
+    const absolutePath = resolve(repositoryRoot, path);
+    if (relative(repositoryRoot, absolutePath).replaceAll('\\', '/') !== path) {
+      return 'Issue implementer reported a repository path outside the root.';
+    }
+    const pathSafetyError = validateRepositoryPathState(repositoryRoot, path);
+    if (pathSafetyError) return pathSafetyError;
+  }
+
+  if (!changedPaths.length) return 'Issue implementer made no repository changes.';
+  if (
+    changedPaths.length !== declaredPaths.length ||
+    changedPaths.some((path) => !declaredPaths.includes(path)) ||
+    declaredPaths.some((path) => !changedPaths.includes(path))
+  ) {
+    return 'Issue implementer changed files without matching bounded reasons.';
+  }
+  return undefined;
+}
+
 function defaultRunnerDependencies(): ReviewRunnerDependencies {
   return {
     validateScope: validateReviewScope,
@@ -1569,7 +1638,6 @@ function consecutiveRuleCount(cycleResults: ReviewCycleRecord[], rule: string): 
   let count = 0;
   for (let index = cycleResults.length - 1; index >= 0; index -= 1) {
     const record = cycleResults[index];
-    if (record?.repositoryChanged === true) break;
     if (!record || !record.generalizedRules.includes(rule)) break;
     count += 1;
   }

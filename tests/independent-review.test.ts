@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,7 +35,9 @@ import {
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runReviewControlFlow,
+  pushAndCreatePullRequest,
   validateAutoFixChanges,
+  validateImplementerChanges,
   validateRepositoryPathState,
   verifyImplementerSelfReview,
   type IndependentReviewInput,
@@ -441,7 +451,6 @@ describe('independent review runner control flow', () => {
           let count = 0;
           for (let index = accounting.cycleResults.length - 1; index >= 0; index -= 1) {
             const record = accounting.cycleResults[index];
-            if (record?.repositoryChanged === true) break;
             if (!record || !record.generalizedRules.includes(rule)) break;
             count += 1;
           }
@@ -817,7 +826,7 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.consecutiveRepeatCount).toBe(0);
   });
 
-  it('allows the same generalized rule when each cycle makes progress', () => {
+  it('terminates on the third repeated generalized rule after repository changes', () => {
     let fixes = 0;
     const result = runBoundedReviewFixLoop(
       input,
@@ -829,9 +838,9 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
-    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
-    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
-    expect(fixes).toBe(maxAutoFixCycles);
+    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
+    expect(fixes).toBe(2);
   });
 
   it('tracks a repeated generalized rule when it is not the first finding', () => {
@@ -871,12 +880,12 @@ describe('independent review runner control flow', () => {
       () => ({ changedRepository: true }),
     );
 
-    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
-    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
-    expect(reviews).toBe(maxAutoFixCycles + 1);
+    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
+    expect(reviews).toBe(3);
   });
 
-  it('escalates repeated rules only when prior cycles made no progress', () => {
+  it('counts repeated rules across prior repository changes', () => {
     const result = runBoundedReviewFixLoop(
       input,
       dependencies(
@@ -889,14 +898,14 @@ describe('independent review runner control flow', () => {
               result: 'CHANGES_REQUIRED',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
-              repositoryChanged: null,
+              repositoryChanged: true,
             },
             {
               reviewInvocation: 2,
               result: 'CHANGES_REQUIRED',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
-              repositoryChanged: null,
+              repositoryChanged: true,
             },
           ],
         },
@@ -1341,6 +1350,110 @@ describe('AUTO_FIX path scope', () => {
           { path: 'src/tracked.ts', reason: 'affected_location' },
         ]),
       ).toContain('invalid repository path');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Issue-to-PR handoff boundaries', () => {
+  const issue = {
+    title: 'Issue',
+    body: 'Acceptance criteria',
+    url: 'https://example.test/29',
+  };
+
+  it('fails closed when the branch push fails', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-push-failure-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+      writeFileSync(join(directory, 'README.md'), '# fixture\n');
+      execFileSync('git', ['add', 'README.md'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
+
+      expect(
+        pushAndCreatePullRequest(
+          { cwd: directory, base: 'main', issue: '29' },
+          issue,
+          'feature/review',
+        ),
+      ).toEqual({ ok: false, error: 'Branch push or pull request creation failed.' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when pull-request creation fails after a successful push', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-pr-failure-'));
+    const fakeBin = join(directory, 'bin');
+    const previousPath = process.env.PATH;
+    try {
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, 'gh'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(fakeBin, 'gh'), 0o755);
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+      writeFileSync(join(directory, 'README.md'), '# fixture\n');
+      execFileSync('git', ['add', 'README.md'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['init', '-q', '--bare', join(directory, 'origin.git')], {
+        cwd: directory,
+      });
+      execFileSync('git', ['remote', 'add', 'origin', join(directory, 'origin.git')], {
+        cwd: directory,
+      });
+      execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
+
+      expect(
+        pushAndCreatePullRequest(
+          { cwd: directory, base: 'main', issue: '29' },
+          issue,
+          'feature/review',
+        ),
+      ).toEqual({ ok: false, error: 'Branch push or pull request creation failed.' });
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects undeclared and out-of-scope implementer changes', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-implementer-scope-'));
+    try {
+      mkdirSync(join(directory, 'src'));
+      writeFileSync(join(directory, 'src', 'tracked.ts'), 'export const value = 1;\n');
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+      execFileSync('git', ['add', '.'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
+      writeFileSync(join(directory, 'src', 'tracked.ts'), 'export const value = 2;\n');
+      writeFileSync(join(directory, 'src', 'undeclared.ts'), 'export {};\n');
+
+      expect(
+        validateImplementerChanges(directory, 'main', [
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+        ]),
+      ).toBe('Issue implementer changed files without matching bounded reasons.');
+      expect(
+        validateImplementerChanges(directory, 'main', [
+          { path: '../outside.ts', reason: 'affected_location' },
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+          { path: 'src/undeclared.ts', reason: 'direct_test' },
+        ]),
+      ).toBe('Issue implementer reported an invalid repository path.');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
