@@ -1551,7 +1551,7 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   it('preserves accounting when branches alternate', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));

@@ -234,7 +234,9 @@ uncertainty.
 - `HUMAN_DECISION_REQUIRED`: stop without choosing the material decision; and
 - 8 AUTO_FIX cycles: stop and escalate with the accounting report;
 - 16 review invocations: stop and escalate with the accounting report;
-- the same generalized rule three times consecutively: `NON_CONVERGING_REVIEW`;
+- the same generalized rule and concrete finding, with no meaningful progress,
+  repeated to the threshold: `NON_CONVERGING_REVIEW`; new sibling findings or
+  meaningful repository progress continue within the bounds;
 - an AUTO_FIX with no repository change: `NO_PROGRESS`.
 
 Non-blocking findings are returned for recording and do not automatically cause
