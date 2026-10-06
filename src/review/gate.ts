@@ -36,6 +36,7 @@ export type ReviewCycleRecord = {
   result: ReviewResultName;
   classifications: FindingClassification[];
   generalizedRules: string[];
+  findingIdentities?: string[];
   repositoryChanged: boolean | null;
 };
 

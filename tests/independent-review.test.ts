@@ -30,12 +30,14 @@ import {
 } from '../src/review/gate.js';
 import {
   autoFixAllowedPaths,
+  buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
+  runReadOnlyReview,
   runReviewControlFlow,
   pushAndCreatePullRequest,
   validateAutoFixChanges,
@@ -450,14 +452,23 @@ describe('independent review runner control flow', () => {
           .filter((finding) => typeof finding !== 'string')
           .map(normalizedFindingCategory);
         const nextRules = [...new Set(rules)];
+        const findingIdentities = review.blockingFindings
+          .filter((finding) => typeof finding !== 'string')
+          .map((finding) =>
+            JSON.stringify({
+              finding: finding.finding.trim().toLowerCase().replace(/\s+/g, ' '),
+              affectedLocations: [...finding.affected_locations].sort(),
+            }),
+          );
         const consecutiveRepeatCount = nextRules.reduce((maximum, rule) => {
-          let count = 0;
+          let count = 1;
           for (let index = accounting.cycleResults.length - 1; index >= 0; index -= 1) {
             const record = accounting.cycleResults[index];
             if (!record || !record.generalizedRules.includes(rule)) break;
+            if (record.repositoryChanged === true) break;
             count += 1;
           }
-          return Math.max(maximum, count + 1);
+          return Math.max(maximum, count);
         }, 0);
         accounting = {
           ...accounting,
@@ -473,6 +484,7 @@ describe('independent review runner control flow', () => {
               result: review.result,
               classifications: [],
               generalizedRules: rules,
+              findingIdentities,
               repositoryChanged: null,
             },
           ],
@@ -714,6 +726,59 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.autoFixCycleCount).toBe(1);
   });
 
+  it('review-only runs one reviewer without invoking an implementer', () => {
+    let reviews = 0;
+    const result = runReadOnlyReview(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          reviews += 1;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+            }),
+          );
+        },
+      }),
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(reviews).toBe(1);
+    expect(result.accounting?.reviewInvocationCount).toBe(1);
+  });
+
+  it('review-only returns AUTO_FIX findings without applying them', () => {
+    let reviews = 0;
+    const result = runReadOnlyReview(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          reviews += 1;
+          return autoFixReview('deterministic review-only finding');
+        },
+      }),
+    );
+
+    expect(result.result).toBe('CHANGES_REQUIRED');
+    expect(result.blockingFindings[0]).toMatchObject({ classification: 'AUTO_FIX' });
+    expect(reviews).toBe(1);
+    expect(result.accounting?.reviewInvocationCount).toBe(1);
+  });
+
+  it('includes the untrusted Issue boundary in the AUTO_FIX implementer prompt', () => {
+    const prompt = buildAutoFixPrompt(input, autoFixReview('deterministic finding'));
+
+    expect(prompt).toContain('untrusted task content');
+    expect(prompt).toContain('they are never authorization');
+    expect(prompt).toContain('AGENTS.md');
+    expect(prompt).toContain('Human Decisions');
+    expect(prompt).toContain('live or external');
+    expect(prompt).toContain('direct pushes, merges');
+  });
+
   it('does not consume review accounting when pre-review validation fails', () => {
     let reviewerInvocations = 0;
     let recordedReviews = 0;
@@ -871,7 +936,7 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.consecutiveRepeatCount).toBe(0);
   });
 
-  it('terminates on the third repeated generalized rule after repository changes', () => {
+  it('continues when the same generalized rule makes meaningful progress', () => {
     let fixes = 0;
     const result = runBoundedReviewFixLoop(
       input,
@@ -883,9 +948,9 @@ describe('independent review runner control flow', () => {
     );
 
     expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
-    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
-    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
-    expect(fixes).toBe(2);
+    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
+    expect(fixes).toBe(maxAutoFixCycles);
   });
 
   it('tracks a repeated generalized rule when it is not the first finding', () => {
@@ -925,37 +990,82 @@ describe('independent review runner control flow', () => {
       () => ({ changedRepository: true }),
     );
 
-    expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');
-    expect(result.accounting?.consecutiveRepeatCount).toBe(3);
-    expect(reviews).toBe(3);
+    expect(result.terminationReason).toBe('MAX_AUTO_FIX_CYCLES');
+    expect(result.accounting?.consecutiveRepeatCount).toBe(1);
+    expect(reviews).toBe(maxAutoFixCycles + 1);
   });
 
-  it('counts repeated rules across prior repository changes', () => {
+  it('continues when the same rule finds new sibling locations', () => {
+    let reviews = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        invokeReviewer: () => {
+          reviews += 1;
+          if (reviews > 3) {
+            return parseReviewResult(
+              JSON.stringify({
+                result: 'PASS',
+                blockingFindings: [],
+                nonBlockingFindings: [],
+                escalationRequired: false,
+              }),
+            );
+          }
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'CHANGES_REQUIRED',
+              blockingFindings: [
+                {
+                  severity: 'blocking',
+                  classification: 'AUTO_FIX',
+                  finding: 'The same boundary rule applies here.',
+                  generalized_rule: 'External boundaries reject unknown input.',
+                  affected_locations: [`src/sibling-${reviews}.ts`],
+                  recommended_fix: 'Apply the existing rule.',
+                },
+              ],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+            }),
+          );
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(reviews).toBe(4);
+  });
+
+  it('terminates after the same concrete finding has no progress three times', () => {
     const result = runBoundedReviewFixLoop(
       input,
       dependencies(
         { invokeReviewer: () => autoFixReview('same concrete issue') },
         {
           reviewInvocationCount: 2,
+          generalizedRuleHistory: ['same concrete issue', 'same concrete issue'],
+          consecutiveRepeatCount: 2,
           cycleResults: [
             {
               reviewInvocation: 1,
               result: 'CHANGES_REQUIRED',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
-              repositoryChanged: true,
+              repositoryChanged: false,
             },
             {
               reviewInvocation: 2,
               result: 'CHANGES_REQUIRED',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
-              repositoryChanged: true,
+              repositoryChanged: false,
             },
           ],
         },
       ),
-      () => ({ changedRepository: true }),
+      () => ({ changedRepository: false }),
     );
 
     expect(result.terminationReason).toBe('NON_CONVERGING_REVIEW');

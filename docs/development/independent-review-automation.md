@@ -120,6 +120,11 @@ available:
 npm run review:independent -- --review-only --issue 29 --base main
 ```
 
+`--review-only` performs validation and exactly one read-only Independent
+Reviewer invocation. It never launches the workspace-write implementer,
+creates a commit, pushes, or creates a pull request. The bounded AUTO_FIX loop
+is available only to the full Issue-to-PR path.
+
 The runner is a bounded Issue-to-PR workflow with a bounded review/fix loop.
 When
 all blocking findings are structured `AUTO_FIX`, a separate workspace-write
@@ -127,9 +132,11 @@ Codex implementer applies only those deterministic fixes, creates a
 Conventional Commit, and returns to validation and a fresh read-only review.
 The reviewer process never edits files. The default maximum is 16 independent
 review invocations and 8 actual AUTO_FIX cycles. Repeated normalized
-generalized rules are tracked; the third consecutive repeat terminates as
-`NON_CONVERGING_REVIEW`. An AUTO_FIX with no material repository change
-terminates as `NO_PROGRESS`.
+generalized rules and concrete finding identities are tracked; the third
+consecutive repeat terminates as `NON_CONVERGING_REVIEW` only when the same
+concrete problem has had no meaningful repository progress. A newly discovered
+sibling or a meaningful repository change resets that convergence streak. An
+AUTO_FIX with no material repository change terminates as `NO_PROGRESS`.
 
 Cycle state is reserved only after the deterministic validation succeeds and
 the Issue context has been retrieved, immediately before the Codex process is
