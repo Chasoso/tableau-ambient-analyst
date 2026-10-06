@@ -152,6 +152,7 @@ export function reviewCycleLimitExceeded(cycle: number): ReviewGateResult {
 export function canOpenPullRequest(validationPassed: boolean, review: ReviewGateResult): boolean {
   return (
     validationPassed &&
+    review.executionStatus === 'COMPLETED' &&
     review.result === 'PASS' &&
     review.blockingFindings.length === 0 &&
     !requiresHumanDecision(review)

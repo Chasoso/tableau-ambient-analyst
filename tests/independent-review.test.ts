@@ -39,6 +39,21 @@ describe('independent review gate contract', () => {
     expect(canOpenPullRequest(false, result)).toBe(false);
   });
 
+  it.each([
+    ['FAILED', { executionStatus: 'FAILED' as const }],
+    ['omitted', {}],
+  ])('keeps a PASS closed when execution status is %s', (_label, status) => {
+    const result = {
+      result: 'PASS' as const,
+      blockingFindings: [],
+      nonBlockingFindings: [],
+      escalationRequired: false,
+      ...status,
+    };
+
+    expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+
   it('keeps CHANGES_REQUIRED closed and preserves blocking findings', () => {
     const result = parseReviewResult(
       JSON.stringify({
