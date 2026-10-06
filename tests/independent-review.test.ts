@@ -28,6 +28,7 @@ import {
   runBoundedReviewFixLoop,
   runReviewControlFlow,
   validateAutoFixChanges,
+  validateRepositoryPathState,
   verifyImplementerSelfReview,
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
@@ -1101,18 +1102,22 @@ describe('review cycle state', () => {
     try {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
       expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual({
-        branch: 'feature/review',
-        base: 'main',
-        legacyReviewInvocations: 0,
-        legacyAutoFixCycles: 0,
-        accountingEpochStart: 'issue-29-accounting-v2',
-        reviewInvocationCount: 1,
-        autoFixCycleCount: 0,
-        generalizedRuleHistory: [],
-        consecutiveRepeatCount: 0,
-        lastFixChangedRepository: null,
-        terminationHistory: [],
-        cycleResults: [],
+        entries: [
+          {
+            branch: 'feature/review',
+            base: 'main',
+            legacyReviewInvocations: 0,
+            legacyAutoFixCycles: 0,
+            accountingEpochStart: 'issue-29-accounting-v2',
+            reviewInvocationCount: 1,
+            autoFixCycleCount: 0,
+            generalizedRuleHistory: [],
+            consecutiveRepeatCount: 0,
+            lastFixChangedRepository: null,
+            terminationHistory: [],
+            cycleResults: [],
+          },
+        ],
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1200,6 +1205,31 @@ describe('review cycle state', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it('preserves accounting when branches alternate', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'main')).toBeUndefined();
+      expect(reserveReviewCycleAtPath(statePath, 'feature/b', 'main')).toBeUndefined();
+      expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'develop')).toBeUndefined();
+      expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'main')).toBeUndefined();
+
+      expect(readReviewAccountingAtPath(statePath, 'feature/a', 'main').reviewInvocationCount).toBe(
+        2,
+      );
+      expect(readReviewAccountingAtPath(statePath, 'feature/b', 'main').reviewInvocationCount).toBe(
+        1,
+      );
+      expect(
+        readReviewAccountingAtPath(statePath, 'feature/a', 'develop').reviewInvocationCount,
+      ).toBe(1);
+      expect(JSON.parse(readFileSync(statePath, 'utf8')).entries).toHaveLength(3);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AUTO_FIX path scope', () => {
@@ -1207,10 +1237,16 @@ describe('AUTO_FIX path scope', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-paths-'));
     mkdirSync(join(directory, 'src'), { recursive: true });
     mkdirSync(join(directory, 'tests'), { recursive: true });
+    mkdirSync(join(directory, 'docs'), { recursive: true });
     writeFileSync(join(directory, 'src', 'tracked.ts'), 'export {};\n');
     writeFileSync(join(directory, 'src', 'base-only.ts'), 'export {};\n');
     writeFileSync(join(directory, 'src', 'helper.ts'), 'export {};\n');
-    writeFileSync(join(directory, 'tests', 'related.test.ts'), 'test();\n');
+    writeFileSync(
+      join(directory, 'tests', 'related.test.ts'),
+      "import '../src/tracked';\ntest();\n",
+    );
+    writeFileSync(join(directory, 'tests', 'unrelated.test.ts'), 'test();\n');
+    writeFileSync(join(directory, 'docs', 'unrelated.md'), '# unrelated\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
     execFileSync('git', ['add', '.'], { cwd: directory });
@@ -1221,7 +1257,10 @@ describe('AUTO_FIX path scope', () => {
     );
     writeFileSync(join(directory, 'outside.ts'), 'export {};\n');
     execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
-    writeFileSync(join(directory, 'src', 'tracked.ts'), 'export { changed };\n');
+    writeFileSync(
+      join(directory, 'src', 'tracked.ts'),
+      "import './helper';\nexport { changed };\n",
+    );
     execFileSync('git', ['add', 'src/tracked.ts'], { cwd: directory });
     execFileSync(
       'git',
@@ -1229,7 +1268,7 @@ describe('AUTO_FIX path scope', () => {
       { cwd: directory },
     );
 
-    const finding = (location: string) => ({
+    const finding = (location: string | string[]) => ({
       result: 'CHANGES_REQUIRED' as const,
       blockingFindings: [
         {
@@ -1237,7 +1276,7 @@ describe('AUTO_FIX path scope', () => {
           classification: 'AUTO_FIX' as const,
           finding: 'finding',
           generalized_rule: 'rule',
-          affected_locations: [location],
+          affected_locations: typeof location === 'string' ? [location] : location,
           recommended_fix: 'fix',
         },
       ],
@@ -1277,6 +1316,31 @@ describe('AUTO_FIX path scope', () => {
           { path: 'src/base-only.ts', reason: 'affected_location' },
         ]),
       ).toContain('no valid bounded reason');
+
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/related.test.ts', reason: 'direct_test' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/unrelated.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'docs/unrelated.md', reason: 'required_doc_update' },
+        ]),
+      ).toContain('no valid bounded reason');
+
+      rmSync(join(directory, 'src', 'tracked.ts'));
+      symlinkSync(join(directory, 'src', 'base-only.ts'), join(directory, 'src', 'tracked.ts'));
+      expect(validateRepositoryPathState(directory, 'src/tracked.ts')).toContain('symlink');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+        ]),
+      ).toContain('invalid repository path');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

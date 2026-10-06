@@ -28,6 +28,7 @@ import {
   findingClassifications,
   type ReviewAccounting,
   type ReviewCycleRecord,
+  type ReviewFinding,
   type ReviewGateResult,
   type TerminationReason,
 } from './gate.js';
@@ -699,6 +700,27 @@ Findings:
 ${JSON.stringify(review.blockingFindings, null, 2)}
 
 After editing, leave the working tree with only the in-scope AUTO_FIX changes.
+Perform a complete self-review before returning. Return only this JSON object,
+including every changed file exactly once with its bounded reason:
+{
+  "selfReview": {
+    "completed": true,
+    "blockingIssues": [],
+    "checks": {
+      "scope": true,
+      "completeDiff": true,
+      "secrets": true,
+      "documentationConsistency": true,
+      "unfinishedWork": true
+    }
+  },
+  "changes": [
+    { "path": "src/example.ts", "reason": "affected_location" },
+    { "path": "tests/example.test.ts", "reason": "direct_test" }
+  ]
+}
+The allowed reasons are affected_location, direct_test,
+generalized_rule_sibling, required_supporting_change, and required_doc_update.
 `;
 
   const processResult = spawnSync(
@@ -753,6 +775,16 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
   try {
     if (currentBranch(input.cwd) !== intendedBranch) {
       return 'AUTO_FIX implementer changed the current branch.';
+    }
+    const repositoryRoot = realpathSync(
+      execFileSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: input.cwd,
+        encoding: 'utf8',
+      }).trim(),
+    );
+    for (const path of declaredPaths) {
+      const pathSafetyError = validateRepositoryPathState(repositoryRoot, path);
+      if (pathSafetyError) return `BLOCKED: ${pathSafetyError}`;
     }
     execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' });
     execFileSync('git', ['add', '--', ...declaredPaths], { cwd: input.cwd, encoding: 'utf8' });
@@ -926,12 +958,17 @@ export function validateAutoFixChanges(
   }
 
   const affected = new Set(observed);
-  const affectedRoots = new Set(
-    observed.map((path) => {
-      const segments = path.split('/');
-      return segments.length > 1 ? segments.slice(0, -1).join('/') : '';
-    }),
-  );
+  const affectedSourceContents = new Map<string, string>();
+  for (const affectedPath of observed) {
+    try {
+      affectedSourceContents.set(
+        affectedPath,
+        readFileSync(resolve(repositoryRoot, affectedPath), 'utf8'),
+      );
+    } catch {
+      // Deleted affected files are still valid locations; content relation is unavailable.
+    }
+  }
   for (const change of changes) {
     const path = change.path.replaceAll('\\', '/').trim();
     if (
@@ -947,24 +984,117 @@ export function validateAutoFixChanges(
     if (relative(repositoryRoot, absolutePath).replaceAll('\\', '/') !== path) {
       return 'AUTO_FIX implementer reported a repository path outside the root.';
     }
+    const pathSafetyError = validateRepositoryPathState(repositoryRoot, path);
+    if (pathSafetyError) return pathSafetyError;
     if (!issueDiffPaths.has(path) && !baseTrackedPaths.has(path)) {
       return `AUTO_FIX change ${path} is not part of the Issue or base repository scope.`;
     }
 
-    const isTest = path.startsWith('tests/') || path.includes('/__tests__/');
-    const isDocumentation = path.startsWith('docs/') || /\.(md|mdx)$/.test(path);
-    const pathSegments = path.split('/');
-    const pathRoot = pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') : '';
-    const isRelatedRoot = affectedRoots.has(pathRoot);
     const allowed =
       (change.reason === 'affected_location' && affected.has(path)) ||
+      (change.reason === 'direct_test' &&
+        isDirectDeterministicTest(path, observed, repositoryRoot)) ||
       (change.reason === 'generalized_rule_sibling' && affected.has(path)) ||
-      (change.reason === 'direct_test' && isTest) ||
-      (change.reason === 'required_doc_update' && isDocumentation) ||
-      (change.reason === 'required_supporting_change' && isRelatedRoot);
+      (change.reason === 'required_supporting_change' &&
+        isRequiredSupportingChange(path, affectedSourceContents)) ||
+      (change.reason === 'required_doc_update' &&
+        isRequiredDocumentationUpdate(path, review, repositoryRoot));
     if (!allowed) {
       return `AUTO_FIX change ${path} has no valid bounded reason: ${change.reason}.`;
     }
+  }
+  return undefined;
+}
+
+function isDirectDeterministicTest(
+  path: string,
+  affectedPaths: string[],
+  repositoryRoot: string,
+): boolean {
+  if (!path.startsWith('tests/') && !path.includes('/__tests__/')) {
+    return false;
+  }
+  let content: string;
+  try {
+    content = readFileSync(resolve(repositoryRoot, path), 'utf8');
+  } catch {
+    return false;
+  }
+  return affectedPaths.some((affectedPath) => {
+    const withoutExtension = affectedPath.replace(/\.[^/.]+$/, '');
+    return (
+      content.includes(withoutExtension) ||
+      content.includes(withoutExtension.split('/').at(-1) ?? '')
+    );
+  });
+}
+
+function isRequiredSupportingChange(
+  path: string,
+  affectedSourceContents: Map<string, string>,
+): boolean {
+  const basename = path
+    .split('/')
+    .at(-1)
+    ?.replace(/\.[^/.]+$/, '');
+  return Boolean(
+    basename && [...affectedSourceContents.values()].some((content) => content.includes(basename)),
+  );
+}
+
+function isRequiredDocumentationUpdate(
+  path: string,
+  review: ReviewGateResult,
+  repositoryRoot: string,
+): boolean {
+  if (!path.startsWith('docs/') && !/\.(md|mdx)$/.test(path)) {
+    return false;
+  }
+  let content: string;
+  try {
+    content = readFileSync(resolve(repositoryRoot, path), 'utf8').toLowerCase();
+  } catch {
+    return false;
+  }
+  const tokens = [...review.blockingFindings, ...review.nonBlockingFindings]
+    .filter((finding): finding is ReviewFinding => typeof finding !== 'string')
+    .flatMap((finding) => finding.generalized_rule.toLowerCase().split(/[^a-z0-9]+/))
+    .filter((token) => token.length >= 5);
+  return new Set(tokens.filter((token) => content.includes(token))).size >= 2;
+}
+
+export function validateRepositoryPathState(
+  repositoryRoot: string,
+  path: string,
+): string | undefined {
+  const segments = path.split('/');
+  let currentPath = repositoryRoot;
+  try {
+    for (const [index, segment] of segments.entries()) {
+      currentPath = resolve(currentPath, segment);
+      try {
+        if (lstatSync(currentPath).isSymbolicLink()) {
+          return 'AUTO_FIX implementer reported a symlink or unsafe repository path.';
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || index !== segments.length - 1) {
+          return 'AUTO_FIX implementer reported a missing or unsafe repository path.';
+        }
+        return undefined;
+      }
+    }
+    const resolvedPath = realpathSync(resolve(repositoryRoot, path));
+    const resolvedRelativePath = relative(repositoryRoot, resolvedPath).replaceAll('\\', '/');
+    if (
+      resolvedRelativePath.startsWith('../') ||
+      resolvedRelativePath === '..' ||
+      isAbsolute(resolvedRelativePath) ||
+      win32.isAbsolute(resolvedRelativePath)
+    ) {
+      return 'AUTO_FIX implementer reported a repository path outside the root.';
+    }
+  } catch {
+    return 'AUTO_FIX implementer reported a missing or unsafe repository path.';
   }
   return undefined;
 }
@@ -1187,33 +1317,55 @@ function emptyAccounting(): ReviewAccounting {
   };
 }
 
-function stateForBranch(value: unknown, branch: string, base: string): ReviewAccounting {
-  if (value === undefined) return emptyAccounting();
+type AccountingStateEntry = { branch: string; base: string; accounting: ReviewAccounting };
+
+function accountingStateEntries(value: unknown): AccountingStateEntry[] {
+  if (value === undefined) return [];
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
   const state = value as Record<string, unknown>;
+  if (state.entries !== undefined) {
+    if (
+      !Array.isArray(state.entries) ||
+      !state.entries.every(
+        (entry) => typeof entry === 'object' && entry !== null && !Array.isArray(entry),
+      )
+    ) {
+      throw new Error('Review accounting state is invalid; human recovery is required.');
+    }
+    return state.entries.map((entry) =>
+      parseAccountingStateEntry(entry as Record<string, unknown>),
+    );
+  }
+  return [parseAccountingStateEntry(state)];
+}
+
+function parseAccountingStateEntry(state: Record<string, unknown>): AccountingStateEntry {
   if (typeof state.branch !== 'string' || typeof state.base !== 'string') {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
-  if (state.branch !== branch || state.base !== base) return emptyAccounting();
 
   if (state.cyclesUsed !== undefined) {
     if (
       !Number.isInteger(state.cyclesUsed) ||
       (state.cyclesUsed as number) < 0 ||
       (state.cyclesUsed as number) > maxReviewInvocations ||
-      branch !== legacyIssue29Branch ||
-      base !== legacyIssue29Base ||
+      state.branch !== legacyIssue29Branch ||
+      state.base !== legacyIssue29Base ||
       state.cyclesUsed !== legacyIssue29ReviewInvocations ||
       state.terminationReason !== undefined
     ) {
       throw new Error('Review accounting state is invalid; human recovery is required.');
     }
     return {
-      ...emptyAccounting(),
-      legacyReviewInvocations: legacyIssue29ReviewInvocations,
-      legacyAutoFixCycles: legacyIssue29AutoFixCycles,
+      branch: state.branch,
+      base: state.base,
+      accounting: {
+        ...emptyAccounting(),
+        legacyReviewInvocations: legacyIssue29ReviewInvocations,
+        legacyAutoFixCycles: legacyIssue29AutoFixCycles,
+      },
     };
   }
 
@@ -1266,7 +1418,14 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
   if (state.terminationReason !== undefined) {
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
-  return accounting;
+  return { branch: state.branch, base: state.base, accounting };
+}
+
+function stateForBranch(value: unknown, branch: string, base: string): ReviewAccounting {
+  const entry = accountingStateEntries(value).find(
+    (candidate) => candidate.branch === branch && candidate.base === base,
+  );
+  return entry?.accounting ?? emptyAccounting();
 }
 
 function isTerminationReason(value: unknown): value is TerminationReason {
@@ -1326,7 +1485,22 @@ function writeAccountingAtPath(
   base: string,
   accounting: ReviewAccounting,
 ): void {
-  const state = JSON.stringify({ branch, base, ...accounting });
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const nextEntry = { branch, base, accounting };
+  const nextEntries = [
+    ...entries.filter((entry) => entry.branch !== branch || entry.base !== base),
+    nextEntry,
+  ];
+  const state = JSON.stringify({
+    entries: nextEntries.map((entry) => ({
+      branch: entry.branch,
+      base: entry.base,
+      ...entry.accounting,
+    })),
+  });
   const temporaryPath = `${statePath}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, state, 'utf8');
   renameSync(temporaryPath, statePath);
