@@ -1043,12 +1043,12 @@ describe('AUTO_FIX path scope', () => {
       expect(autoFixAllowedPaths(finding('src/tracked.ts:1'), directory, 'main')).toEqual([
         'src/tracked.ts',
       ]);
-      expect(autoFixAllowedPaths(finding('src/base-only.ts:1'), directory, 'main')).toEqual([
-        'src/base-only.ts',
-      ]);
-      expect(autoFixAllowedPaths(finding('outside.ts:1'), directory, 'main')).toEqual([
-        'outside.ts',
-      ]);
+      expect(autoFixAllowedPaths(finding('src/base-only.ts:1'), directory, 'main')).toBe(
+        'AUTO_FIX finding path is outside the committed Issue diff.',
+      );
+      expect(autoFixAllowedPaths(finding('outside.ts:1'), directory, 'main')).toBe(
+        'AUTO_FIX finding path is outside the committed Issue diff.',
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -281,6 +281,10 @@ Leave only the intended implementation changes in the working tree.\n`;
     cwd: input.cwd,
     encoding: 'utf8',
   }).trim();
+  const intendedBranch = currentBranch(input.cwd);
+  if (intendedBranch !== branch) {
+    return 'Issue implementer was not on the intended feature branch.';
+  }
   const processResult = spawnSync(
     'codex',
     ['exec', '--ephemeral', '--sandbox', 'workspace-write', '--json'],
@@ -293,6 +297,9 @@ Leave only the intended implementation changes in the working tree.\n`;
       timeout: reviewerTimeoutMs,
     },
   );
+  if (currentBranch(input.cwd) !== intendedBranch) {
+    return 'Issue implementer changed the current branch.';
+  }
   if (processResult.error) return processResult.error.message;
   if (processResult.signal) return `Codex was terminated by ${processResult.signal}.`;
   if (processResult.status !== 0) {
@@ -300,6 +307,9 @@ Leave only the intended implementation changes in the working tree.\n`;
   }
 
   try {
+    if (currentBranch(input.cwd) !== intendedBranch) {
+      return 'Issue implementer changed the current branch.';
+    }
     if (
       execFileSync('git', ['rev-parse', 'HEAD'], { cwd: input.cwd, encoding: 'utf8' }).trim() !==
       beforeHead
@@ -490,6 +500,11 @@ function applyCodexAutoFix(
   const allowedPaths = autoFixAllowedPaths(review, input.cwd, input.base);
   if (typeof allowedPaths === 'string') return allowedPaths;
 
+  const intendedBranch = currentBranch(input.cwd);
+  if (!intendedBranch || intendedBranch === 'unknown-branch') {
+    return 'AUTO_FIX intended feature branch could not be verified.';
+  }
+
   let beforeHead: string;
   let beforeChangedPaths: string[];
   try {
@@ -535,6 +550,9 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
     },
   );
 
+  if (currentBranch(input.cwd) !== intendedBranch) {
+    return 'AUTO_FIX implementer changed the current branch.';
+  }
   if (processResult.error) return processResult.error.message;
   if (processResult.signal) return `Codex was terminated by ${processResult.signal}.`;
   if (processResult.status !== 0) {
@@ -543,6 +561,9 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
 
   let changedPaths: string[];
   try {
+    if (currentBranch(input.cwd) !== intendedBranch) {
+      return 'AUTO_FIX implementer changed the current branch.';
+    }
     const afterHead = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: input.cwd,
       encoding: 'utf8',
@@ -558,6 +579,9 @@ After editing, leave the working tree with only the in-scope AUTO_FIX changes.
   }
 
   try {
+    if (currentBranch(input.cwd) !== intendedBranch) {
+      return 'AUTO_FIX implementer changed the current branch.';
+    }
     execFileSync('git', ['diff', '--check'], { cwd: input.cwd, encoding: 'utf8' });
     execFileSync('git', ['add', '--', ...allowedPaths], { cwd: input.cwd, encoding: 'utf8' });
     const stagedPaths = execFileSync('git', ['diff', '--cached', '--name-only'], {
@@ -587,7 +611,10 @@ export function autoFixAllowedPaths(
   cwd: string,
   base: string,
 ): string[] | string {
-  void base;
+  if (!/^[A-Za-z0-9._/-]+$/.test(base)) {
+    return 'AUTO_FIX repository path scope could not be validated.';
+  }
+
   let repositoryRoot: string;
   try {
     repositoryRoot = realpathSync(
@@ -596,6 +623,22 @@ export function autoFixAllowedPaths(
   } catch {
     return 'AUTO_FIX repository path scope could not be validated.';
   }
+
+  let issueScopedPaths: Set<string>;
+  try {
+    issueScopedPaths = new Set(
+      execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+        cwd,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .map((path) => path.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+  } catch {
+    return 'AUTO_FIX repository path scope could not be validated.';
+  }
+  if (!issueScopedPaths.size) return 'AUTO_FIX Issue-scoped file allowlist is empty.';
 
   const paths = new Set<string>();
   for (const finding of review.blockingFindings) {
@@ -651,6 +694,9 @@ export function autoFixAllowedPaths(
         }
         // A tracked file may be deleted in the working tree. Its existing
         // parent was still checked above, so retain explicit deleted-file support.
+      }
+      if (!issueScopedPaths.has(repositoryPath)) {
+        return 'AUTO_FIX finding path is outside the committed Issue diff.';
       }
       paths.add(repositoryPath);
     }
