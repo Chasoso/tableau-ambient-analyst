@@ -10,12 +10,27 @@
     },
     "blockingFindings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "$ref": "#/$defs/finding" }
     },
     "nonBlockingFindings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "$ref": "#/$defs/finding" }
     },
     "escalationRequired": { "type": "boolean" }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["blocking", "non-blocking"] },
+        "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
+        "finding": { "type": "string" },
+        "generalized_rule": { "type": "string" },
+        "affected_locations": { "type": "array", "items": { "type": "string" } },
+        "recommended_fix": { "type": "string" }
+      }
+    }
   }
 }

@@ -75,6 +75,24 @@ instructions. Return only JSON matching the supplied review result schema. Do
 not edit files. Do not rerun
 validation commands that require filesystem writes in your read-only sandbox;
 inspect the reported validation evidence instead.
+
+For every finding, classify it as exactly one of AUTO_FIX,
+HUMAN_DECISION_REQUIRED, or BLOCKED. For each finding, record severity,
+classification, finding, generalized_rule, affected_locations, and
+recommended_fix. Do not stop after the first occurrence: generalize each
+finding to its root rule, search the complete diff, changed files, and
+directly related implementation for siblings where that rule applies, and
+return consolidated findings and sibling locations. Keep the search bounded to
+the Issue scope and directly related code; do not perform unbounded repository
+exploration.
+
+AUTO_FIX means existing Issue, ADR, policy, or acceptance criteria make the
+fix deterministic; it may return CHANGES_REQUIRED without human approval.
+HUMAN_DECISION_REQUIRED is only for an unresolved product, architecture,
+scope, service, credential, privacy, cost, irreversible-action, or recorded
+human-decision choice. BLOCKED means an execution prerequisite is unavailable.
+For a human escalation, explain what must be decided, why repository rules
+cannot decide it, viable options, and the recommendation in the finding.
 `;
 }
 

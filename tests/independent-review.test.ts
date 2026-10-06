@@ -6,10 +6,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canOpenPullRequest,
+  canContinueAutoFix,
   maxReviewCycles,
   parseReviewResult,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
+  requiresHumanDecision,
   validationFailure,
 } from '../src/review/gate.js';
 import {
@@ -131,6 +133,76 @@ describe('independent review gate contract', () => {
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(result.escalationRequired).toBe(false);
     expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+
+  it('allows only explicit AUTO_FIX findings to continue without human approval', () => {
+    const autoFix = parseReviewResult(
+      JSON.stringify({
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'AUTO_FIX',
+            finding: 'Unknown properties are accepted.',
+            generalized_rule: 'External boundary objects reject unknown properties.',
+            affected_locations: ['src/review/review-result.schema.json'],
+            recommended_fix: 'Add the missing closed schema.',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+    expect(canContinueAutoFix(autoFix)).toBe(true);
+    expect(requiresHumanDecision(autoFix)).toBe(false);
+  });
+
+  it('escalates genuine decisions and missing prerequisites', () => {
+    for (const classification of ['HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const) {
+      const result = parseReviewResult(
+        JSON.stringify({
+          result: 'CHANGES_REQUIRED',
+          blockingFindings: [
+            {
+              severity: 'blocking',
+              classification,
+              finding: 'The workflow cannot continue.',
+              generalized_rule: 'The repository boundary must be respected.',
+              affected_locations: ['AGENTS.md'],
+              recommended_fix: 'Decide or provide the missing prerequisite.',
+            },
+          ],
+          nonBlockingFindings: [],
+          escalationRequired: false,
+        }),
+      );
+      expect(canContinueAutoFix(result)).toBe(false);
+      expect(requiresHumanDecision(result)).toBe(true);
+    }
+  });
+
+  it('requires generalized rule and sibling locations for structured findings', () => {
+    const result = parseReviewResult(
+      JSON.stringify({
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'AUTO_FIX',
+            finding: 'One boundary is not fail-closed.',
+            generalized_rule: 'External boundaries reject unknown input.',
+            affected_locations: ['src/a.ts', 'src/b.ts'],
+            recommended_fix: 'Apply the existing validation policy to siblings.',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+    expect(result.blockingFindings[0]).toMatchObject({
+      generalized_rule: expect.stringContaining('External boundaries'),
+      affected_locations: ['src/a.ts', 'src/b.ts'],
+    });
   });
 });
 

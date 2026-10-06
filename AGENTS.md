@@ -7,6 +7,54 @@ decisions remain in
 the rationale and lifecycle are in
 [`docs/development/development-loop.md`](docs/development/development-loop.md).
 
+## Issue-to-PR execution contract
+
+The user's short instruction is enough to start the default workflow. Resolve
+an instruction such as `Issue #Nを実装して` from the GitHub Issue, then use this
+priority order: user instruction, complete Issue body, this file, relevant
+ADRs, repository docs, and existing implementation/tests. Do not ask the user
+to repeat information already present in those sources.
+
+For each Issue, use one Issue, one feature branch, and one PR by default. The
+Issue body is the primary task specification; confirm scope, non-goals,
+acceptance criteria, related docs/ADRs, and validation before editing. The
+required path is implementation, self-review, deterministic validation,
+independent review in a fresh context, bounded correction/review cycles, and
+PR creation only after the gate passes. `main` is never pushed directly,
+`--no-verify` is forbidden, and Codex never merges its own PR. Use
+Conventional Commits and include `Closes #N` only when the Issue is complete.
+
+Independent review findings use the existing result names (`PASS`,
+`CHANGES_REQUIRED`, and `HUMAN_DECISION_REQUIRED`) plus a finding
+classification: `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`. A
+structured finding records its severity, generalized rule, affected
+locations, and recommended fix. The reviewer must generalize a finding,
+search the complete diff and directly related implementation for siblings, and
+return consolidated findings before the implementer acts.
+
+`AUTO_FIX` is limited to a deterministic correction already decided by the
+Issue, ADR, policy, acceptance criteria, or existing implementation contract.
+AUTO_FIX-only blocking findings may proceed automatically through fix,
+validation, and a fresh independent review. Product behavior, material
+architecture or scope, external service, authentication/credential, privacy
+or retention, meaningful recurring cost, irreversible action, or changing an
+existing Human Decision is `HUMAN_DECISION_REQUIRED`; report what must be
+decided, why repository rules cannot decide it, options, and a recommendation.
+Missing credentials, services, fixtures, or repository prerequisites are
+`BLOCKED`, not decisions. Never weaken safety boundaries to keep the loop
+moving. The review cycle limit is six; on exhaustion stop and report unresolved
+findings, repeated categories, and why convergence failed.
+
+The PR gate requires deterministic validation, a fresh independent `PASS`, no
+blocking findings, and no unresolved human escalation. Preserve the secret
+and credential policy, fail-closed handling, branch protection, and the
+existing opt-in policy for live/external operations. Do not add PR merge
+automation, CI replacement, or unconditionally live operations. A follow-up
+instruction such as `その指摘通り修正して` resolves the latest relevant
+review, applies the same generalization and sibling search, then repeats
+validation and fresh review; stop only when the target is ambiguous or a
+human decision/blocker is real.
+
 ## Default lifecycle
 
 Use the smallest applicable path from:

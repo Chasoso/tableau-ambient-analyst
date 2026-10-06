@@ -1,12 +1,25 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
+export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const;
 export const maxReviewCycles = 6;
 
 export type ReviewResultName = (typeof reviewResults)[number];
+export type FindingClassification = (typeof findingClassifications)[number];
+
+export type ReviewFinding = {
+  severity: 'blocking' | 'non-blocking';
+  classification: FindingClassification;
+  finding: string;
+  generalized_rule: string;
+  affected_locations: string[];
+  recommended_fix: string;
+};
+
+export type ReviewFindingValue = string | ReviewFinding;
 
 export type ReviewGateResult = {
   result: ReviewResultName;
-  blockingFindings: string[];
-  nonBlockingFindings: string[];
+  blockingFindings: ReviewFindingValue[];
+  nonBlockingFindings: ReviewFindingValue[];
   escalationRequired: boolean;
   executionStatus?: 'COMPLETED' | 'FAILED';
 };
@@ -14,8 +27,25 @@ export type ReviewGateResult = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every((item) => typeof item === 'string');
+const isFindingClassification = (value: unknown): value is FindingClassification =>
+  typeof value === 'string' && findingClassifications.includes(value as FindingClassification);
+
+const isReviewFinding = (value: unknown): value is ReviewFinding => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const finding = value as Record<string, unknown>;
+  return (
+    (finding.severity === 'blocking' || finding.severity === 'non-blocking') &&
+    isFindingClassification(finding.classification) &&
+    typeof finding.finding === 'string' &&
+    typeof finding.generalized_rule === 'string' &&
+    Array.isArray(finding.affected_locations) &&
+    finding.affected_locations.every((location) => typeof location === 'string') &&
+    typeof finding.recommended_fix === 'string'
+  );
+};
+
+const isFindingArray = (value: unknown): value is ReviewFindingValue[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string' || isReviewFinding(item));
 
 const isReviewResultName = (value: unknown): value is ReviewResultName =>
   typeof value === 'string' && reviewResults.includes(value as ReviewResultName);
@@ -43,8 +73,8 @@ export function parseReviewResult(raw: string): ReviewGateResult {
 
   if (
     !isReviewResultName(result) ||
-    !isStringArray(blockingFindings) ||
-    !isStringArray(nonBlockingFindings) ||
+    !isFindingArray(blockingFindings) ||
+    !isFindingArray(nonBlockingFindings) ||
     typeof escalationRequired !== 'boolean' ||
     Object.keys(value).some((key) => !allowedKeys.has(key))
   ) {
@@ -98,6 +128,31 @@ export function canOpenPullRequest(validationPassed: boolean, review: ReviewGate
     review.result === 'PASS' &&
     review.blockingFindings.length === 0 &&
     !review.escalationRequired
+  );
+}
+
+/** Continue automatically only when every blocking finding is explicitly deterministic. */
+export function canContinueAutoFix(review: ReviewGateResult): boolean {
+  return (
+    review.result === 'CHANGES_REQUIRED' &&
+    review.blockingFindings.length > 0 &&
+    !review.escalationRequired &&
+    review.blockingFindings.every(
+      (finding) => typeof finding !== 'string' && finding.classification === 'AUTO_FIX',
+    )
+  );
+}
+
+export function requiresHumanDecision(review: ReviewGateResult): boolean {
+  const findings = [...review.blockingFindings, ...review.nonBlockingFindings];
+  return (
+    review.escalationRequired ||
+    findings.some(
+      (finding) =>
+        typeof finding !== 'string' &&
+        (finding.classification === 'HUMAN_DECISION_REQUIRED' ||
+          finding.classification === 'BLOCKED'),
+    )
   );
 }
 
