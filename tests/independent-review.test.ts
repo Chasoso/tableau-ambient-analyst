@@ -27,6 +27,7 @@ import {
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runReviewControlFlow,
+  verifyImplementerSelfReview,
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
 } from '../src/review/runner.js';
@@ -182,6 +183,75 @@ describe('independent review gate contract', () => {
     ].join('\n');
 
     expect(extractFinalReviewerMessage(output)).toContain('"result":"PASS"');
+  });
+
+  it('requires a completed implementer self-review before validation and commit', () => {
+    const output = JSON.stringify({
+      type: 'item.completed',
+      item: {
+        type: 'agent_message',
+        text: JSON.stringify({
+          selfReview: {
+            completed: true,
+            blockingIssues: [],
+            checks: {
+              scope: true,
+              completeDiff: true,
+              secrets: true,
+              documentationConsistency: true,
+              unfinishedWork: true,
+            },
+          },
+        }),
+      },
+    });
+
+    expect(verifyImplementerSelfReview(output)).toBeUndefined();
+  });
+
+  it.each([
+    ['missing output', ''],
+    ['malformed output', '{not-json'],
+    [
+      'incomplete checks',
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          type: 'agent_message',
+          text: JSON.stringify({
+            selfReview: {
+              completed: true,
+              blockingIssues: [],
+              checks: { scope: true },
+            },
+          }),
+        },
+      }),
+    ],
+    [
+      'blocking issues',
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          type: 'agent_message',
+          text: JSON.stringify({
+            selfReview: {
+              completed: true,
+              blockingIssues: ['Scope is incomplete.'],
+              checks: {
+                scope: true,
+                completeDiff: true,
+                secrets: true,
+                documentationConsistency: true,
+                unfinishedWork: true,
+              },
+            },
+          }),
+        },
+      }),
+    ],
+  ])('fails closed for implementer self-review %s', (_label, output) => {
+    expect(verifyImplementerSelfReview(output)).toBeDefined();
   });
 
   it('stops when the bounded review cycle limit is exceeded', () => {
@@ -999,6 +1069,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
+        terminationHistory: [],
         cycleResults: [],
       });
     } finally {

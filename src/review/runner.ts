@@ -77,6 +77,20 @@ export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
 };
 
+const requiredSelfReviewChecks = [
+  'scope',
+  'completeDiff',
+  'secrets',
+  'documentationConsistency',
+  'unfinishedWork',
+] as const;
+
+type ImplementerSelfReview = {
+  completed: boolean;
+  blockingIssues: string[];
+  checks: Record<(typeof requiredSelfReviewChecks)[number], boolean>;
+};
+
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
   issue: IssueContext,
@@ -276,7 +290,29 @@ relevant ADRs and docs, and directly related implementation and tests. Make
 only the explicitly requested changes. Do not make product, architecture,
 scope, credential, privacy, cost, or external-service decisions. Do not run
 live or external operations and do not commit.
-Leave only the intended implementation changes in the working tree.\n`;
+Leave only the intended implementation changes in the working tree.
+
+Before validation or committing, perform the repository-mandated self-review.
+Review the complete diff and verify scope, secrets, documentation consistency,
+and unfinished work. Resolve deterministic issues that are within the Issue
+scope. If any blocking issue remains, report it and stop; the parent workflow
+will fail closed. Your final response must contain only this JSON object:
+{
+  "selfReview": {
+    "completed": true,
+    "blockingIssues": [],
+    "checks": {
+      "scope": true,
+      "completeDiff": true,
+      "secrets": true,
+      "documentationConsistency": true,
+      "unfinishedWork": true
+    }
+  }
+}
+Set completed to false or list every remaining blocking issue when the
+self-review cannot pass. Do not claim a check passed unless you performed it.
+`;
 
   const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: input.cwd,
@@ -307,6 +343,9 @@ Leave only the intended implementation changes in the working tree.\n`;
     return `Codex exited with status ${processResult.status ?? 'unknown'}.`;
   }
 
+  const selfReviewError = verifyImplementerSelfReview(processResult.stdout);
+  if (selfReviewError) return selfReviewError;
+
   try {
     if (currentBranch(input.cwd) !== intendedBranch) {
       return 'Issue implementer changed the current branch.';
@@ -333,6 +372,44 @@ Leave only the intended implementation changes in the working tree.\n`;
     return 'Issue implementation could not be validated and committed.';
   }
   return undefined;
+}
+
+export function verifyImplementerSelfReview(output: string): string | undefined {
+  const finalMessage = extractFinalReviewerMessage(output);
+  if (!finalMessage) return 'Issue implementer did not return a self-review.';
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(finalMessage);
+  } catch {
+    return 'Issue implementer returned malformed self-review output.';
+  }
+
+  if (!isRecord(parsed) || !isRecord(parsed.selfReview)) {
+    return 'Issue implementer returned no structured self-review.';
+  }
+  const selfReview = parsed.selfReview as Partial<ImplementerSelfReview>;
+  if (selfReview.completed !== true) {
+    return 'Issue implementer self-review was not completed.';
+  }
+  if (
+    !Array.isArray(selfReview.blockingIssues) ||
+    selfReview.blockingIssues.some((issue) => typeof issue !== 'string') ||
+    selfReview.blockingIssues.length > 0
+  ) {
+    return 'Issue implementer self-review reported blocking issues.';
+  }
+  if (
+    !isRecord(selfReview.checks) ||
+    requiredSelfReviewChecks.some((check) => selfReview.checks?.[check] !== true)
+  ) {
+    return 'Issue implementer self-review did not verify every required check.';
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function pushAndCreatePullRequest(
@@ -944,6 +1021,7 @@ function emptyAccounting(): ReviewAccounting {
     consecutiveRepeatCount: 0,
     lastFixChangedRepository: null,
     cycleResults: [],
+    terminationHistory: [],
   };
 }
 
@@ -996,7 +1074,10 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
       state.lastFixChangedRepository === null || typeof state.lastFixChangedRepository === 'boolean'
     ) ||
     !Array.isArray(state.cycleResults) ||
-    !state.cycleResults.every(isReviewCycleRecord)
+    !state.cycleResults.every(isReviewCycleRecord) ||
+    (state.terminationHistory !== undefined &&
+      (!Array.isArray(state.terminationHistory) ||
+        !state.terminationHistory.every(isTerminationReason)))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -1011,6 +1092,9 @@ function stateForBranch(value: unknown, branch: string, base: string): ReviewAcc
     consecutiveRepeatCount: state.consecutiveRepeatCount as number,
     lastFixChangedRepository: state.lastFixChangedRepository as boolean | null,
     cycleResults: state.cycleResults as ReviewCycleRecord[],
+    terminationHistory: Array.isArray(state.terminationHistory)
+      ? (state.terminationHistory as TerminationReason[])
+      : [],
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -1177,6 +1261,7 @@ function recordTerminationAccounting(
 ): ReviewAccounting {
   return updateAccounting(cwd, base, (accounting) => ({
     ...accounting,
+    terminationHistory: [...(accounting.terminationHistory ?? []), reason],
     terminationReason: reason,
   }));
 }
