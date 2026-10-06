@@ -281,6 +281,7 @@ describe('independent review gate contract', () => {
 
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(result.escalationRequired).toBe(false);
+    expect(result.executionPhase).toBe('VALIDATION');
     expect(canOpenPullRequest(true, result)).toBe(false);
   });
 
@@ -710,6 +711,48 @@ describe('independent review runner control flow', () => {
     expect(reviews).toBe(2);
     expect(result.accounting?.reviewInvocationCount).toBe(2);
     expect(result.accounting?.autoFixCycleCount).toBe(1);
+  });
+
+  it('does not consume review accounting when pre-review validation fails', () => {
+    let reviewerInvocations = 0;
+    let recordedReviews = 0;
+    let recordedAutoFixes = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        runValidation: () => false,
+        invokeReviewer: () => {
+          reviewerInvocations += 1;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+            }),
+          );
+        },
+        recordReview: () => {
+          recordedReviews += 1;
+          throw new Error('validation must not record a review');
+        },
+        recordAutoFix: () => {
+          recordedAutoFixes += 1;
+          throw new Error('validation must not record AUTO_FIX');
+        },
+      }),
+      () => ({ changedRepository: true }),
+    );
+
+    expect(result.executionPhase).toBe('VALIDATION');
+    expect(result.accounting?.reviewInvocationCount).toBe(0);
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
+    expect(result.accounting?.cycleResults).toHaveLength(0);
+    expect(result.accounting?.generalizedRuleHistory).toEqual([]);
+    expect(reviewerInvocations).toBe(0);
+    expect(recordedReviews).toBe(0);
+    expect(recordedAutoFixes).toBe(0);
+    expect(canOpenPullRequest(true, result)).toBe(false);
   });
 
   it('does not count a PASS or result-capture retry as an AUTO_FIX cycle', () => {

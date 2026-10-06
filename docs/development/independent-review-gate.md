@@ -19,6 +19,12 @@ Implement
   -> create PR
 ```
 
+Deterministic validation is a pre-review phase. If it fails, the reviewer is
+not invoked and no review invocation, review cycle record, generalized-rule
+history entry, or AUTO_FIX cycle is consumed. Any deterministic repair must
+return to validation before the independent reviewer starts. Only an actual
+reviewer execution enters the independent-review accounting.
+
 The process is intended for a manual or scriptable pilot. It does not require
 an agent framework, a review bot, a paid API, or live external integration.
 

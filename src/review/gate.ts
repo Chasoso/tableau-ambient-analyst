@@ -60,6 +60,7 @@ export type ReviewGateResult = {
   nonBlockingFindings: ReviewFindingValue[];
   escalationRequired: boolean;
   executionStatus?: 'COMPLETED' | 'FAILED';
+  executionPhase?: 'PRE_REVIEW' | 'VALIDATION' | 'REVIEW';
   accounting?: ReviewAccounting;
   terminationReason?: TerminationReason;
 };
@@ -158,10 +159,14 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     nonBlockingFindings,
     escalationRequired,
     executionStatus: 'COMPLETED',
+    executionPhase: 'REVIEW',
   };
 }
 
-export function reviewerInvocationFailure(message: string): ReviewGateResult {
+export function reviewerInvocationFailure(
+  message: string,
+  executionPhase: 'PRE_REVIEW' | 'REVIEW' = 'PRE_REVIEW',
+): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
     blockingFindings: [
@@ -177,6 +182,7 @@ export function reviewerInvocationFailure(message: string): ReviewGateResult {
     nonBlockingFindings: [],
     escalationRequired: true,
     executionStatus: 'FAILED',
+    executionPhase,
   };
 }
 
@@ -195,6 +201,7 @@ export function validationFailure(message: string): ReviewGateResult {
     ],
     nonBlockingFindings: [],
     escalationRequired: false,
+    executionPhase: 'VALIDATION',
   };
 }
 
@@ -213,6 +220,7 @@ export function reviewCycleLimitExceeded(cycle: number): ReviewGateResult {
     ],
     nonBlockingFindings: [],
     escalationRequired: true,
+    executionPhase: 'PRE_REVIEW',
     terminationReason: 'MAX_REVIEW_INVOCATIONS',
   };
 }

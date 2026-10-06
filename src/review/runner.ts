@@ -600,7 +600,10 @@ function runBoundedReviewFixLoopUnsafe(
       ((initialAccounting.terminationReason === 'NO_PROGRESS' &&
         initialAccounting.resumeAfterPolicyChange === 'issue-29-bounded-scope-v3') ||
         (initialAccounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
-          initialAccounting.resumeAfterPolicyChange === 'issue-29-review-budget-v2')) &&
+          initialAccounting.resumeAfterPolicyChange === 'issue-29-review-budget-v2') ||
+        (initialAccounting.terminationReason === 'MAX_AUTO_FIX_CYCLES' &&
+          initialAccounting.resumeAfterPolicyChange ===
+            'issue-29-validation-review-phase-separation-v1')) &&
       dependencies.recordResume
     ) {
       dependencies.recordResume(input.cwd, input.base);
@@ -619,6 +622,11 @@ function runBoundedReviewFixLoopUnsafe(
         review.terminationReason,
       );
       return terminationResult(review.terminationReason, terminated, review.blockingFindings);
+    }
+    if (review.executionPhase !== 'REVIEW') {
+      const accounting = dependencies.readAccounting(input.cwd, input.base);
+      if (typeof accounting === 'string') return reviewerInvocationFailure(accounting);
+      return { ...review, accounting };
     }
     let accounting = dependencies.recordReview(input.cwd, input.base, review);
     const withAccounting = { ...review, accounting };
@@ -1232,11 +1240,14 @@ function invokeCodexReviewer(
     );
 
     if (processResult.error) {
-      return reviewerInvocationFailure(processResult.error.message);
+      return reviewerInvocationFailure(processResult.error.message, 'REVIEW');
     }
 
     if (processResult.signal) {
-      return reviewerInvocationFailure(`Codex was terminated by ${processResult.signal}.`);
+      return reviewerInvocationFailure(
+        `Codex was terminated by ${processResult.signal}.`,
+        'REVIEW',
+      );
     }
 
     if (processResult.status !== 0) {
@@ -1245,16 +1256,18 @@ function invokeCodexReviewer(
         : '';
       return reviewerInvocationFailure(
         `Codex exited with status ${processResult.status ?? 'unknown'}.${diagnostic}`,
+        'REVIEW',
       );
     }
 
     const output = extractFinalReviewerMessage(processResult.stdout);
     return output
       ? parseReviewResult(output)
-      : reviewerInvocationFailure('Reviewer returned no final message.');
+      : reviewerInvocationFailure('Reviewer returned no final message.', 'REVIEW');
   } catch (error) {
     return reviewerInvocationFailure(
       error instanceof Error ? error.message : 'Unknown reviewer error.',
+      'REVIEW',
     );
   }
 }
