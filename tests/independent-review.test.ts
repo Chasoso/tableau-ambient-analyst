@@ -18,6 +18,7 @@ import {
   buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
+  runBoundedReviewFixLoop,
   runReviewControlFlow,
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
@@ -437,6 +438,94 @@ describe('independent review runner control flow', () => {
 
     expect(result.result).toBe('CHANGES_REQUIRED');
     expect(canOpenPullRequest(true, result)).toBe(false);
+  });
+
+  it('continues AUTO_FIX through validation and a fresh review', () => {
+    let reviews = 0;
+    let validations = 0;
+    let fixes = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        runValidation: () => {
+          validations += 1;
+          return true;
+        },
+        invokeReviewer: () => {
+          reviews += 1;
+          return reviews === 1
+            ? parseReviewResult(
+                JSON.stringify({
+                  result: 'CHANGES_REQUIRED',
+                  blockingFindings: [
+                    {
+                      severity: 'blocking',
+                      classification: 'AUTO_FIX',
+                      finding: 'Deterministic gap',
+                      generalized_rule: 'Existing rule applies to siblings.',
+                      affected_locations: ['src/a.ts', 'src/b.ts'],
+                      recommended_fix: 'Apply the existing rule to both.',
+                    },
+                  ],
+                  nonBlockingFindings: [],
+                  escalationRequired: false,
+                }),
+              )
+            : parseReviewResult(
+                JSON.stringify({
+                  result: 'PASS',
+                  blockingFindings: [],
+                  nonBlockingFindings: [],
+                  escalationRequired: false,
+                }),
+              );
+        },
+      }),
+      () => {
+        fixes += 1;
+        return undefined;
+      },
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(fixes).toBe(1);
+    expect(validations).toBe(2);
+    expect(reviews).toBe(2);
+  });
+
+  it('stops the AUTO_FIX loop when the bounded cycle limit is reached', () => {
+    let fixes = 0;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        invokeReviewer: () =>
+          parseReviewResult(
+            JSON.stringify({
+              result: 'CHANGES_REQUIRED',
+              blockingFindings: [
+                {
+                  severity: 'blocking',
+                  classification: 'AUTO_FIX',
+                  finding: 'Repeating finding',
+                  generalized_rule: 'The same rule remains unmet.',
+                  affected_locations: ['src/a.ts'],
+                  recommended_fix: 'Apply the rule.',
+                },
+              ],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+            }),
+          ),
+      }),
+      () => {
+        fixes += 1;
+        return undefined;
+      },
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.blockingFindings[0]).toContain('maximum');
+    expect(fixes).toBe(maxReviewCycles);
   });
 });
 

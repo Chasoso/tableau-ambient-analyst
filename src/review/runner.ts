@@ -4,7 +4,9 @@ import { isAbsolute, resolve } from 'node:path';
 
 import {
   maxReviewCycles,
+  canContinueAutoFix,
   parseReviewResult,
+  reviewCycleLimitExceeded,
   reviewerInvocationFailure,
   validationFailure,
   type ReviewGateResult,
@@ -38,6 +40,8 @@ export type ReviewRunnerDependencies = {
   ) => ReviewGateResult;
   currentBranch: (cwd: string) => string;
 };
+
+export type ApplyAutoFix = (review: ReviewGateResult) => string | undefined;
 
 export function buildReviewerPrompt(
   input: IndependentReviewInput,
@@ -159,6 +163,29 @@ export function runReviewControlFlow(
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
 
   return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+}
+
+/**
+ * Bounded implementer/reviewer handoff. The reviewer remains read-only; the
+ * caller supplies the in-scope implementer that applies an explicit AUTO_FIX.
+ */
+export function runBoundedReviewFixLoop(
+  input: IndependentReviewInput,
+  dependencies: ReviewRunnerDependencies,
+  applyAutoFix: ApplyAutoFix,
+): ReviewGateResult {
+  for (let cycle = 0; cycle < maxReviewCycles; cycle += 1) {
+    const review = runReviewControlFlow(input, dependencies);
+
+    if (review.result === 'PASS' || !canContinueAutoFix(review)) return review;
+
+    const fixError = applyAutoFix(review);
+    if (fixError) {
+      return reviewerInvocationFailure(`AUTO_FIX implementation failed: ${fixError}`);
+    }
+  }
+
+  return reviewCycleLimitExceeded(maxReviewCycles + 1);
 }
 
 function defaultRunnerDependencies(): ReviewRunnerDependencies {

@@ -236,9 +236,10 @@ current Issue.
 ## Reviewer output contract
 
 The reviewer must return JSON matching
-`src/review/review-result.schema.json`. The parser retains acceptance of
-legacy string findings for compatibility, but the independent reviewer must
-emit structured findings using this shape:
+`src/review/review-result.schema.json`. The independent reviewer wire format
+is structured-only. The TypeScript parser also accepts legacy string findings
+when called directly by older local callers, but those strings are not valid
+output for the reviewer CLI schema. New reviewer findings must use this shape:
 
 ```json
 {
@@ -282,6 +283,13 @@ When a reviewer reports a blocking finding:
 
 The implementation context must not self-certify that its own fix resolved a
 blocking finding. A changed diff always requires independent re-review.
+
+The executable runner exposes `runBoundedReviewFixLoop`. It calls the existing
+validation and fresh-review path, hands AUTO_FIX-only results to an
+implementer callback, and repeats up to six cycles. The callback is the
+Implementer Codex responsibility; the read-only reviewer never edits files.
+Callback failure, validation failure, HUMAN_DECISION_REQUIRED, BLOCKED, and
+cycle exhaustion remain closed gates.
 
 ## Human escalation
 
