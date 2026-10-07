@@ -245,6 +245,42 @@ describe('application-layer agentic analysis', () => {
     ).rejects.toThrow('MALFORMED_TOOL_RESULT');
   });
 
+  it('enforces the approved tool allowlist and evidence provenance', async () => {
+    const model: AgenticAnalysisModel = {
+      async respond() {
+        return response([
+          {
+            type: 'function_call',
+            call_id: 'call-unknown',
+            name: 'delete_datasource',
+            arguments: '{}',
+          },
+        ]);
+      },
+    };
+    const tools = toolsFor();
+    await expect(runAgenticTableauAnalysis(contract, model, tools)).rejects.toThrow(
+      'TOOL_NOT_ALLOWED',
+    );
+    expect(tools.calls).toEqual([]);
+
+    const mismatchedModel: AgenticAnalysisModel = {
+      async respond() {
+        return response([
+          {
+            type: 'function_call',
+            call_id: 'call-mismatch',
+            name: 'get_datasource_metadata',
+            arguments: '{}',
+          },
+        ]);
+      },
+    };
+    await expect(runAgenticTableauAnalysis(contract, mismatchedModel, toolsFor())).rejects.toThrow(
+      'MALFORMED_TOOL_RESULT',
+    );
+  });
+
   it('maps known missing required question IDs and rejects unknown IDs', async () => {
     const incompleteModel: AgenticAnalysisModel = {
       async respond() {

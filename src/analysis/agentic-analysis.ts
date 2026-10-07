@@ -110,7 +110,7 @@ function approvedToolsAvailable(toolNames: readonly unknown[]): boolean {
   return required.every((name) => toolNames.includes(name));
 }
 
-function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
+function serializeModelEvidence(value: unknown, expectedTool: string): ModelVisibleMcpEvidence {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('MALFORMED_TOOL_RESULT');
   }
@@ -125,6 +125,7 @@ function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
     throw new Error('MALFORMED_TOOL_RESULT');
   }
   if (record.tool === 'list_datasources') {
+    if (expectedTool !== 'list_datasources') throw new Error('MALFORMED_TOOL_RESULT');
     if (
       record.datasourceLuid !== stdioDatasourceLuid ||
       !Array.isArray(record.datasources) ||
@@ -142,6 +143,7 @@ function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
     return value as ModelVisibleMcpEvidence;
   }
   if (record.tool === 'get_datasource_metadata') {
+    if (expectedTool !== 'get_datasource_metadata') throw new Error('MALFORMED_TOOL_RESULT');
     if (
       record.datasourceLuid !== stdioDatasourceLuid ||
       !Array.isArray(record.fieldCaptions) ||
@@ -155,6 +157,7 @@ function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
     return value as ModelVisibleMcpEvidence;
   }
   if (record.tool === 'query_datasource') {
+    if (expectedTool !== 'query_datasource') throw new Error('MALFORMED_TOOL_RESULT');
     if (
       record.datasourceLuid !== stdioDatasourceLuid ||
       !Array.isArray(record.rows) ||
@@ -177,6 +180,9 @@ function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
     return value as ModelVisibleMcpEvidence;
   }
   if (
+    (expectedTool === 'list_datasources' ||
+      expectedTool === 'get_datasource_metadata' ||
+      expectedTool === 'query_datasource') &&
     record.status === 'tool_error' &&
     (record.category === 'query_error' || record.category === 'tool_error') &&
     typeof record.message === 'string' &&
@@ -299,12 +305,15 @@ export async function runAgenticTableauAnalysis(
       for (const call of pendingCalls) {
         budget.assertCanContinue();
         const { callId, toolName, argumentsValue } = callArguments(call);
+        if (!Object.hasOwn(stdioToolNames, toolName)) {
+          throw new Error('TOOL_NOT_ALLOWED');
+        }
         const executed = await tools.callTool(
           toolName,
           argumentsValue,
           budget.remainingWallClockMs(),
         );
-        const evidence = serializeModelEvidence(executed.modelEvidence);
+        const evidence = serializeModelEvidence(executed.modelEvidence, toolName);
         calls.push(executed.summary);
         normalizedEvidence.push({
           sequence: normalizedEvidence.length + 1,
