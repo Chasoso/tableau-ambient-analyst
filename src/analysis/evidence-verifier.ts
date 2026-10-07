@@ -110,7 +110,12 @@ function statusForQuestion(
   reasons: string[],
 ): EvidenceStatus {
   if (entries.length === 0) return 'unresolved';
-  if (entries.some(({ provenance }) => provenance.kind !== 'tableau')) {
+  if (
+    entries.some(
+      ({ provenance }) =>
+        provenance.kind !== 'tableau' || provenance.toolName === 'list_datasources',
+    )
+  ) {
     reasons.push(`required evidence ${questionId} is not Tableau-backed`);
     return 'unresolved';
   }

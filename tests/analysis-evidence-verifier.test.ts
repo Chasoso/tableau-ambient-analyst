@@ -174,5 +174,21 @@ describe('analysis evidence verifier', () => {
         },
       ]),
     ).toThrow('EVIDENCE_INTERPRETATION_PROVENANCE_INVALID');
+
+    const directListEvidence = verifyEvidence(contract, [
+      {
+        questionId: 'assumption-support',
+        status: 'supported',
+        provenance: {
+          kind: 'tableau',
+          sequence: 1,
+          toolName: 'list_datasources',
+          datasourceLuid: stdioDatasourceLuid,
+        },
+        observation: 'Datasource is visible.',
+      },
+      tableauEvidence('launch-timing'),
+    ]);
+    expect(directListEvidence.completion).toBe('INSUFFICIENT');
   });
 });
