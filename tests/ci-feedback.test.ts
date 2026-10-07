@@ -73,7 +73,7 @@ describe('CI feedback control', () => {
     });
 
     expect(result.status).toBe('READY_FOR_HUMAN_REVIEW');
-    expect(waits).toBe(1);
+    expect(waits).toBe(2);
     expect(repairs).toBe(1);
   });
 

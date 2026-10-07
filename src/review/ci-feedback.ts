@@ -253,6 +253,7 @@ export function runCiFeedbackLoop(
           state,
         };
       }
+      dependencies.wait();
       continue;
     }
 
@@ -280,5 +281,6 @@ export function runCiFeedbackLoop(
       repairCycles: state.repairCycles + 1,
       meaningfulProgress: true,
     };
+    dependencies.wait();
   }
 }
