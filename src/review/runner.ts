@@ -1251,7 +1251,22 @@ export function runPostPushCiGate(dependencies: PostPushCiGateDependencies): CiG
     rerunTransient: dependencies.rerunTransient,
     repair: dependencies.repair,
   };
-  return runCiFeedbackLoop(feedbackDependencies);
+  try {
+    return runCiFeedbackLoop(feedbackDependencies);
+  } catch {
+    return {
+      status: 'CI_BLOCKED',
+      observation: {
+        checks: [],
+        evidence: 'The latest PR head or required CI evidence could not be observed.',
+        transient: false,
+        evidenceComplete: false,
+      },
+      state: { repairCycles: 0, transientReruns: 0, meaningfulProgress: false },
+      classification: 'BLOCKED',
+      reason: 'The latest PR head or required CI evidence could not be observed reliably.',
+    };
+  }
 }
 
 export function runReviewControlFlow(

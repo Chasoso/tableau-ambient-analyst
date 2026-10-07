@@ -144,6 +144,22 @@ describe('independent review gate contract', () => {
       repair: () => ({ changed: false, validated: false, pushed: false }),
     });
     expect(unavailable.status).toBe('CI_BLOCKED');
+
+    const headUnavailable = runPostPushCiGate({
+      currentHead: () => {
+        throw new Error('HEAD unavailable');
+      },
+      observe: () => ({
+        checks: [{ name: 'validation', state: 'SUCCESS' }],
+        evidence: '',
+        transient: false,
+      }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(headUnavailable.status).toBe('CI_BLOCKED');
+    expect(headUnavailable.classification).toBe('BLOCKED');
   });
 
   it('observes CI against the exact head and preserves complete failure evidence', () => {

@@ -71,7 +71,9 @@ Issue-to-PR workflow must observe the required GitHub Actions checks for the
 exact latest head and reach `READY_FOR_HUMAN_REVIEW` only when they pass. CI failures use the same
 `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, and `BLOCKED` model with bounded repair
 and transient-rerun limits; PR creation alone is not normal workflow
-completion. Preserve the secret
+completion. Follow-up instructions that modify an existing PR must use the
+repository-managed existing-PR update path and may not report completion after
+a direct push that bypasses the latest-head CI gate. Preserve the secret
 and credential policy, fail-closed handling, branch protection, and the
 existing opt-in policy for live/external operations. Do not add PR merge
 automation, CI replacement, or unconditionally live operations. A follow-up

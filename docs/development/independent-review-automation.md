@@ -133,7 +133,9 @@ This verifies the active PR and branch, runs validation and a fresh review,
 pushes the existing branch, confirms the exact pushed head, and waits for the
 required checks before reporting completion. It does not create or merge a PR.
 An older green head cannot satisfy the gate; missing or mismatched head/check
-evidence fails closed.
+evidence fails closed. Follow-up agents must use this repository-managed path
+before reporting completion; a direct push to an existing PR is not a
+successful handoff.
 
 For an already-prepared committed feature branch, the review-only mode remains
 available:
