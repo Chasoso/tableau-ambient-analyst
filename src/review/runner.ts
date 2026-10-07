@@ -880,6 +880,15 @@ Guard. Return only that JSON object.
     ) {
       throw new Error('commit changed before validation');
     }
+    const changedPaths = workingTreePaths(input.cwd);
+    const declaredPaths = report.changes.map((change) => change.path);
+    if (
+      changedPaths.length !== declaredPaths.length ||
+      changedPaths.some((path) => !declaredPaths.includes(path)) ||
+      declaredPaths.some((path) => !changedPaths.includes(path))
+    ) {
+      throw new Error('CI repair changed files without matching bounded reasons');
+    }
     const repairReview = ciRepairReviewFromEvidence(observation);
     const allowedPaths = autoFixAllowedPaths(repairReview, input.cwd, input.base);
     if (typeof allowedPaths === 'string' || !allowedPaths.length) {
@@ -893,8 +902,7 @@ Guard. Return only that JSON object.
     if (!runDeterministicValidation(input.cwd).passed) {
       throw new Error('local validation failed');
     }
-    const paths = report.changes.map((change) => change.path);
-    execFileSync('git', ['add', '--', ...paths], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['add', '--', ...declaredPaths], { cwd: input.cwd, encoding: 'utf8' });
     execFileSync('git', ['commit', '-m', 'fix: repair CI failure'], {
       cwd: input.cwd,
       encoding: 'utf8',
