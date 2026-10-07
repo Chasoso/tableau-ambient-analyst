@@ -15,8 +15,13 @@ The initial detector recognizes only four opportunity types:
 - decisions explicitly based on an assumption;
 - factual or data disagreements.
 
-These are intentionally transparent heuristics, not a general classifier. The
-detector is provider-neutral, synchronous, deterministic, and does not call
-Tableau, an LLM, a network service, or a persistence layer. The fixture cases
-are in [`fixtures/triggers/cases.json`](../../fixtures/triggers/cases.json),
-including casual and borderline statements that should be ignored.
+These are intentionally transparent heuristics, not a general classifier. A
+bounded preceding context is used so an assumption followed by a decision, or
+conflicting facts across speakers, can be recognized without summarizing the
+whole conversation. Ordinary quantitative claims such as a customer count are
+also recognized, while clearly temporal statements remain borderline and are
+covered by fixtures. The detector is provider-neutral, synchronous,
+deterministic, and does not call Tableau, an LLM, a network service, or a
+persistence layer. The fixture cases are in
+[`fixtures/triggers/cases.json`](../../fixtures/triggers/cases.json), including
+casual and borderline statements that should be ignored.

@@ -14,6 +14,13 @@
     "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
   },
   {
+    "id": "generic-numerical-claim",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "There were 42 customers in the trial." }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
     "id": "causal-hypothesis",
     "utterances": [
       {
@@ -30,7 +37,12 @@
       {
         "sequence": 0,
         "speaker": "Morgan",
-        "text": "We should launch next week based on the assumption that demand will stay high."
+        "text": "Assuming demand will stay high."
+      },
+      {
+        "sequence": 1,
+        "speaker": "Morgan",
+        "text": "We should launch next week."
       }
     ],
     "expected": { "decision": "ANALYZE", "reason": "assumption-based-decision" }
@@ -41,16 +53,19 @@
       {
         "sequence": 0,
         "speaker": "Aki",
-        "text": "The data says 80, but the report says 120."
+        "text": "The data says 80."
+      },
+      {
+        "sequence": 1,
+        "speaker": "Morgan",
+        "text": "The report says 120."
       }
     ],
     "expected": { "decision": "ANALYZE", "reason": "factual-disagreement" }
   },
   {
     "id": "ambiguous-time-statement",
-    "utterances": [
-      { "sequence": 0, "speaker": "Morgan", "text": "The meeting starts at 10." }
-    ],
+    "utterances": [{ "sequence": 0, "speaker": "Morgan", "text": "The meeting starts at 10." }],
     "expected": { "decision": "IGNORE" }
   }
 ]

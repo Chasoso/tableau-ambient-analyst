@@ -21,7 +21,7 @@ describe('trigger detector', () => {
     expect(result.decision).toBe(fixture.expected.decision);
     if (fixture.expected.reason !== undefined && result.decision === 'ANALYZE') {
       expect(result.opportunity.reason).toBe(fixture.expected.reason);
-      expect(result.opportunity.claim).toBe(fixture.utterances[0]?.text);
+      expect(result.opportunity.claim).toBe(fixture.utterances.at(-1)?.text);
     }
   });
 
