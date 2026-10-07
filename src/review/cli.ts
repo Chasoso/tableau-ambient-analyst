@@ -29,7 +29,10 @@ const reviewOnly = rawArguments.includes('--review-only');
 const result = reviewOnly ? runIndependentReview(input) : runIssueToPullRequest(input);
 console.log(JSON.stringify(result, null, 2));
 
-if (result.result !== 'PASS') {
+if (
+  result.result !== 'PASS' ||
+  ('completionStatus' in result && result.completionStatus !== 'READY_FOR_HUMAN_REVIEW')
+) {
   process.exitCode = 1;
 }
 

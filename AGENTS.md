@@ -59,7 +59,12 @@ any limit or convergence stop, report unresolved
 findings, repeated categories, per-cycle results, and why convergence failed.
 
 The PR gate requires deterministic validation, a fresh independent `PASS`, no
-blocking findings, and no unresolved human escalation. Preserve the secret
+blocking findings, and no unresolved human escalation. After PR creation, the
+Issue-to-PR workflow must also observe the required GitHub Actions checks and
+reach `READY_FOR_HUMAN_REVIEW` only when they pass. CI failures use the same
+`AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, and `BLOCKED` model with bounded repair
+and transient-rerun limits; PR creation alone is not normal workflow
+completion. Preserve the secret
 and credential policy, fail-closed handling, branch protection, and the
 existing opt-in policy for live/external operations. Do not add PR merge
 automation, CI replacement, or unconditionally live operations. A follow-up
