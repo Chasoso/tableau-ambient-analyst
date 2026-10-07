@@ -38,6 +38,7 @@ import {
   reserveReviewCycleAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
+  runExistingPullRequestUpdate,
   runPostPushCiGate,
   runReadOnlyReview,
   runReviewControlFlow,
@@ -1973,6 +1974,145 @@ describe('Issue-to-PR handoff boundaries', () => {
     body: 'Acceptance criteria',
     url: 'https://example.test/29',
   };
+
+  it('pushes an existing PR update and waits for its latest head checks', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-existing-pr-'));
+    const remote = join(directory, 'origin.git');
+    const fakeBin = join(directory, 'bin');
+    const previousPath = process.env.PATH;
+    try {
+      mkdirSync(fakeBin);
+      execFileSync('git', ['init', '-q', '--bare', remote], { cwd: directory });
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: directory });
+      execFileSync('git', ['config', 'user.email', 'test@example.test'], { cwd: directory });
+      writeFileSync(join(directory, 'README.md'), '# fixture\n');
+      execFileSync('git', ['add', 'README.md'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'initial'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: directory });
+      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'main'], {
+        cwd: directory,
+      });
+      execFileSync('git', ['switch', '-q', '-c', 'feature/review'], { cwd: directory });
+      writeFileSync(join(directory, 'old.txt'), 'old\n');
+      execFileSync('git', ['add', 'old.txt'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'old'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'feature/review'], {
+        cwd: directory,
+      });
+      writeFileSync(join(directory, 'follow-up.txt'), 'follow-up\n');
+      execFileSync('git', ['add', 'follow-up.txt'], { cwd: directory });
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.test',
+          'commit',
+          '-qm',
+          'follow-up',
+        ],
+        { cwd: directory },
+      );
+
+      const remoteShellPath = remote.replaceAll("'", "'\\''");
+      writeFileSync(
+        join(fakeBin, 'gh'),
+        `#!/bin/sh
+if [ "$1" = "issue" ]; then
+  printf '%s\\n' '{"title":"Issue","body":"Acceptance criteria","url":"https://github.com/Chasoso/tableau-ambient-analyst/issues/38"}'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  head=$(git --git-dir='${remoteShellPath}' rev-parse refs/heads/feature/review)
+  printf '{"url":"https://github.com/Chasoso/tableau-ambient-analyst/pull/38","state":"OPEN","headRefName":"feature/review","baseRefName":"main","headRefOid":"%s","headRepository":{"nameWithOwner":"Chasoso/tableau-ambient-analyst"}}\\n' "$head"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
+  marker='${directory}/checks-seen'
+  if [ -e "$marker" ]; then
+    printf '%s\\n' '[{"name":"validation","bucket":"pass","link":"https://github.com/Chasoso/tableau-ambient-analyst/actions/runs/1"}]'
+  else
+    : > "$marker"
+    printf '%s\\n' '[{"name":"validation","bucket":"pending","link":"https://github.com/Chasoso/tableau-ambient-analyst/actions/runs/1"}]'
+  fi
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' '[]'
+  exit 0
+fi
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(join(fakeBin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+
+      const followUpAccounting: ReviewAccounting = {
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 0,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+      };
+      const followUpDependencies: ReviewRunnerDependencies = {
+        validateScope: () => undefined,
+        runValidation: () => true,
+        readIssue: () => issue,
+        reserveCycle: () => undefined,
+        invokeReviewer: () =>
+          parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          ),
+        currentBranch: () => 'feature/review',
+        readAccounting: () => followUpAccounting,
+        recordReview: () => followUpAccounting,
+        recordAutoFix: () => followUpAccounting,
+        recordTermination: () => followUpAccounting,
+      };
+
+      const result = runExistingPullRequestUpdate(
+        { cwd: directory, base: 'main', issue: '38' },
+        'https://github.com/Chasoso/tableau-ambient-analyst/pull/38',
+        followUpDependencies,
+      );
+
+      expect(result.result).toBe('PASS');
+      expect(result.completionStatus).toBe('READY_FOR_HUMAN_REVIEW');
+      expect(result.ci?.status).toBe('READY_FOR_HUMAN_REVIEW');
+      expect(
+        execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/feature/review'], {
+          cwd: directory,
+          encoding: 'utf8',
+        }).trim(),
+      ).toBe(
+        execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim(),
+      );
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('fails closed when the branch push fails', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-push-failure-'));

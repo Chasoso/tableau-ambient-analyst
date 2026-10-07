@@ -373,6 +373,8 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
 export function runExistingPullRequestUpdate(
   input: IndependentReviewInput,
   pullRequestUrl: string,
+  dependencies: ReviewRunnerDependencies = defaultRunnerDependencies(),
+  applyAutoFix: ApplyAutoFix = (result) => applyCodexAutoFix(input, result),
 ): IssueToPullRequestResult {
   if (!/^\d+$/.test(input.issue)) {
     return reviewerInvocationFailure('Issue number must be numeric.');
@@ -389,9 +391,7 @@ export function runExistingPullRequestUpdate(
     return reviewerInvocationFailure('The current branch is not the active pull request branch.');
   }
 
-  const review = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
-    applyCodexAutoFix(input, result),
-  );
+  const review = runBoundedReviewFixLoop(input, dependencies, applyAutoFix);
   if (!canOpenPullRequest(true, review)) {
     return { ...review, pullRequestUrl };
   }
@@ -439,7 +439,7 @@ export function runExistingPullRequestUpdate(
   }
 
   const ci = waitForPullRequestCi(input, issue, activePullRequest.branch, pullRequestUrl, () => {
-    return reviewAndPushAfterCiRepair(input, activePullRequest.branch);
+    return reviewAndPushAfterCiRepair(input, activePullRequest.branch, dependencies, applyAutoFix);
   });
   if (ci.status === 'READY_FOR_HUMAN_REVIEW') {
     return { ...review, pullRequestUrl, completionStatus: ci.status, ci };
@@ -469,7 +469,12 @@ export function runExistingPullRequestUpdate(
   };
 }
 
-function reviewAndPushAfterCiRepair(input: IndependentReviewInput, branch: string): boolean {
+function reviewAndPushAfterCiRepair(
+  input: IndependentReviewInput,
+  branch: string,
+  dependencies: ReviewRunnerDependencies = defaultRunnerDependencies(),
+  applyAutoFix: ApplyAutoFix = (result) => applyCodexAutoFix(input, result),
+): boolean {
   let beforeReviewHead: string;
   try {
     beforeReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -479,9 +484,7 @@ function reviewAndPushAfterCiRepair(input: IndependentReviewInput, branch: strin
   } catch {
     return false;
   }
-  const freshReview = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
-    applyCodexAutoFix(input, result),
-  );
+  const freshReview = runBoundedReviewFixLoop(input, dependencies, applyAutoFix);
   if (!canOpenPullRequest(true, freshReview)) return false;
   let afterReviewHead: string;
   try {
