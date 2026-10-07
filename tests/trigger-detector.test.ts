@@ -1,0 +1,125 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { parseTranscriptFixture, type TranscriptUtterance } from '../src/replay/transcript.js';
+import { detectTrigger, triggerDetector } from '../src/trigger/detector.js';
+
+type TriggerCase = {
+  id: string;
+  utterances: TranscriptUtterance[];
+  expected: { decision: 'ANALYZE' | 'IGNORE'; reason?: string };
+};
+
+const cases = JSON.parse(
+  readFileSync(new URL('../fixtures/triggers/cases.json', import.meta.url), 'utf8'),
+) as TriggerCase[];
+
+describe('trigger detector', () => {
+  it.each(cases)('$id produces the documented deterministic decision', (fixture) => {
+    const utterances = parseTranscriptFixture(JSON.stringify(fixture.utterances));
+    const result = detectTrigger(utterances);
+
+    expect(result.decision).toBe(fixture.expected.decision);
+    if (fixture.expected.reason !== undefined && result.decision === 'ANALYZE') {
+      expect(result.opportunity.reason).toBe(fixture.expected.reason);
+      expect(result.opportunity.claim).toBe(fixture.utterances.at(-1)?.text);
+    }
+  });
+
+  it('keeps the first analytical opportunity and a bounded audit context', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'We are discussing the roadmap.' },
+        { sequence: 1, speaker: 'B', text: 'The revenue is 20% higher.' },
+        { sequence: 2, speaker: 'A', text: 'The data says otherwise.' },
+      ]),
+    );
+
+    const result = detectTrigger(utterances);
+
+    expect(result).toMatchObject({
+      decision: 'ANALYZE',
+      opportunity: {
+        claim: 'The revenue is 20% higher.',
+        reason: 'numerical-claim',
+        context: [
+          { sequence: 0, speaker: 'A' },
+          { sequence: 1, speaker: 'B' },
+        ],
+      },
+    });
+  });
+
+  it('returns auditable context for IGNORE and repeats deterministically', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'Hello.' },
+        { sequence: 1, speaker: 'B', text: 'Let us continue.' },
+      ]),
+    );
+
+    const first = triggerDetector.detect(utterances);
+    const second = detectTrigger(utterances);
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      decision: 'IGNORE',
+      reason: 'no-analytical-opportunity',
+      context: [{ sequence: 0 }, { sequence: 1 }],
+    });
+  });
+
+  it('does not mutate replayed input', () => {
+    const utterances: TranscriptUtterance[] = [
+      { sequence: 0, speaker: 'A', text: 'The metric is 10.' },
+    ];
+    const before = [...utterances];
+
+    detectTrigger(utterances);
+
+    expect(utterances).toEqual(before);
+  });
+
+  it('does not attach a preceding analytical context to a later casual utterance', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'Because we met earlier.' },
+        { sequence: 1, speaker: 'B', text: "Let's grab coffee." },
+      ]),
+    );
+
+    expect(detectTrigger(utterances)).toMatchObject({ decision: 'IGNORE' });
+  });
+
+  it('returns the first opportunity and supports a cursor for sequential replay', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'The revenue is 20% higher.' },
+        { sequence: 1, speaker: 'B', text: "Let's grab coffee." },
+        { sequence: 2, speaker: 'A', text: 'The new flow caused more drop-off.' },
+      ]),
+    );
+
+    const first = detectTrigger(utterances);
+    expect(first).toMatchObject({
+      decision: 'ANALYZE',
+      opportunity: { claim: 'The revenue is 20% higher.', context: [{ sequence: 0 }] },
+    });
+
+    if (first.decision !== 'ANALYZE') {
+      throw new Error('expected the first replay opportunity to be ANALYZE');
+    }
+    const consumedSequence = first.opportunity.context.at(-1)?.sequence;
+    if (consumedSequence === undefined) {
+      throw new Error('expected the first opportunity to have a sequence');
+    }
+    const next = detectTrigger(utterances, { afterSequence: consumedSequence });
+
+    expect(next.decision).toBe('ANALYZE');
+    if (next.decision !== 'ANALYZE') {
+      throw new Error('expected the next replay opportunity to be ANALYZE');
+    }
+    expect(next.opportunity.claim).toBe('The new flow caused more drop-off.');
+    expect(next.opportunity.context.at(-1)?.sequence).toBe(2);
+    expect(detectTrigger(utterances, { afterSequence: 2 })).toMatchObject({ decision: 'IGNORE' });
+  });
+});

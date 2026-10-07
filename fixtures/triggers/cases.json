@@ -1,0 +1,136 @@
+[
+  {
+    "id": "casual-statement",
+    "utterances": [
+      { "sequence": 0, "speaker": "Aki", "text": "Let's grab coffee after this meeting." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "numerical-claim",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "The conversion rate is 42% this quarter." }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
+    "id": "generic-numerical-claim",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "There were 42 customers in the trial." }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
+    "id": "causal-hypothesis",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The conversion rate increased because the new onboarding flow reduced drop-off."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
+    "id": "explicit-causal-hypothesis",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The new onboarding flow caused more drop-off."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
+    "id": "assumption-based-decision",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Morgan",
+        "text": "Assuming demand will stay high."
+      },
+      {
+        "sequence": 1,
+        "speaker": "Morgan",
+        "text": "We should launch next week."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "assumption-based-decision" }
+  },
+  {
+    "id": "factual-disagreement",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The data says 80."
+      },
+      {
+        "sequence": 1,
+        "speaker": "Morgan",
+        "text": "The report says 120."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "factual-disagreement" }
+  },
+  {
+    "id": "ambiguous-time-statement",
+    "utterances": [{ "sequence": 0, "speaker": "Morgan", "text": "The meeting starts at 10." }],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "non-analytical-assumption",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "I assume the meeting starts at 10." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "japanese-numerical-claim",
+    "utterances": [{ "sequence": 0, "speaker": "葵", "text": "今月の売上は42%増加しました。" }],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
+    "id": "japanese-causal-hypothesis",
+    "utterances": [
+      { "sequence": 0, "speaker": "葵", "text": "新しい導線が離脱を増やした原因だと思います。" }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
+    "id": "japanese-assumption-based-decision",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "葵",
+        "text": "需要が高いという前提なら、来週リリースすべきです。"
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "assumption-based-decision" }
+  },
+  {
+    "id": "japanese-factual-disagreement",
+    "utterances": [
+      { "sequence": 0, "speaker": "葵", "text": "データでは80件ですが、レポートでは120件です。" }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "factual-disagreement" }
+  },
+  {
+    "id": "japanese-casual-statement",
+    "utterances": [{ "sequence": 0, "speaker": "葵", "text": "このあとコーヒーに行きましょう。" }],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "casual-modal-statement",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "I think we should grab coffee." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "casual-personal-number",
+    "utterances": [{ "sequence": 0, "speaker": "Morgan", "text": "I have 2 dogs." }],
+    "expected": { "decision": "IGNORE" }
+  }
+]
