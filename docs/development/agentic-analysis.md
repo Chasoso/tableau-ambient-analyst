@@ -15,7 +15,12 @@ path reuses the proven Issue #17 boundaries:
 contract, verifies that all approved tools are available, forwards only
 normalized tool evidence to the model, enforces the tool-call bound, and
 returns the contract, normalized Tableau-backed evidence, model-reported
-structured outcome, bounded final answer, call summaries, and budget snapshot.
+structured outcome, the authoritative `evidenceVerification`, bounded final
+answer, call summaries, and budget snapshot. The caller may provide explicit,
+bounded sequence-to-question interpretations; the application maps those
+interpretations only after the referenced records are produced by this run and
+then invokes the deterministic verifier. With no interpretations, verification
+uses an empty Evidence collection and therefore returns `INSUFFICIENT`.
 The model must report `missing_evidence` using the stable Required Evidence
 question IDs; the application validates that report's structure and returns
 `modelReportedMissingEvidenceQuestionIds`. This is not verified evidence
@@ -28,9 +33,11 @@ Issue #44 stops at collecting safe, normalized Tableau-backed evidence and
 validating the model output shape. Issue #45 is responsible for interpreting
 that evidence, mapping it to required questions, deciding supported,
 contradicted, or unresolved, and determining true completion. Accordingly,
-`AgenticAnalysisResult` is not an Evidence/Verifier result. Semantic Evidence
-interpretation occurs only after its normalized observations exist; the
-deterministic completion boundary is documented in
+Semantic Evidence interpretation remains explicit and occurs only after its
+normalized observations exist. The model-reported `evidence_complete` field is
+never authoritative; callers must use `evidenceVerification.completion` and
+`unresolvedRequiredEvidence`. The deterministic completion boundary is
+documented in
 [`evidence-verifier.md`](evidence-verifier.md).
 
 `runOpenAiStdioAnalysis` is the explicit one-provider entry point. It requires

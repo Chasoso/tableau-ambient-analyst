@@ -22,6 +22,12 @@ import {
   type StructuredOutcome,
 } from '../spike/response-telemetry.js';
 import { structuredOutcomeTextFormat } from '../spike/openai-mcp-request.js';
+import {
+  interpretAgenticEvidence,
+  verifyEvidence,
+  type AgenticEvidenceInterpretation,
+  type EvidenceVerificationResult,
+} from './evidence-verifier.js';
 
 type ResponseItem = {
   type?: unknown;
@@ -64,6 +70,7 @@ export type AgenticAnalysisResult = {
   contract: AnalysisContract;
   finalAnswer: string;
   structuredOutcome: StructuredOutcome;
+  evidenceVerification: EvidenceVerificationResult;
   modelReportedMissingEvidenceQuestionIds: readonly string[];
   normalizedEvidence: readonly AgenticEvidenceRecord[];
   toolCalls: readonly StdioCallSummary[];
@@ -253,6 +260,7 @@ export async function runAgenticTableauAnalysis(
   model: AgenticAnalysisModel,
   tools: AgenticAnalysisToolRunner,
   budget = new StdioRunBudget(),
+  evidenceInterpretations: readonly AgenticEvidenceInterpretation[] = [],
 ): Promise<AgenticAnalysisResult> {
   const validatedContract = validateAnalysisContract(contract);
   const calls: StdioCallSummary[] = [];
@@ -290,10 +298,15 @@ export async function runAgenticTableauAnalysis(
         const completeFinalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
         const structuredOutcome = extractStructuredOutcome(completeFinalAnswer);
         if (structuredOutcome === null) throw new Error('ANALYSIS_STRUCTURED_OUTPUT_INVALID');
+        const interpretedEvidence = interpretAgenticEvidence(
+          normalizedEvidence,
+          evidenceInterpretations,
+        );
         return {
           contract: validatedContract,
           finalAnswer: truncateFinalAnswer(completeFinalAnswer),
           structuredOutcome,
+          evidenceVerification: verifyEvidence(validatedContract, interpretedEvidence),
           modelReportedMissingEvidenceQuestionIds: validateModelReportedMissingEvidence(
             validatedContract,
             structuredOutcome,
