@@ -40,6 +40,7 @@ import {
   runBoundedReviewFixLoop,
   runReadOnlyReview,
   runReviewControlFlow,
+  observePullRequestCi,
   pushAndCreatePullRequest,
   validateAutoFixChanges,
   validateImplementerChanges,
@@ -50,6 +51,72 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
+  it('observes CI against the exact head and preserves complete failure evidence', () => {
+    const commands: string[][] = [];
+    const observation = observePullRequestCi(
+      '/repo',
+      'https://github.com/example/repo/pull/1',
+      'head-sha',
+      (args) => {
+        commands.push(args);
+        if (args[0] === 'pr' && args[1] === 'view')
+          return JSON.stringify({ headRefOid: 'head-sha' });
+        if (args[0] === 'pr' && args[1] === 'checks') {
+          return JSON.stringify([
+            {
+              name: 'validation',
+              bucket: 'fail',
+              link: 'https://github.com/example/repo/actions/runs/42/job/7',
+            },
+          ]);
+        }
+        if (args[0] === 'run' && args[1] === 'list') {
+          return JSON.stringify([{ databaseId: 42, conclusion: 'failure' }]);
+        }
+        return 'npm run validate failed';
+      },
+    );
+
+    expect(observation.checks[0]?.state).toBe('FAILURE');
+    expect(observation.evidenceComplete).toBe(true);
+    expect(commands.some((args) => args.includes('head-sha'))).toBe(true);
+  });
+
+  it('fails closed on a head mismatch and detects transient CI evidence', () => {
+    const mismatch = observePullRequestCi(
+      '/repo',
+      'https://github.com/example/repo/pull/1',
+      'expected-sha',
+      () => JSON.stringify({ headRefOid: 'other-sha' }),
+    );
+    expect(mismatch.evidenceComplete).toBe(false);
+    expect(mismatch.checks).toHaveLength(0);
+
+    const transient = observePullRequestCi(
+      '/repo',
+      'https://github.com/example/repo/pull/1',
+      'head-sha',
+      (args) => {
+        if (args[0] === 'pr' && args[1] === 'view')
+          return JSON.stringify({ headRefOid: 'head-sha' });
+        if (args[0] === 'pr' && args[1] === 'checks') {
+          return JSON.stringify([
+            {
+              name: 'validation',
+              bucket: 'fail',
+              link: 'https://github.com/example/repo/actions/runs/42/job/7',
+            },
+          ]);
+        }
+        if (args[0] === 'run' && args[1] === 'list') {
+          return JSON.stringify([{ databaseId: 42, conclusion: 'failure' }]);
+        }
+        return 'runner unavailable';
+      },
+    );
+    expect(transient.transient).toBe(true);
+  });
+
   it('opens only for a validated PASS with no blocking findings or escalation', () => {
     const result = parseReviewResult(
       JSON.stringify({

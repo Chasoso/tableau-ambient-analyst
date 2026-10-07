@@ -70,6 +70,8 @@ export type IndependentReviewInput = {
   issue: string;
 };
 
+export type CiCommandRunner = (args: string[], cwd: string) => string;
+
 type IssueContext = {
   title: string;
   body: string;
@@ -733,14 +735,13 @@ export function observePullRequestCi(
   cwd: string,
   pullRequestUrl: string,
   expectedHeadSha: string,
+  runCommand: CiCommandRunner = (args, commandCwd) =>
+    execFileSync('gh', args, { cwd: commandCwd, encoding: 'utf8' }),
 ): CiObservation {
   const actualHeadSha = (() => {
     try {
       const head = JSON.parse(
-        execFileSync('gh', ['pr', 'view', pullRequestUrl, '--json', 'headRefOid'], {
-          cwd,
-          encoding: 'utf8',
-        }),
+        runCommand(['pr', 'view', pullRequestUrl, '--json', 'headRefOid'], cwd),
       ) as Record<string, unknown>;
       return typeof head.headRefOid === 'string' ? head.headRefOid : '';
     } catch {
@@ -765,10 +766,9 @@ export function observePullRequestCi(
   }
   const rawChecks = (() => {
     try {
-      return execFileSync(
-        'gh',
+      return runCommand(
         ['pr', 'checks', pullRequestUrl, '--required', '--json', 'name,state,bucket,link'],
-        { cwd, encoding: 'utf8' },
+        cwd,
       );
     } catch (error) {
       return commandOutputError(error);
@@ -808,8 +808,7 @@ export function observePullRequestCi(
   let failedRunIds: string[] = [];
   try {
     const runs = JSON.parse(
-      execFileSync(
-        'gh',
+      runCommand(
         [
           'run',
           'list',
@@ -820,7 +819,7 @@ export function observePullRequestCi(
           '--json',
           'databaseId,status,conclusion',
         ],
-        { cwd, encoding: 'utf8' },
+        cwd,
       ),
     ) as Array<Record<string, unknown>>;
     const failedRuns = runs.filter(
@@ -832,10 +831,7 @@ export function observePullRequestCi(
     for (const failedRunId of failedRunIds) {
       if (!runId) runId = failedRunId;
       try {
-        const runLogs = execFileSync('gh', ['run', 'view', failedRunId, '--log-failed'], {
-          cwd,
-          encoding: 'utf8',
-        });
+        const runLogs = runCommand(['run', 'view', failedRunId, '--log-failed'], cwd);
         if (runLogs.trim()) logs += `${logs ? '\n' : ''}${runLogs}`;
         else allFailedRunLogsAvailable = false;
       } catch (error) {
