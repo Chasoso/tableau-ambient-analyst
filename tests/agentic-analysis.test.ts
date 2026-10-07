@@ -440,4 +440,19 @@ describe('application-layer agentic analysis', () => {
     expect(result.modelReportedMissingEvidenceQuestionIds).toEqual([]);
     expect(result.normalizedEvidence).toEqual([]);
   });
+
+  it('rejects an oversized contract before invoking the model or tools', async () => {
+    const oversizedContract: AnalysisContract = {
+      ...contract,
+      context: [{ sequence: 0, speaker: 'A', text: 'x'.repeat(50_000) }],
+    };
+    const model = { respond: vi.fn() } satisfies AgenticAnalysisModel;
+    const tools = toolsFor();
+
+    await expect(runAgenticTableauAnalysis(oversizedContract, model, tools)).rejects.toThrow(
+      'ANALYSIS_PROMPT_TOO_LARGE',
+    );
+    expect(model.respond).not.toHaveBeenCalled();
+    expect(tools.connected).toBe(false);
+  });
 });

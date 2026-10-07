@@ -43,6 +43,17 @@ export class StdioRunBudget {
     if (usage.totalTokens === null || usage.approximateCostUsd === null) {
       throw new Error('RUN_USAGE_BUDGET_UNAVAILABLE');
     }
+    const telemetryValues = [
+      usage.inputTokens,
+      usage.cachedInputTokens,
+      usage.outputTokens,
+      usage.reasoningTokens,
+      usage.totalTokens,
+      usage.approximateCostUsd,
+    ];
+    if (telemetryValues.some((value) => value !== null && (!Number.isFinite(value) || value < 0))) {
+      throw new Error('RUN_USAGE_BUDGET_UNAVAILABLE');
+    }
     this.totalTokens += usage.totalTokens;
     this.costUsd += usage.approximateCostUsd;
     if (this.totalTokens > stdioRunMaxTokens) throw new Error('RUN_TOKEN_BUDGET_EXCEEDED');
