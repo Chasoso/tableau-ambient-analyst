@@ -306,10 +306,25 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
   const ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url, () => {
+    const beforeReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
     const freshReview = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
       applyCodexAutoFix(input, result),
     );
-    return canOpenPullRequest(true, freshReview);
+    if (!canOpenPullRequest(true, freshReview)) return false;
+    const afterReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
+    if (afterReviewHead === beforeReviewHead) return true;
+    try {
+      execFileSync('git', ['push', 'origin', branch], { cwd: input.cwd, encoding: 'utf8' });
+      return true;
+    } catch {
+      return false;
+    }
   });
   return {
     ...review,
@@ -801,6 +816,9 @@ function applyCodexCiFix(
   branch: string,
   observation: CiObservation,
 ): CiRepairOutcome {
+  if (workingTreePaths(input.cwd).length > 0) {
+    return { changed: false, validated: false, pushed: false };
+  }
   const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: input.cwd,
     encoding: 'utf8',
@@ -862,8 +880,16 @@ Guard. Return only that JSON object.
     ) {
       throw new Error('commit changed before validation');
     }
-    const changeError = validateImplementerChanges(input.cwd, input.base, report.changes);
-    if (changeError) throw new Error(changeError);
+    const repairReview = ciRepairReviewFromEvidence(observation);
+    const allowedPaths = autoFixAllowedPaths(repairReview, input.cwd, input.base);
+    if (typeof allowedPaths === 'string' || !allowedPaths.length) {
+      throw new Error('CI repair scope unavailable');
+    }
+    const scopeError = validateAutoFixChanges(repairReview, input.cwd, input.base, report.changes);
+    if (scopeError) throw new Error(scopeError);
+    if (report.changes.some((change) => !allowedPaths.includes(change.path))) {
+      throw new Error('CI repair changed a path outside the evidence allowlist');
+    }
     if (!runDeterministicValidation(input.cwd).passed) {
       throw new Error('local validation failed');
     }
@@ -878,6 +904,30 @@ Guard. Return only that JSON object.
   } catch {
     return { changed: false, validated: false, pushed: false };
   }
+}
+
+function ciRepairReviewFromEvidence(observation: CiObservation): ReviewGateResult {
+  const paths = [
+    ...observation.evidence.matchAll(
+      /(?:^|[\s("'`])((?:src|tests|docs|\.github)\/[A-Za-z0-9._/-]+|(?:AGENTS|package(?:-lock)?|tsconfig(?:\.build)?|eslint\.config)\.[A-Za-z0-9._-]+)/g,
+    ),
+  ].map((match) => match[1]);
+  const uniquePaths = [...new Set(paths)];
+  return {
+    result: 'CHANGES_REQUIRED',
+    blockingFindings: [
+      {
+        severity: 'blocking',
+        classification: 'AUTO_FIX',
+        finding: 'Deterministic GitHub Actions failure requires a bounded repository fix.',
+        generalized_rule: 'CI failure locations are the authorized AUTO_FIX scope.',
+        affected_locations: uniquePaths.map((path) => `${path}:1`),
+        recommended_fix: 'Apply only the deterministic fix at the reported CI locations.',
+      },
+    ],
+    nonBlockingFindings: [],
+    escalationRequired: false,
+  };
 }
 
 export function waitForPullRequestCi(
