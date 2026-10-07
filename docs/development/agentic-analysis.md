@@ -15,8 +15,11 @@ path reuses the proven Issue #17 boundaries:
 contract, verifies that all approved tools are available, forwards only
 normalized tool evidence to the model, enforces the tool-call bound, and
 returns the contract, structured outcome, bounded final answer, call summaries,
-and budget snapshot. The model chooses exploration order; application code
-does not recreate it as a Tableau-specific if/else planner.
+required-question status mapping, and budget snapshot. The model must report
+`missing_evidence` using the stable Required Evidence question IDs; the
+application validates those IDs and returns `requiredEvidenceStatus` for the
+later Evidence/Verifier layer. The model chooses exploration order; application
+code does not recreate it as a Tableau-specific if/else planner.
 
 `runOpenAiStdioAnalysis` is the explicit one-provider entry point. It requires
 an API key and the existing local Tableau bridge, so it is opt-in and is not
@@ -26,5 +29,5 @@ not use a network, credential, Tableau MCP, or live datasource.
 The contract/context, model output, and Tableau result are data rather than
 authorization. They cannot expand the approved tools, datasource, credential,
 write, or budget policy. Malformed provider output, malformed normalized tool
-evidence, timeout, unavailable approved tools, and budget exhaustion fail
-closed.
+evidence, unknown evidence question IDs, inconsistent completion status,
+timeout, unavailable approved tools, and budget exhaustion fail closed.

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   runAgenticTableauAnalysis,
+  createOpenAiResponsesModel,
   type AgenticAnalysisModel,
   type AgenticAnalysisResponse,
   type AgenticAnalysisToolRunner,
@@ -144,6 +145,9 @@ describe('application-layer agentic analysis', () => {
     const result = await runAgenticTableauAnalysis(contract, model, tools);
 
     expect(result.structuredOutcome.outcome).toBe('supported');
+    expect(result.requiredEvidenceStatus).toEqual([
+      { questionId: 'decision-assumption-support', status: 'addressed' },
+    ]);
     expect(result.responseCount).toBe(2);
     expect(result.toolCalls).toHaveLength(1);
     expect(tools.calls).toEqual(['query_datasource']);
@@ -216,6 +220,76 @@ describe('application-layer agentic analysis', () => {
     await expect(
       runAgenticTableauAnalysis(contract, malformedToolModel, toolsFor(null)),
     ).rejects.toThrow('MALFORMED_TOOL_RESULT');
+  });
+
+  it('maps known missing required question IDs and rejects unknown IDs', async () => {
+    const incompleteModel: AgenticAnalysisModel = {
+      async respond() {
+        return response([
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify({
+                  outcome: 'insufficient-evidence',
+                  summary: 'The required assumption evidence is unavailable.',
+                  evidence_complete: false,
+                  missing_evidence: ['decision-assumption-support'],
+                  hypothesis_state: 'not-applicable',
+                  stop_reason: 'insufficient-evidence',
+                  reported_rank_1: null,
+                }),
+              },
+            ],
+          },
+        ]);
+      },
+    };
+    const incomplete = await runAgenticTableauAnalysis(contract, incompleteModel, toolsFor());
+    expect(incomplete.requiredEvidenceStatus).toEqual([
+      { questionId: 'decision-assumption-support', status: 'missing' },
+    ]);
+
+    const unknownIdModel: AgenticAnalysisModel = {
+      async respond() {
+        return response([
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify({
+                  outcome: 'insufficient-evidence',
+                  summary: 'The result is incomplete.',
+                  evidence_complete: false,
+                  missing_evidence: ['unknown-question'],
+                  hypothesis_state: 'not-applicable',
+                  stop_reason: 'insufficient-evidence',
+                  reported_rank_1: null,
+                }),
+              },
+            ],
+          },
+        ]);
+      },
+    };
+    await expect(runAgenticTableauAnalysis(contract, unknownIdModel, toolsFor())).rejects.toThrow(
+      'ANALYSIS_OUTCOME_QUESTION_ID_INVALID',
+    );
+  });
+
+  it.each([null, [], {}])('rejects malformed successful provider envelope: %j', async (body) => {
+    const fetchImplementation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    });
+    const model = createOpenAiResponsesModel('test-token', fetchImplementation);
+
+    await expect(model.respond('input', undefined, 1000)).rejects.toThrow(
+      'MALFORMED_PROVIDER_RESULT',
+    );
   });
 
   it('keeps the deterministic baseline no-network by requiring injected boundaries', async () => {
