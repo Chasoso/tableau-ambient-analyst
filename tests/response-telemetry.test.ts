@@ -28,6 +28,23 @@ describe('Responses telemetry extraction', () => {
     ).toBe('nested text');
   });
 
+  it('prefers the canonical top-level output when both representations are present', () => {
+    expect(
+      extractFinalAnswer(
+        [{ type: 'message', content: [{ type: 'output_text', text: 'nested duplicate' }] }],
+        'top-level canonical',
+      ),
+    ).toBe('top-level canonical');
+  });
+
+  it('keeps a complete structured outcome available beyond the display bound', () => {
+    const longOutcome = JSON.stringify({ ...validOutcome, summary: 'x'.repeat(2_100) });
+    const answer = extractFinalAnswer([], longOutcome);
+
+    expect(answer).toBe(longOutcome);
+    expect(extractStructuredOutcome(answer)?.summary).toHaveLength(2_100);
+  });
+
   it('extracts structured JSON after MCP calls and normalizes the contract', () => {
     const answer = extractFinalAnswer([
       { type: 'mcp_call', name: 'query-datasource' },

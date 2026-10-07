@@ -18,6 +18,7 @@ import {
   extractFinalAnswer,
   extractStructuredOutcome,
   summarizeUsage,
+  truncateFinalAnswer,
   type StructuredOutcome,
 } from '../spike/response-telemetry.js';
 import { structuredOutcomeTextFormat } from '../spike/openai-mcp-request.js';
@@ -286,12 +287,12 @@ export async function runAgenticTableauAnalysis(
 
       const pendingCalls = functionCalls(response);
       if (pendingCalls.length === 0) {
-        const finalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
-        const structuredOutcome = extractStructuredOutcome(finalAnswer);
+        const completeFinalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
+        const structuredOutcome = extractStructuredOutcome(completeFinalAnswer);
         if (structuredOutcome === null) throw new Error('ANALYSIS_STRUCTURED_OUTPUT_INVALID');
         return {
           contract: validatedContract,
-          finalAnswer,
+          finalAnswer: truncateFinalAnswer(completeFinalAnswer),
           structuredOutcome,
           modelReportedMissingEvidenceQuestionIds: validateModelReportedMissingEvidence(
             validatedContract,

@@ -172,6 +172,27 @@ describe('application-layer agentic analysis', () => {
     expect(modelInputs[1]).toMatchObject({ previousResponseId: 'response-1' });
   });
 
+  it('validates the complete canonical output before bounding the returned answer', async () => {
+    const outcomeText = JSON.stringify({
+      outcome: 'supported',
+      summary: 'x'.repeat(2_100),
+      evidence_complete: true,
+      missing_evidence: [],
+      hypothesis_state: 'not-applicable',
+      stop_reason: 'sufficient-evidence',
+    });
+    const model: AgenticAnalysisModel = {
+      async respond() {
+        return { ...response([], 'response-long'), output_text: outcomeText };
+      },
+    };
+
+    const result = await runAgenticTableauAnalysis(contract, model, toolsFor());
+
+    expect(result.structuredOutcome.summary).toHaveLength(2_100);
+    expect(result.finalAnswer).toHaveLength(2_000);
+  });
+
   it('fails closed at the proven tool-call bound', async () => {
     const model: AgenticAnalysisModel = {
       async respond() {

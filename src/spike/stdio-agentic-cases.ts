@@ -238,8 +238,8 @@ async function runCase(setup: MeasuredCaseSetup, apiKey: string): Promise<CaseRu
 
       const pendingCalls = functionCalls(response);
       if (pendingCalls.length === 0) {
-        const finalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
-        const outcome = extractStructuredOutcome(finalAnswer);
+        const completeFinalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
+        const outcome = extractStructuredOutcome(completeFinalAnswer);
         const finalPresent = finalMessagePresent(response);
         const classification = finalPresent
           ? classifyCase(setup, calls, outcome)
