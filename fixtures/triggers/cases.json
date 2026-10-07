@@ -78,5 +78,40 @@
     "id": "ambiguous-time-statement",
     "utterances": [{ "sequence": 0, "speaker": "Morgan", "text": "The meeting starts at 10." }],
     "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "japanese-numerical-claim",
+    "utterances": [{ "sequence": 0, "speaker": "葵", "text": "今月の売上は42%増加しました。" }],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
+    "id": "japanese-causal-hypothesis",
+    "utterances": [
+      { "sequence": 0, "speaker": "葵", "text": "新しい導線が離脱を増やした原因だと思います。" }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
+    "id": "japanese-assumption-based-decision",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "葵",
+        "text": "需要が高いという前提なら、来週リリースすべきです。"
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "assumption-based-decision" }
+  },
+  {
+    "id": "japanese-factual-disagreement",
+    "utterances": [
+      { "sequence": 0, "speaker": "葵", "text": "データでは80件ですが、レポートでは120件です。" }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "factual-disagreement" }
+  },
+  {
+    "id": "japanese-casual-statement",
+    "utterances": [{ "sequence": 0, "speaker": "葵", "text": "このあとコーヒーに行きましょう。" }],
+    "expected": { "decision": "IGNORE" }
   }
 ]

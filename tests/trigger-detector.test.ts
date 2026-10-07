@@ -89,4 +89,37 @@ describe('trigger detector', () => {
 
     expect(detectTrigger(utterances)).toMatchObject({ decision: 'IGNORE' });
   });
+
+  it('returns the first opportunity and supports a cursor for sequential replay', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'The revenue is 20% higher.' },
+        { sequence: 1, speaker: 'B', text: "Let's grab coffee." },
+        { sequence: 2, speaker: 'A', text: 'The new flow caused more drop-off.' },
+      ]),
+    );
+
+    const first = detectTrigger(utterances);
+    expect(first).toMatchObject({
+      decision: 'ANALYZE',
+      opportunity: { claim: 'The revenue is 20% higher.', context: [{ sequence: 0 }] },
+    });
+
+    if (first.decision !== 'ANALYZE') {
+      throw new Error('expected the first replay opportunity to be ANALYZE');
+    }
+    const consumedSequence = first.opportunity.context.at(-1)?.sequence;
+    if (consumedSequence === undefined) {
+      throw new Error('expected the first opportunity to have a sequence');
+    }
+    const next = detectTrigger(utterances, { afterSequence: consumedSequence });
+
+    expect(next.decision).toBe('ANALYZE');
+    if (next.decision !== 'ANALYZE') {
+      throw new Error('expected the next replay opportunity to be ANALYZE');
+    }
+    expect(next.opportunity.claim).toBe('The new flow caused more drop-off.');
+    expect(next.opportunity.context.at(-1)?.sequence).toBe(2);
+    expect(detectTrigger(utterances, { afterSequence: 2 })).toMatchObject({ decision: 'IGNORE' });
+  });
 });

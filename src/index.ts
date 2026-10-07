@@ -13,6 +13,7 @@ export type {
   AnalyzeOpportunity,
   TriggerContext,
   TriggerDetection,
+  TriggerDetectionOptions,
   TriggerDetector,
   TriggerReason,
 } from './trigger/detector.js';
