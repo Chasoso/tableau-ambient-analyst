@@ -17,3 +17,9 @@ export type {
   TriggerDetector,
   TriggerReason,
 } from './trigger/detector.js';
+export {
+  analysisContractFromOpportunity,
+  AnalysisContractError,
+  validateAnalysisContract,
+} from './analysis/contract.js';
+export type { AnalysisContract, AnalysisQuestion } from './analysis/contract.js';
