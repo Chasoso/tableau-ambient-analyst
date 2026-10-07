@@ -6,7 +6,11 @@ import {
   stdioMaxToolCalls,
   stdioToolNames,
 } from '../spike/stdio-bridge-policy.js';
-import { TableauStdioBridge, type StdioCallSummary } from '../spike/tableau-stdio-bridge.js';
+import {
+  TableauStdioBridge,
+  type ModelVisibleMcpEvidence,
+  type StdioCallSummary,
+} from '../spike/tableau-stdio-bridge.js';
 import { StdioRunBudget, type RunBudgetSnapshot } from '../spike/run-budget.js';
 import {
   extractFinalAnswer,
@@ -49,7 +53,7 @@ export type AgenticAnalysisToolRunner = {
     openAiTool: string,
     args: unknown,
     timeoutMs?: number,
-  ): Promise<{ modelEvidence: unknown; summary: StdioCallSummary }>;
+  ): Promise<{ modelEvidence: ModelVisibleMcpEvidence; summary: StdioCallSummary }>;
   close(): Promise<void>;
 };
 
@@ -57,15 +61,18 @@ export type AgenticAnalysisResult = {
   contract: AnalysisContract;
   finalAnswer: string;
   structuredOutcome: StructuredOutcome;
-  requiredEvidenceStatus: readonly AnalysisQuestionStatus[];
+  modelReportedMissingEvidenceQuestionIds: readonly string[];
+  normalizedEvidence: readonly AgenticEvidenceRecord[];
   toolCalls: readonly StdioCallSummary[];
   responseCount: number;
   budget: RunBudgetSnapshot;
 };
 
-export type AnalysisQuestionStatus = {
-  questionId: string;
-  status: 'addressed' | 'missing';
+export type AgenticEvidenceRecord = {
+  sequence: number;
+  toolName: string;
+  evidence: ModelVisibleMcpEvidence;
+  summary: StdioCallSummary;
 };
 
 const modelName = 'gpt-5.6-luna';
@@ -143,10 +150,10 @@ function callArguments(call: ResponseItem): {
   return { callId, toolName, argumentsValue };
 }
 
-function mapRequiredEvidenceStatus(
+function validateModelReportedMissingEvidence(
   contract: AnalysisContract,
   outcome: StructuredOutcome,
-): readonly AnalysisQuestionStatus[] {
+): readonly string[] {
   const requiredIds = contract.requiredEvidence.map(({ id }) => id);
   const requiredIdSet = new Set(requiredIds);
   if (outcome.missing_evidence.some((id) => !requiredIdSet.has(id))) {
@@ -158,11 +165,7 @@ function mapRequiredEvidenceStatus(
   if (!outcome.evidence_complete && outcome.missing_evidence.length === 0) {
     throw new Error('ANALYSIS_OUTCOME_QUESTION_MAPPING_MISSING');
   }
-  const missingIds = new Set(outcome.missing_evidence);
-  return requiredIds.map((questionId) => ({
-    questionId,
-    status: missingIds.has(questionId) ? 'missing' : 'addressed',
-  }));
+  return [...outcome.missing_evidence];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,6 +180,7 @@ export async function runAgenticTableauAnalysis(
 ): Promise<AgenticAnalysisResult> {
   const validatedContract = validateAnalysisContract(contract);
   const calls: StdioCallSummary[] = [];
+  const normalizedEvidence: AgenticEvidenceRecord[] = [];
   let responseCount = 0;
   let input: unknown = analysisPrompt(validatedContract);
   let previousResponseId: string | undefined;
@@ -213,7 +217,11 @@ export async function runAgenticTableauAnalysis(
           contract: validatedContract,
           finalAnswer,
           structuredOutcome,
-          requiredEvidenceStatus: mapRequiredEvidenceStatus(validatedContract, structuredOutcome),
+          modelReportedMissingEvidenceQuestionIds: validateModelReportedMissingEvidence(
+            validatedContract,
+            structuredOutcome,
+          ),
+          normalizedEvidence,
           toolCalls: calls,
           responseCount,
           budget: budget.snapshot(),
@@ -234,6 +242,12 @@ export async function runAgenticTableauAnalysis(
         );
         serializeModelEvidence(executed.modelEvidence);
         calls.push(executed.summary);
+        normalizedEvidence.push({
+          sequence: normalizedEvidence.length + 1,
+          toolName,
+          evidence: executed.modelEvidence,
+          summary: executed.summary,
+        });
         outputs.push(buildFunctionCallOutput(callId, executed.modelEvidence));
       }
 

@@ -8,7 +8,10 @@ import {
 } from '../src/analysis/agentic-analysis.js';
 import type { AnalysisContract } from '../src/analysis/contract.js';
 import { stdioDatasourceLuid } from '../src/spike/stdio-bridge-policy.js';
-import type { StdioCallSummary } from '../src/spike/tableau-stdio-bridge.js';
+import type {
+  ModelVisibleMcpEvidence,
+  StdioCallSummary,
+} from '../src/spike/tableau-stdio-bridge.js';
 
 const contract: AnalysisContract = {
   claim: 'We should launch next week.',
@@ -79,7 +82,7 @@ function summary(toolName: string): StdioCallSummary {
 }
 
 function toolsFor(
-  modelEvidence: unknown = {
+  modelEvidence: ModelVisibleMcpEvidence | null = {
     tool: 'query_datasource',
     datasourceLuid: stdioDatasourceLuid,
     rows: [{ 'SUM(Daily View Count)': 120 }],
@@ -110,7 +113,10 @@ function toolsFor(
     },
     async callTool(toolName) {
       state.calls.push(toolName);
-      return { modelEvidence, summary: summary(toolName) };
+      return {
+        modelEvidence: modelEvidence as ModelVisibleMcpEvidence,
+        summary: summary(toolName),
+      };
     },
     async close() {
       state.closed = true;
@@ -145,8 +151,17 @@ describe('application-layer agentic analysis', () => {
     const result = await runAgenticTableauAnalysis(contract, model, tools);
 
     expect(result.structuredOutcome.outcome).toBe('supported');
-    expect(result.requiredEvidenceStatus).toEqual([
-      { questionId: 'decision-assumption-support', status: 'addressed' },
+    expect(result.modelReportedMissingEvidenceQuestionIds).toEqual([]);
+    expect(result.normalizedEvidence).toEqual([
+      expect.objectContaining({
+        sequence: 1,
+        toolName: 'query_datasource',
+        evidence: {
+          tool: 'query_datasource',
+          datasourceLuid: stdioDatasourceLuid,
+          rows: [{ 'SUM(Daily View Count)': 120 }],
+        },
+      }),
     ]);
     expect(result.responseCount).toBe(2);
     expect(result.toolCalls).toHaveLength(1);
@@ -247,8 +262,8 @@ describe('application-layer agentic analysis', () => {
       },
     };
     const incomplete = await runAgenticTableauAnalysis(contract, incompleteModel, toolsFor());
-    expect(incomplete.requiredEvidenceStatus).toEqual([
-      { questionId: 'decision-assumption-support', status: 'missing' },
+    expect(incomplete.modelReportedMissingEvidenceQuestionIds).toEqual([
+      'decision-assumption-support',
     ]);
 
     const unknownIdModel: AgenticAnalysisModel = {
@@ -298,9 +313,13 @@ describe('application-layer agentic analysis', () => {
     } satisfies AgenticAnalysisModel;
     const tools = toolsFor();
 
-    await runAgenticTableauAnalysis(contract, model, tools);
+    const result = await runAgenticTableauAnalysis(contract, model, tools);
 
     expect(model.respond).toHaveBeenCalledOnce();
     expect(tools.calls).toEqual([]);
+    expect(tools.closed).toBe(true);
+    expect(result.structuredOutcome.evidence_complete).toBe(true);
+    expect(result.modelReportedMissingEvidenceQuestionIds).toEqual([]);
+    expect(result.normalizedEvidence).toEqual([]);
   });
 });

@@ -30,7 +30,7 @@ export {
 } from './analysis/agentic-analysis.js';
 export type {
   AgenticAnalysisModel,
-  AnalysisQuestionStatus,
+  AgenticEvidenceRecord,
   AgenticAnalysisResponse,
   AgenticAnalysisResult,
   AgenticAnalysisToolRunner,
