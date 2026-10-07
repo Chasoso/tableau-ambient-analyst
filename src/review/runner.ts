@@ -48,6 +48,7 @@ const legacyIssue29AutoFixCycles = 1;
 const currentAccountingEpoch = 'issue-29-accounting-v2';
 const issue29LegacyMigration = 'issue-29-legacy-anomaly-v1';
 const issue29ValidationPhaseResume = 'issue-29-validation-review-phase-separation-v1';
+const maintainabilityGuardMigration = 'issue-30-maintainability-guard-v1';
 const issue29LegacyCyclePrefixHash =
   '138e37352853185663c4ecd50e8c1f1c0843794a1aab4558bee7d376d0f7af36';
 const issue29LegacyHistoryPrefixHash =
@@ -113,6 +114,7 @@ export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixRe
 
 export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
+  implementationMaintainability?: MaintainabilityAssessment;
 };
 
 type PullRequestCreationResult = { ok: true; url: string } | { ok: false; error: string };
@@ -278,19 +280,27 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   const branchError = createIssueBranch(input.cwd, input.base, branch);
   if (branchError) return reviewerInvocationFailure(branchError);
 
-  const implementationError = runIssueImplementer(input, issue, branch);
-  if (implementationError) return reviewerInvocationFailure(implementationError);
+  const implementationResult = runIssueImplementer(input, issue, branch);
+  if (typeof implementationResult === 'string') {
+    return reviewerInvocationFailure(implementationResult);
+  }
 
   const review = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
     applyCodexAutoFix(input, result),
   );
-  if (!canOpenPullRequest(true, review)) return review;
+  if (!canOpenPullRequest(true, review)) {
+    return { ...review, implementationMaintainability: implementationResult };
+  }
 
   const pullRequestUrl = pushAndCreatePullRequest(input, issue, branch);
   if (!pullRequestUrl.ok) {
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
-  return { ...review, pullRequestUrl: pullRequestUrl.url };
+  return {
+    ...review,
+    implementationMaintainability: implementationResult,
+    pullRequestUrl: pullRequestUrl.url,
+  };
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
@@ -423,7 +433,7 @@ function runIssueImplementer(
   input: IndependentReviewInput,
   issue: IssueContext,
   branch: string,
-): string | undefined {
+): string | MaintainabilityAssessment {
   const prompt = buildImplementerPrompt(input, issue, branch);
 
   const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -498,7 +508,7 @@ function runIssueImplementer(
   } catch {
     return 'Issue implementation could not be validated and committed.';
   }
-  return undefined;
+  return report.selfReview.maintainability;
 }
 
 export function verifyImplementerSelfReview(output: string): string | undefined {
@@ -1632,14 +1642,21 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
 
-  const cycleResults = state.cycleResults as ReviewCycleRecord[];
+  const parsedCycleResults = state.cycleResults as ReviewCycleRecord[];
   const generalizedRuleHistory = state.generalizedRuleHistory as string[];
-  const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
   const legacyMigration = isIssue29LegacyMigrationState(
     state,
-    cycleResults,
+    parsedCycleResults,
     generalizedRuleHistory,
   );
+  const cycleResults = legacyMigration
+    ? parsedCycleResults
+    : parsedCycleResults.map((record) =>
+        record.maintainability === undefined
+          ? { ...record, maintainability: 'NO_DRIFT' as const }
+          : record,
+      );
+  const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
   const expectedAutoFixCycles = cycleResults.filter(
     (record) => record.repositoryChanged === true,
   ).length;
@@ -1689,7 +1706,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     generalizedRuleHistory: state.generalizedRuleHistory as string[],
     consecutiveRepeatCount: state.consecutiveRepeatCount as number,
     lastFixChangedRepository: state.lastFixChangedRepository as boolean | null,
-    cycleResults: state.cycleResults as ReviewCycleRecord[],
+    cycleResults,
     terminationHistory: Array.isArray(state.terminationHistory)
       ? (state.terminationHistory as TerminationReason[])
       : [],
@@ -1702,9 +1719,12 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     migrationCompatibility:
       typeof state.migrationCompatibility === 'string'
         ? state.migrationCompatibility
-        : legacyMigration
-          ? issue29LegacyMigration
-          : undefined,
+        : !legacyMigration &&
+            parsedCycleResults.some((record) => record.maintainability === undefined)
+          ? maintainabilityGuardMigration
+          : legacyMigration
+            ? issue29LegacyMigration
+            : undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
