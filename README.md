@@ -145,6 +145,9 @@ paid services, and it requires no application credentials.
 See the [validation policy](docs/development/validation-policy.md) for the
 validation layers and evidence rules.
 
+The deterministic transcript replay contract and example fixture are described
+in [transcript replay](docs/development/transcript-replay.md).
+
 ## Safety and external integrations
 
 External integrations are explicit, opt-in, bounded, and observable. Secrets
