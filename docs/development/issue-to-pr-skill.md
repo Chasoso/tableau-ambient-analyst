@@ -12,10 +12,10 @@ questions.
 | --- | --- | --- |
 | Issue resolution and implementation handoff | Resolve the Issue, inspect required context, and use one bounded Issue-to-PR flow | Issue content, `AGENTS.md`, ADRs, and repository implementation |
 | Preflight | Require a clean worktree, safe base synchronization, and a feature branch after synchronization | `src/review/git-sync.ts`, configured base/remote, and local branch policy |
-| Validation and self-review | Run the repository's deterministic validation and self-review before review | `package.json` scripts and local acceptance criteria |
+| Validation, self-review, and Maintainability Guard | Run deterministic validation, complete the guard, record its result and follow-up candidates before review | `package.json` scripts and local acceptance criteria |
 | Independent Review | Use a fresh read-only reviewer, structured findings, generalization, sibling search, and bounded correction | `src/review/runner.ts`, `src/review/gate.ts`, schema, accounting epoch, and Issue #29 compatibility |
 | Finding handling | Continue only for deterministic `AUTO_FIX`; stop for human decisions or missing prerequisites | `AGENTS.md`, Issue/ADR decisions, and repository safety policy |
-| PR handoff | Require a fresh PASS and latest-head CI before reporting readiness; never merge | `src/review/runner.ts`, `src/review/ci-feedback.ts`, GitHub checks, branch protection |
+| PR handoff and CI triage | Require a fresh PASS and latest-head CI before reporting readiness; classify failures, use bounded repair/transient-rerun limits, fail closed, and never merge | `src/review/runner.ts`, `src/review/ci-feedback.ts`, GitHub checks, branch protection |
 | Security and external operations | Preserve untrusted Issue/evidence boundaries and fail closed | `AGENTS.md` and `docs/development/external-integration-safety.md` |
 
 ## Lessons incorporated
