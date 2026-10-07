@@ -326,8 +326,29 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
       return false;
     }
   });
+  const ciGateResult =
+    ci.status === 'READY_FOR_HUMAN_REVIEW'
+      ? review
+      : {
+          ...review,
+          result: 'HUMAN_DECISION_REQUIRED' as const,
+          blockingFindings: [
+            ...review.blockingFindings,
+            {
+              severity: 'blocking' as const,
+              classification: ci.classification ?? ('BLOCKED' as const),
+              finding: ci.reason ?? `Post-push CI gate ended with ${ci.status}.`,
+              generalized_rule:
+                'Every downstream gate must produce a non-PASS top-level workflow result when it does not complete successfully.',
+              affected_locations: [],
+              recommended_fix:
+                'Resolve the CI gate result and obtain a fresh review before handoff.',
+            },
+          ],
+          escalationRequired: true,
+        };
   return {
-    ...review,
+    ...ciGateResult,
     implementationMaintainability: implementationResult,
     pullRequestUrl: pullRequestUrl.url,
     completionStatus: ci.status,
@@ -793,6 +814,7 @@ export function observePullRequestCi(
   );
   return {
     checks,
+    checksPending: checks.length === 0 && rawChecks.trim().length > 0,
     evidence,
     transient:
       /(runner unavailable|service unavailable|github outage|internal server error|rate limit)/i.test(

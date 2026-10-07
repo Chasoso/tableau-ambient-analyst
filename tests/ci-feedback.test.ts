@@ -54,6 +54,24 @@ describe('CI feedback control', () => {
     expect(repairs).toBe(1);
   });
 
+  it('waits for required checks to materialize before blocking', () => {
+    let observations = 0;
+    const result = runCiFeedbackLoop({
+      observe: () => {
+        observations += 1;
+        return observations === 1
+          ? { checks: [], checksPending: true, evidence: '[]', transient: false }
+          : { checks: [{ name: 'validation', state: 'SUCCESS' }], evidence: '', transient: false };
+      },
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+
+    expect(result.status).toBe('READY_FOR_HUMAN_REVIEW');
+    expect(observations).toBe(2);
+  });
+
   it('stops safely for blocked and human decisions', () => {
     expect(
       runCiFeedbackLoop({

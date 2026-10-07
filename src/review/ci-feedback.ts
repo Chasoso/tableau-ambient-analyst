@@ -19,6 +19,7 @@ export type CiCompletionStatus =
 
 export type CiObservation = {
   checks: CiCheck[];
+  checksPending?: boolean;
   evidence: string;
   transient: boolean;
   evidenceComplete?: boolean;
@@ -157,6 +158,20 @@ export function runCiFeedbackLoop(
       observation.checks.every((check) => check.state === 'SUCCESS')
     ) {
       return { status: 'READY_FOR_HUMAN_REVIEW', observation, state };
+    }
+    if (observation.checks.length === 0 && observation.checksPending) {
+      pendingPolls += 1;
+      if (pendingPolls >= maxCiPendingPolls) {
+        return {
+          status: 'CI_BLOCKED',
+          observation,
+          state,
+          classification: 'BLOCKED',
+          reason: `CI check discovery wait limit of ${maxCiPendingPolls} polls reached.`,
+        };
+      }
+      dependencies.wait();
+      continue;
     }
     if (observation.checks.length === 0) {
       return {
