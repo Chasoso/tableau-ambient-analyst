@@ -20,7 +20,7 @@ import {
   maxReviewInvocations,
   maxReviewCycles,
   normalizedFindingCategory,
-  parseReviewResult,
+  parseReviewResult as parseReviewResultContract,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
   terminationResult,
@@ -47,6 +47,19 @@ import {
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
 } from '../src/review/runner.js';
+
+function parseReviewResult(raw: string) {
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (value && typeof value === 'object' && !('maintainability' in value)) {
+      value.maintainability = 'NO_DRIFT';
+      return parseReviewResultContract(JSON.stringify(value));
+    }
+  } catch {
+    // Let the production parser report malformed JSON.
+  }
+  return parseReviewResultContract(raw);
+}
 
 describe('independent review gate contract', () => {
   it('opens only for a validated PASS with no blocking findings or escalation', () => {
@@ -137,6 +150,19 @@ describe('independent review gate contract', () => {
     );
 
     expect(result.maintainability).toBe('FOLLOW_UP_MAINTENANCE');
+  });
+
+  it('rejects reviewer output that omits the Maintainability Guard result', () => {
+    const result = parseReviewResultContract(
+      JSON.stringify({
+        result: 'PASS',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+
+    expect(result.executionStatus).toBe('FAILED');
   });
 
   it('rejects an inconsistent PASS result', () => {

@@ -129,9 +129,8 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     !isFindingArray(blockingFindings) ||
     !isFindingArray(nonBlockingFindings) ||
     typeof escalationRequired !== 'boolean' ||
-    (maintainability !== undefined &&
-      (typeof maintainability !== 'string' ||
-        !maintainabilityResults.includes(maintainability as MaintainabilityResult))) ||
+    typeof maintainability !== 'string' ||
+    !maintainabilityResults.includes(maintainability as MaintainabilityResult) ||
     Object.keys(value).some((key) => !allowedKeys.has(key))
   ) {
     return malformedResult('Reviewer output did not match the gate result contract.');
