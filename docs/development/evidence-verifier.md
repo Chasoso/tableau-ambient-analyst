@@ -17,10 +17,10 @@ closed as `INSUFFICIENT` and is reported in `unresolvedRequiredEvidence` or
 `reasons`.
 
 Agentic tool records do not receive question meaning implicitly. The small
-`evidenceFromAgenticRecords` mapper requires an explicit sequence-to-question
-mapping and status before records can enter the Evidence model. Until that
-mapping exists, `AgenticAnalysisResult.evidenceVerification` is
-`INSUFFICIENT`, even when the model reports `evidence_complete: true`.
+`interpretAgenticEvidence` post-analysis boundary requires an explicit
+sequence-to-question interpretation after the referenced normalized record
+exists. Until that step runs, the Agentic Analysis result contains observations
+only; a model report of `evidence_complete: true` is not authoritative.
 
 The boundary is therefore:
 

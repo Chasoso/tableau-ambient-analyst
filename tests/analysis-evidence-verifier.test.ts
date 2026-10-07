@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisContract } from '../src/analysis/contract.js';
 import type { AgenticEvidenceRecord } from '../src/analysis/agentic-analysis.js';
-import { evidenceFromAgenticRecords, verifyEvidence } from '../src/analysis/evidence-verifier.js';
+import { interpretAgenticEvidence, verifyEvidence } from '../src/analysis/evidence-verifier.js';
 import { stdioDatasourceLuid } from '../src/spike/stdio-bridge-policy.js';
 
 const contract: AnalysisContract = {
@@ -110,7 +110,7 @@ describe('analysis evidence verifier', () => {
     );
   });
 
-  it('requires explicit question mapping before agentic records become Evidence', () => {
+  it('interprets agentic records only after they exist', () => {
     const records: AgenticEvidenceRecord[] = [
       {
         sequence: 1,
@@ -123,7 +123,7 @@ describe('analysis evidence verifier', () => {
         summary: {} as never,
       },
     ];
-    const evidence = evidenceFromAgenticRecords(records, [
+    const evidence = interpretAgenticEvidence(records, [
       {
         sequence: 1,
         questionId: 'assumption-support',
@@ -139,5 +139,40 @@ describe('analysis evidence verifier', () => {
     ]);
 
     expect(verifyEvidence(contract, evidence).completion).toBe('COMPLETE');
+  });
+
+  it('rejects missing sequences and list-only semantic interpretation', () => {
+    const records: AgenticEvidenceRecord[] = [
+      {
+        sequence: 1,
+        toolName: 'list_datasources',
+        evidence: {
+          tool: 'list_datasources' as const,
+          datasourceLuid: stdioDatasourceLuid,
+          datasources: [],
+        },
+        summary: {} as never,
+      },
+    ];
+    expect(() =>
+      interpretAgenticEvidence(records, [
+        {
+          sequence: 2,
+          questionId: 'assumption-support',
+          status: 'supported',
+          observation: 'Not available.',
+        },
+      ]),
+    ).toThrow('EVIDENCE_MAPPING_PROVENANCE_INVALID');
+    expect(() =>
+      interpretAgenticEvidence(records, [
+        {
+          sequence: 1,
+          questionId: 'assumption-support',
+          status: 'supported',
+          observation: 'Datasource exists.',
+        },
+      ]),
+    ).toThrow('EVIDENCE_INTERPRETATION_PROVENANCE_INVALID');
   });
 });

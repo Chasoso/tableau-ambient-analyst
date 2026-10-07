@@ -23,9 +23,9 @@ export {
   validateAnalysisContract,
 } from './analysis/contract.js';
 export type { AnalysisContract, AnalysisQuestion } from './analysis/contract.js';
-export { evidenceFromAgenticRecords, verifyEvidence } from './analysis/evidence-verifier.js';
+export { interpretAgenticEvidence, verifyEvidence } from './analysis/evidence-verifier.js';
 export type {
-  AgenticEvidenceMapping,
+  AgenticEvidenceInterpretation,
   Evidence,
   EvidenceProvenance,
   EvidenceQuestionStatus,

@@ -50,7 +50,7 @@ export type EvidenceVerificationResult = {
   reasons: readonly string[];
 };
 
-export type AgenticEvidenceMapping = {
+export type AgenticEvidenceInterpretation = {
   sequence: number;
   questionId: string;
   status: EvidenceStatus;
@@ -183,21 +183,28 @@ export function verifyEvidence(
   };
 }
 
-/** Converts records only after an explicit sequence-to-question mapping. */
-export function evidenceFromAgenticRecords(
+/**
+ * Interprets records only after they exist. The sequence is resolved against
+ * an actual normalized record, and list-only provenance cannot carry a
+ * substantive supported/contradicted interpretation.
+ */
+export function interpretAgenticEvidence(
   records: readonly AgenticEvidenceRecord[],
-  mappings: readonly AgenticEvidenceMapping[],
+  interpretations: readonly AgenticEvidenceInterpretation[],
 ): readonly Evidence[] {
   const recordsBySequence = new Map(records.map((record) => [record.sequence, record]));
-  return mappings.map((mapping) => {
-    const record = recordsBySequence.get(mapping.sequence);
+  return interpretations.map((interpretation) => {
+    const record = recordsBySequence.get(interpretation.sequence);
     if (record === undefined || !('tool' in record.evidence)) {
       throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
     }
+    if (record.evidence.tool === 'list_datasources' && interpretation.status !== 'unresolved') {
+      throw new Error('EVIDENCE_INTERPRETATION_PROVENANCE_INVALID');
+    }
     return {
-      questionId: mapping.questionId,
-      status: mapping.status,
-      observation: mapping.observation,
+      questionId: interpretation.questionId,
+      status: interpretation.status,
+      observation: interpretation.observation,
       provenance: {
         kind: 'tableau' as const,
         sequence: record.sequence,

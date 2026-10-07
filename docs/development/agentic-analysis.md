@@ -28,8 +28,9 @@ Issue #44 stops at collecting safe, normalized Tableau-backed evidence and
 validating the model output shape. Issue #45 is responsible for interpreting
 that evidence, mapping it to required questions, deciding supported,
 contradicted, or unresolved, and determining true completion. Accordingly,
-`AgenticAnalysisResult` is not an Evidence/Verifier result. The deterministic
-completion boundary is documented in
+`AgenticAnalysisResult` is not an Evidence/Verifier result. Semantic Evidence
+interpretation occurs only after its normalized observations exist; the
+deterministic completion boundary is documented in
 [`evidence-verifier.md`](evidence-verifier.md).
 
 `runOpenAiStdioAnalysis` is the explicit one-provider entry point. It requires
