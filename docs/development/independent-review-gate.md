@@ -195,6 +195,10 @@ applicable when appropriate rather than silently omitting it.
   coupling?
 - Is the change appropriately small for the Issue?
 - Can later evidence revise the design without unnecessary rework?
+- Apply the repository Maintainability Guard from `AGENTS.md`: return
+  `NO_DRIFT`, `LOCAL_CLEANUP`, or `FOLLOW_UP_MAINTENANCE`. Treat style
+  preference as non-blocking, search directly related siblings, and record a
+  follow-up candidate when a real concern is outside the current scope.
 
 ### Security and external integration
 
@@ -263,7 +267,8 @@ output for the reviewer CLI schema. New reviewer findings must use this shape:
     "recommended_fix": "..."
   }],
   "nonBlockingFindings": [],
-  "escalationRequired": false
+  "escalationRequired": false,
+  "maintainability": "NO_DRIFT"
 }
 ```
 

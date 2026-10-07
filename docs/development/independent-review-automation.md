@@ -173,9 +173,14 @@ The smallest machine-readable result is:
   "result": "PASS | CHANGES_REQUIRED | HUMAN_DECISION_REQUIRED",
   "blockingFindings": [],
   "nonBlockingFindings": [],
-  "escalationRequired": false
+  "escalationRequired": false,
+  "maintainability": "NO_DRIFT"
 }
 ```
+
+`maintainability` is required and must be `NO_DRIFT`, `LOCAL_CLEANUP`, or
+`FOLLOW_UP_MAINTENANCE`. The runtime parser enforces this field and each
+completed review cycle retains the status in its accounting record.
 
 `PASS` can open the gate only after deterministic validation succeeds, blocking
 findings are empty, and escalation is false. Invocation failure, malformed

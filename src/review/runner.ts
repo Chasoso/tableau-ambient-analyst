@@ -19,6 +19,7 @@ import {
   findingClassificationsFor,
   maxAutoFixCycles,
   maxReviewInvocations,
+  maintainabilityResults,
   normalizedFindingCategory,
   parseReviewResult,
   repeatedRuleThreshold,
@@ -34,6 +35,7 @@ import {
   type ReviewCycleRecord,
   type ReviewFinding,
   type ReviewGateResult,
+  type MaintainabilityResult,
   type TerminationReason,
 } from './gate.js';
 
@@ -46,6 +48,7 @@ const legacyIssue29AutoFixCycles = 1;
 const currentAccountingEpoch = 'issue-29-accounting-v2';
 const issue29LegacyMigration = 'issue-29-legacy-anomaly-v1';
 const issue29ValidationPhaseResume = 'issue-29-validation-review-phase-separation-v1';
+const maintainabilityGuardMigration = 'issue-30-maintainability-guard-v1';
 const issue29LegacyCyclePrefixHash =
   '138e37352853185663c4ecd50e8c1f1c0843794a1aab4558bee7d376d0f7af36';
 const issue29LegacyHistoryPrefixHash =
@@ -111,6 +114,7 @@ export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixRe
 
 export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
+  implementationMaintainability?: MaintainabilityAssessment;
 };
 
 type PullRequestCreationResult = { ok: true; url: string } | { ok: false; error: string };
@@ -127,6 +131,13 @@ type ImplementerSelfReview = {
   completed: boolean;
   blockingIssues: string[];
   checks: Record<(typeof requiredSelfReviewChecks)[number], boolean>;
+  maintainability: MaintainabilityAssessment;
+};
+
+type MaintainabilityAssessment = {
+  result: MaintainabilityResult;
+  findings: string[];
+  followUpCandidates: string[];
 };
 
 type ImplementerReport = {
@@ -188,6 +199,12 @@ scope, service, credential, privacy, cost, irreversible-action, or recorded
 human-decision choice. BLOCKED means an execution prerequisite is unavailable.
 For a human escalation, explain what must be decided, why repository rules
 cannot decide it, viable options, and the recommendation in the finding.
+
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Return a top-level maintainability result: NO_DRIFT when no
+meaningful concern is found, LOCAL_CLEANUP when a deterministic in-scope cleanup
+is needed, or FOLLOW_UP_MAINTENANCE when a real concern needs separate
+follow-up. Do not block on style preference alone.
 `;
 }
 
@@ -263,19 +280,27 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   const branchError = createIssueBranch(input.cwd, input.base, branch);
   if (branchError) return reviewerInvocationFailure(branchError);
 
-  const implementationError = runIssueImplementer(input, issue, branch);
-  if (implementationError) return reviewerInvocationFailure(implementationError);
+  const implementationResult = runIssueImplementer(input, issue, branch);
+  if (typeof implementationResult === 'string') {
+    return reviewerInvocationFailure(implementationResult);
+  }
 
   const review = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
     applyCodexAutoFix(input, result),
   );
-  if (!canOpenPullRequest(true, review)) return review;
+  if (!canOpenPullRequest(true, review)) {
+    return { ...review, implementationMaintainability: implementationResult };
+  }
 
   const pullRequestUrl = pushAndCreatePullRequest(input, issue, branch);
   if (!pullRequestUrl.ok) {
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
-  return { ...review, pullRequestUrl: pullRequestUrl.url };
+  return {
+    ...review,
+    implementationMaintainability: implementationResult,
+    pullRequestUrl: pullRequestUrl.url,
+  };
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
@@ -371,6 +396,11 @@ for a sibling explicitly covered by the reviewer's generalized rule.
 required_supporting_change and required_doc_update are only for a
 mechanically necessary helper/configuration or documentation update.
 
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Do not turn this into a broad refactor or block on style
+preference. Report NO_DRIFT, LOCAL_CLEANUP, or FOLLOW_UP_MAINTENANCE with
+findings and follow-up candidates.
+
 Your final response must contain only this JSON object:
 {
   "selfReview": {
@@ -382,6 +412,11 @@ Your final response must contain only this JSON object:
       "secrets": true,
       "documentationConsistency": true,
       "unfinishedWork": true
+    },
+    "maintainability": {
+      "result": "NO_DRIFT",
+      "findings": [],
+      "followUpCandidates": []
     }
   },
   "changes": [
@@ -398,7 +433,7 @@ function runIssueImplementer(
   input: IndependentReviewInput,
   issue: IssueContext,
   branch: string,
-): string | undefined {
+): string | MaintainabilityAssessment {
   const prompt = buildImplementerPrompt(input, issue, branch);
 
   const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -473,7 +508,7 @@ function runIssueImplementer(
   } catch {
     return 'Issue implementation could not be validated and committed.';
   }
-  return undefined;
+  return report.selfReview.maintainability;
 }
 
 export function verifyImplementerSelfReview(output: string): string | undefined {
@@ -512,6 +547,8 @@ function parseImplementerReport(output: string): ImplementerReport | string {
   ) {
     return 'Issue implementer self-review did not verify every required check.';
   }
+  const maintainability = parseMaintainabilityAssessment(selfReview.maintainability);
+  if (typeof maintainability === 'string') return maintainability;
   if (!Array.isArray(parsed.changes) || parsed.changes.length === 0) {
     return 'Issue implementer did not report bounded change reasons.';
   }
@@ -533,7 +570,29 @@ function parseImplementerReport(output: string): ImplementerReport | string {
   if (new Set(changes.map((change) => change.path)).size !== changes.length) {
     return 'Issue implementer reported duplicate bounded change paths.';
   }
-  return { selfReview: selfReview as ImplementerSelfReview, changes };
+  return {
+    selfReview: { ...(selfReview as ImplementerSelfReview), maintainability },
+    changes,
+  };
+}
+
+function parseMaintainabilityAssessment(value: unknown): MaintainabilityAssessment | string {
+  if (!isRecord(value)) return 'Issue implementer did not complete the Maintainability Guard.';
+  if (
+    typeof value.result !== 'string' ||
+    !maintainabilityResults.includes(value.result as MaintainabilityResult) ||
+    !Array.isArray(value.findings) ||
+    value.findings.some((finding) => typeof finding !== 'string') ||
+    !Array.isArray(value.followUpCandidates) ||
+    value.followUpCandidates.some((candidate) => typeof candidate !== 'string')
+  ) {
+    return 'Issue implementer returned an invalid Maintainability Guard assessment.';
+  }
+  return {
+    result: value.result as MaintainabilityResult,
+    findings: value.findings as string[],
+    followUpCandidates: value.followUpCandidates as string[],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -872,6 +931,10 @@ ${JSON.stringify(review.blockingFindings, null, 2)}
 After editing, leave the working tree with only the in-scope AUTO_FIX changes.
 Perform a complete self-review before returning. Return only this JSON object,
 including every changed file exactly once with its bounded reason:
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Do not broaden the fix into a refactor or block on style
+preference; report NO_DRIFT, LOCAL_CLEANUP, or FOLLOW_UP_MAINTENANCE with
+findings and follow-up candidates.
 {
   "selfReview": {
     "completed": true,
@@ -882,6 +945,11 @@ including every changed file exactly once with its bounded reason:
       "secrets": true,
       "documentationConsistency": true,
       "unfinishedWork": true
+    },
+    "maintainability": {
+      "result": "NO_DRIFT",
+      "findings": [],
+      "followUpCandidates": []
     }
   },
   "changes": [
@@ -1574,14 +1642,21 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
 
-  const cycleResults = state.cycleResults as ReviewCycleRecord[];
+  const parsedCycleResults = state.cycleResults as ReviewCycleRecord[];
   const generalizedRuleHistory = state.generalizedRuleHistory as string[];
-  const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
   const legacyMigration = isIssue29LegacyMigrationState(
     state,
-    cycleResults,
+    parsedCycleResults,
     generalizedRuleHistory,
   );
+  const cycleResults = legacyMigration
+    ? parsedCycleResults
+    : parsedCycleResults.map((record) =>
+        record.maintainability === undefined
+          ? { ...record, maintainability: 'NO_DRIFT' as const }
+          : record,
+      );
+  const expectedRuleHistory = cycleResults.flatMap((record) => record.generalizedRules);
   const expectedAutoFixCycles = cycleResults.filter(
     (record) => record.repositoryChanged === true,
   ).length;
@@ -1631,7 +1706,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     generalizedRuleHistory: state.generalizedRuleHistory as string[],
     consecutiveRepeatCount: state.consecutiveRepeatCount as number,
     lastFixChangedRepository: state.lastFixChangedRepository as boolean | null,
-    cycleResults: state.cycleResults as ReviewCycleRecord[],
+    cycleResults,
     terminationHistory: Array.isArray(state.terminationHistory)
       ? (state.terminationHistory as TerminationReason[])
       : [],
@@ -1644,9 +1719,12 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     migrationCompatibility:
       typeof state.migrationCompatibility === 'string'
         ? state.migrationCompatibility
-        : legacyMigration
-          ? issue29LegacyMigration
-          : undefined,
+        : !legacyMigration &&
+            parsedCycleResults.some((record) => record.maintainability === undefined)
+          ? maintainabilityGuardMigration
+          : legacyMigration
+            ? issue29LegacyMigration
+            : undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -1721,6 +1799,7 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
   const allowedKeys = new Set([
     'reviewInvocation',
     'result',
+    'maintainability',
     'classifications',
     'generalizedRules',
     'findingIdentities',
@@ -1738,6 +1817,9 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
     (record.reviewInvocation as number) <= maxReviewInvocations &&
     typeof record.result === 'string' &&
     reviewResults.includes(record.result as (typeof reviewResults)[number]) &&
+    (record.maintainability === undefined ||
+      (typeof record.maintainability === 'string' &&
+        maintainabilityResults.includes(record.maintainability as MaintainabilityResult))) &&
     Array.isArray(record.classifications) &&
     record.classifications.every(
       (classification) =>
@@ -1869,6 +1951,9 @@ function recordReviewAccounting(
     const currentCycle: ReviewCycleRecord = {
       reviewInvocation: accounting.reviewInvocationCount,
       result: review.result,
+      // Internal failure/fixture results predate the guard field; persisted
+      // review invocations always carry an explicit status for auditability.
+      maintainability: review.maintainability ?? 'NO_DRIFT',
       classifications: findingClassificationsFor(findings),
       generalizedRules: rules,
       findingIdentities,

@@ -3,11 +3,17 @@ export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'B
 export const maxReviewInvocations = 16;
 export const maxAutoFixCycles = 8;
 export const repeatedRuleThreshold = 3;
+export const maintainabilityResults = [
+  'NO_DRIFT',
+  'LOCAL_CLEANUP',
+  'FOLLOW_UP_MAINTENANCE',
+] as const;
 /** @deprecated Use maxReviewInvocations. */
 export const maxReviewCycles = maxReviewInvocations;
 
 export type ReviewResultName = (typeof reviewResults)[number];
 export type FindingClassification = (typeof findingClassifications)[number];
+export type MaintainabilityResult = (typeof maintainabilityResults)[number];
 
 export type ReviewFinding = {
   severity: 'blocking' | 'non-blocking';
@@ -34,6 +40,7 @@ export type TerminationReason = (typeof terminationReasons)[number];
 export type ReviewCycleRecord = {
   reviewInvocation: number;
   result: ReviewResultName;
+  maintainability: MaintainabilityResult;
   classifications: FindingClassification[];
   generalizedRules: string[];
   findingIdentities?: string[];
@@ -65,6 +72,7 @@ export type ReviewGateResult = {
   executionPhase?: 'PRE_REVIEW' | 'VALIDATION' | 'REVIEW';
   accounting?: ReviewAccounting;
   terminationReason?: TerminationReason;
+  maintainability?: MaintainabilityResult;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -106,12 +114,14 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('Reviewer output was not a JSON object.');
   }
 
-  const { result, blockingFindings, nonBlockingFindings, escalationRequired } = value;
+  const { result, blockingFindings, nonBlockingFindings, escalationRequired, maintainability } =
+    value;
   const allowedKeys = new Set([
     'result',
     'blockingFindings',
     'nonBlockingFindings',
     'escalationRequired',
+    'maintainability',
   ]);
 
   if (
@@ -119,6 +129,8 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     !isFindingArray(blockingFindings) ||
     !isFindingArray(nonBlockingFindings) ||
     typeof escalationRequired !== 'boolean' ||
+    typeof maintainability !== 'string' ||
+    !maintainabilityResults.includes(maintainability as MaintainabilityResult) ||
     Object.keys(value).some((key) => !allowedKeys.has(key))
   ) {
     return malformedResult('Reviewer output did not match the gate result contract.');
@@ -162,6 +174,7 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     escalationRequired,
     executionStatus: 'COMPLETED',
     executionPhase: 'REVIEW',
+    maintainability: maintainability as MaintainabilityResult,
   };
 }
 

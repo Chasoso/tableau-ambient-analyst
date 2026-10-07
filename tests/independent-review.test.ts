@@ -21,6 +21,7 @@ import {
   maxReviewCycles,
   normalizedFindingCategory,
   parseReviewResult,
+  parseReviewResult as parseReviewResultContract,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
   terminationResult,
@@ -56,6 +57,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: ['Optional cleanup'],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -72,6 +74,7 @@ describe('independent review gate contract', () => {
       blockingFindings: [],
       nonBlockingFindings: [],
       escalationRequired: false,
+      maintainability: 'NO_DRIFT' as const,
       ...status,
     };
 
@@ -85,6 +88,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Acceptance criterion is missing'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -100,6 +104,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Architecture choice needs human confirmation'],
         nonBlockingFindings: [],
         escalationRequired: true,
+        maintainability: 'NO_DRIFT',
       }),
     );
     const failedInvocation = reviewerInvocationFailure('process unavailable');
@@ -119,10 +124,38 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Finding'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
     expect(result.executionStatus).toBe('COMPLETED');
+  });
+
+  it('preserves the structured maintainability guard result', () => {
+    const result = parseReviewResult(
+      JSON.stringify({
+        result: 'PASS',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'FOLLOW_UP_MAINTENANCE',
+      }),
+    );
+
+    expect(result.maintainability).toBe('FOLLOW_UP_MAINTENANCE');
+  });
+
+  it('rejects reviewer output that omits the Maintainability Guard result', () => {
+    const result = parseReviewResultContract(
+      JSON.stringify({
+        result: 'PASS',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+      }),
+    );
+
+    expect(result.executionStatus).toBe('FAILED');
   });
 
   it('rejects an inconsistent PASS result', () => {
@@ -132,6 +165,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Unexpected finding'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -155,6 +189,7 @@ describe('independent review gate contract', () => {
           blockingFindings: [finding],
           nonBlockingFindings: [],
           escalationRequired: false,
+          maintainability: 'NO_DRIFT',
         }),
       ).executionStatus,
     ).toBe('FAILED');
@@ -166,6 +201,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: [{ ...humanFinding, severity: 'non-blocking' }],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(hiddenHuman.executionStatus).toBe('FAILED');
@@ -176,6 +212,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(hiddenResultEscalation.executionStatus).toBe('FAILED');
@@ -193,6 +230,7 @@ describe('independent review gate contract', () => {
             blockingFindings: [],
             nonBlockingFindings: [],
             escalationRequired: false,
+            maintainability: 'NO_DRIFT',
           }),
         },
       }),
@@ -216,6 +254,11 @@ describe('independent review gate contract', () => {
               secrets: true,
               documentationConsistency: true,
               unfinishedWork: true,
+            },
+            maintainability: {
+              result: 'NO_DRIFT',
+              findings: [],
+              followUpCandidates: [],
             },
           },
           changes: [{ path: 'src/example.ts', reason: 'affected_location' }],
@@ -329,6 +372,7 @@ describe('independent review gate contract', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(canContinueAutoFix(autoFix)).toBe(true);
@@ -352,6 +396,7 @@ describe('independent review gate contract', () => {
           ],
           nonBlockingFindings: [],
           escalationRequired: false,
+          maintainability: 'NO_DRIFT',
         }),
       );
       expect(canContinueAutoFix(result)).toBe(false);
@@ -375,6 +420,7 @@ describe('independent review gate contract', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(result.blockingFindings[0]).toMatchObject({
@@ -407,6 +453,7 @@ describe('independent review runner control flow', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
   }
@@ -443,6 +490,7 @@ describe('independent review runner control flow', () => {
             blockingFindings: [],
             nonBlockingFindings: [],
             escalationRequired: false,
+            maintainability: 'NO_DRIFT',
           }),
         ),
       currentBranch: () => 'feature/review',
@@ -482,6 +530,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: accounting.reviewInvocationCount + 1,
               result: review.result,
+              maintainability: review.maintainability ?? 'NO_DRIFT',
               classifications: [],
               generalizedRules: rules,
               findingIdentities,
@@ -623,6 +672,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -662,6 +712,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: ['Missing required acceptance criterion'],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           ),
       }),
@@ -700,6 +751,7 @@ describe('independent review runner control flow', () => {
                   ],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               )
             : parseReviewResult(
@@ -708,6 +760,7 @@ describe('independent review runner control flow', () => {
                   blockingFindings: [],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               );
         },
@@ -739,6 +792,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -779,6 +833,21 @@ describe('independent review runner control flow', () => {
     expect(prompt).toContain('direct pushes, merges');
   });
 
+  it('requires the Maintainability Guard in reviewer and implementer prompts', () => {
+    const input = { cwd: '/repo', base: 'main', issue: '30' };
+    const issue = { title: 'Issue', body: 'Body', url: 'https://example.test/issues/30' };
+
+    expect(
+      buildReviewerPrompt(input, issue, ['npm run validate: passed'], 'feat/issue-30'),
+    ).toContain('Maintainability Guard');
+    expect(buildImplementerPrompt(input, issue, 'feat/issue-30')).toContain(
+      'FOLLOW_UP_MAINTENANCE',
+    );
+    expect(buildAutoFixPrompt(input, autoFixReview('deterministic finding'))).toContain(
+      'Maintainability Guard',
+    );
+  });
+
   it('does not consume review accounting when pre-review validation fails', () => {
     let reviewerInvocations = 0;
     let recordedReviews = 0;
@@ -795,6 +864,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -833,6 +903,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           ),
       }),
@@ -920,6 +991,7 @@ describe('independent review runner control flow', () => {
                   blockingFindings: [],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               );
         },
@@ -983,6 +1055,7 @@ describe('independent review runner control flow', () => {
               ],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -1009,6 +1082,7 @@ describe('independent review runner control flow', () => {
                 blockingFindings: [],
                 nonBlockingFindings: [],
                 escalationRequired: false,
+                maintainability: 'NO_DRIFT',
               }),
             );
           }
@@ -1027,6 +1101,7 @@ describe('independent review runner control flow', () => {
               ],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -1051,6 +1126,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: 1,
               result: 'CHANGES_REQUIRED',
+              maintainability: 'NO_DRIFT',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
               repositoryChanged: false,
@@ -1058,6 +1134,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: 2,
               result: 'CHANGES_REQUIRED',
+              maintainability: 'NO_DRIFT',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
               repositoryChanged: false,
@@ -1663,6 +1740,7 @@ describe('AUTO_FIX path scope', () => {
       ],
       nonBlockingFindings: [],
       escalationRequired: false,
+      maintainability: 'NO_DRIFT' as const,
     });
 
     try {

@@ -68,6 +68,20 @@ review, applies the same generalization and sibling search, then repeats
 validation and fresh review; stop only when the target is ambiguous or a
 human decision/blocker is real.
 
+## Maintainability Guard
+
+Every Issue-to-PR implementation and independent review performs a lightweight
+Maintainability Guard over the changed diff and directly related code. It is a
+guard against incremental architecture drift, not a style gate. Record exactly
+one result: `NO_DRIFT` when no meaningful debt is introduced, `LOCAL_CLEANUP`
+when a deterministic in-scope cleanup is applied, or
+`FOLLOW_UP_MAINTENANCE` when a real concern needs separate follow-up. Follow-up
+concerns do not block an otherwise in-scope change. New abstractions, module
+splits, or refactors require a concrete responsibility boundary and Issue
+scope; do not introduce them only because a file is large. Review the complete
+diff and directly related implementation with bounded sibling search, and
+record explicit follow-up candidates.
+
 ## Default lifecycle
 
 Use the smallest applicable path from:
