@@ -58,4 +58,13 @@ describe('stdio agentic run budget', () => {
       }),
     ).toThrow('RUN_USAGE_BUDGET_UNAVAILABLE');
   });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'fails closed for invalid usage telemetry: %s',
+    (invalidValue) => {
+      expect(() => new StdioRunBudget(1_000).recordUsage(usage(invalidValue, 0.001))).toThrow(
+        'RUN_USAGE_BUDGET_UNAVAILABLE',
+      );
+    },
+  );
 });

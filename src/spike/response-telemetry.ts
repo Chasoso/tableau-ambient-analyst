@@ -80,15 +80,17 @@ export function extractFinalAnswer(
   output: readonly OutputItem[],
   topLevelOutputText?: unknown,
 ): string {
-  return [
-    ...textFromOutputValue(topLevelOutputText),
-    ...output
-      .filter((item) => item.type === 'message' || item.type === 'output_text')
-      .flatMap((item) => textFromOutputValue(item)),
-  ]
+  const topLevelText = textFromOutputValue(topLevelOutputText).join('\n').trim();
+  if (topLevelText !== '') return topLevelText;
+  return output
+    .filter((item) => item.type === 'message' || item.type === 'output_text')
+    .flatMap((item) => textFromOutputValue(item))
     .join('\n')
-    .trim()
-    .slice(0, 2000);
+    .trim();
+}
+
+export function truncateFinalAnswer(finalAnswer: string): string {
+  return finalAnswer.slice(0, 2000);
 }
 
 function readField(record: Record<string, unknown>, camel: string, snake: string): unknown {
