@@ -131,6 +131,13 @@ export type IssueToPullRequestResult = ReviewGateResult & {
 };
 
 type PullRequestCreationResult = { ok: true; url: string } | { ok: false; error: string };
+type ActivePullRequest = {
+  url: string;
+  branch: string;
+  base: string;
+  headSha: string;
+};
+const targetRepository = 'Chasoso/tableau-ambient-analyst';
 
 const requiredSelfReviewChecks = [
   'scope',
@@ -310,25 +317,7 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
   let ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url, () => {
-    const beforeReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: input.cwd,
-      encoding: 'utf8',
-    }).trim();
-    const freshReview = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
-      applyCodexAutoFix(input, result),
-    );
-    if (!canOpenPullRequest(true, freshReview)) return false;
-    const afterReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: input.cwd,
-      encoding: 'utf8',
-    }).trim();
-    if (afterReviewHead === beforeReviewHead) return true;
-    try {
-      execFileSync('git', ['push', 'origin', branch], { cwd: input.cwd, encoding: 'utf8' });
-      return true;
-    } catch {
-      return false;
-    }
+    return reviewAndPushAfterCiRepair(input, branch);
   });
   if (
     ci.status === 'READY_FOR_HUMAN_REVIEW' &&
@@ -372,6 +361,202 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
     completionStatus: ci.status,
     ci,
   };
+}
+
+/**
+ * Complete an agent-managed update to an already-open pull request. The
+ * caller has already applied and committed the follow-up change; this path
+ * performs the same validation/review gate, pushes the existing branch, and
+ * waits for checks on the exact resulting PR head. It never creates or merges
+ * a pull request.
+ */
+export function runExistingPullRequestUpdate(
+  input: IndependentReviewInput,
+  pullRequestUrl: string,
+  dependencies: ReviewRunnerDependencies = defaultRunnerDependencies(),
+  applyAutoFix: ApplyAutoFix = (result) => applyCodexAutoFix(input, result),
+): IssueToPullRequestResult {
+  if (!/^\d+$/.test(input.issue)) {
+    return reviewerInvocationFailure('Issue number must be numeric.');
+  }
+  const issue = readIssueContext(input.cwd, input.issue);
+  if (!issue) return reviewerInvocationFailure('Issue body could not be retrieved.');
+
+  const activePullRequest = resolveActivePullRequest(input.cwd, pullRequestUrl);
+  if (typeof activePullRequest === 'string') return reviewerInvocationFailure(activePullRequest);
+  if (activePullRequest.base !== input.base) {
+    return reviewerInvocationFailure('The pull request base does not match the requested base.');
+  }
+  if (currentBranch(input.cwd) !== activePullRequest.branch) {
+    return reviewerInvocationFailure('The current branch is not the active pull request branch.');
+  }
+
+  const review = runBoundedReviewFixLoop(input, dependencies, applyAutoFix);
+  if (!canOpenPullRequest(true, review)) {
+    return { ...review, pullRequestUrl };
+  }
+
+  try {
+    execFileSync('git', ['push', 'origin', activePullRequest.branch], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return reviewerInvocationFailure('Existing pull request branch push failed.');
+  }
+
+  const pushedHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+  }).trim();
+  const observedPullRequest = resolveActivePullRequest(input.cwd, pullRequestUrl);
+  const pushedHeadError =
+    typeof observedPullRequest === 'string'
+      ? observedPullRequest
+      : validateAdvancedPullRequestHead(
+          activePullRequest.headSha,
+          pushedHeadSha,
+          observedPullRequest.headSha,
+        );
+  if (pushedHeadError) {
+    return {
+      ...review,
+      pullRequestUrl,
+      result: 'CHANGES_REQUIRED',
+      blockingFindings: [
+        {
+          severity: 'blocking',
+          classification: 'BLOCKED',
+          finding: 'The latest pushed pull-request head could not be confirmed.',
+          generalized_rule:
+            'Repository-managed PR updates must observe checks for the exact pushed head.',
+          affected_locations: [],
+          recommended_fix: pushedHeadError,
+        },
+      ],
+      escalationRequired: true,
+    };
+  }
+
+  const ci = waitForPullRequestCi(input, issue, activePullRequest.branch, pullRequestUrl, () => {
+    return reviewAndPushAfterCiRepair(input, activePullRequest.branch, dependencies, applyAutoFix);
+  });
+  if (ci.status === 'READY_FOR_HUMAN_REVIEW') {
+    return { ...review, pullRequestUrl, completionStatus: ci.status, ci };
+  }
+  return {
+    ...review,
+    pullRequestUrl,
+    completionStatus: ci.status,
+    ci,
+    result:
+      ci.classification === 'HUMAN_DECISION_REQUIRED'
+        ? 'HUMAN_DECISION_REQUIRED'
+        : 'CHANGES_REQUIRED',
+    blockingFindings: [
+      ...review.blockingFindings,
+      {
+        severity: 'blocking',
+        classification: ci.classification ?? 'BLOCKED',
+        finding: ci.reason ?? `Post-push CI gate ended with ${ci.status}.`,
+        generalized_rule:
+          'Every repository-managed PR update must complete the latest-head CI gate before handoff.',
+        affected_locations: [],
+        recommended_fix: 'Resolve the CI gate result and obtain a fresh review before handoff.',
+      },
+    ],
+    escalationRequired: true,
+  };
+}
+
+function reviewAndPushAfterCiRepair(
+  input: IndependentReviewInput,
+  branch: string,
+  dependencies: ReviewRunnerDependencies = defaultRunnerDependencies(),
+  applyAutoFix: ApplyAutoFix = (result) => applyCodexAutoFix(input, result),
+): boolean {
+  let beforeReviewHead: string;
+  try {
+    beforeReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return false;
+  }
+  const freshReview = runBoundedReviewFixLoop(input, dependencies, applyAutoFix);
+  if (!canOpenPullRequest(true, freshReview)) return false;
+  let afterReviewHead: string;
+  try {
+    afterReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return false;
+  }
+  if (afterReviewHead === beforeReviewHead) return true;
+  try {
+    execFileSync('git', ['push', 'origin', branch], { cwd: input.cwd, encoding: 'utf8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveActivePullRequest(
+  cwd: string,
+  pullRequestUrl: string,
+  runCommand: CiCommandRunner = (args, commandCwd) =>
+    execFileSync('gh', args, { cwd: commandCwd, encoding: 'utf8' }),
+): ActivePullRequest | string {
+  try {
+    const parsed = JSON.parse(
+      runCommand(
+        [
+          'pr',
+          'view',
+          pullRequestUrl,
+          '--json',
+          'url,state,headRefName,baseRefName,headRefOid,headRepository',
+        ],
+        cwd,
+      ),
+    ) as Record<string, unknown>;
+    if (
+      parsed.state !== 'OPEN' ||
+      typeof parsed.url !== 'string' ||
+      typeof parsed.headRefName !== 'string' ||
+      typeof parsed.baseRefName !== 'string' ||
+      typeof parsed.headRefOid !== 'string' ||
+      !isRecord(parsed.headRepository) ||
+      parsed.headRepository.nameWithOwner !== targetRepository
+    ) {
+      return 'The active pull request is not an open PR in the target repository with a current head.';
+    }
+    return {
+      url: parsed.url,
+      branch: parsed.headRefName,
+      base: parsed.baseRefName,
+      headSha: parsed.headRefOid,
+    };
+  } catch {
+    return 'The active pull request could not be resolved reliably.';
+  }
+}
+
+export function validateAdvancedPullRequestHead(
+  previousHeadSha: string,
+  pushedHeadSha: string,
+  observedHeadSha: string,
+): string | undefined {
+  if (pushedHeadSha === previousHeadSha) {
+    return 'The existing pull request head did not advance after the update push.';
+  }
+  if (observedHeadSha !== pushedHeadSha) {
+    return 'The active pull request head does not match the latest pushed commit.';
+  }
+  return undefined;
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
@@ -1025,13 +1210,14 @@ export function waitForPullRequestCi(
   reviewAfterRepair: () => boolean,
 ): CiGateResult {
   let latestObservation: CiObservation | undefined;
-  const dependencies: CiFeedbackDependencies = {
-    observe: () => {
-      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+  return runPostPushCiGate({
+    currentHead: () =>
+      execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: input.cwd,
         encoding: 'utf8',
-      }).trim();
-      latestObservation = observePullRequestCi(input.cwd, pullRequestUrl, headSha);
+      }).trim(),
+    observe: (expectedHeadSha) => {
+      latestObservation = observePullRequestCi(input.cwd, pullRequestUrl, expectedHeadSha);
       return latestObservation;
     },
     wait: waitForCiPoll,
@@ -1042,8 +1228,45 @@ export function waitForPullRequestCi(
       if (!outcome.changed || !outcome.validated || !outcome.pushed) return outcome;
       return { ...outcome, reviewPassed: reviewAfterRepair() };
     },
+  });
+}
+
+export type PostPushCiGateDependencies = {
+  currentHead: () => string;
+  observe: (expectedHeadSha: string) => CiObservation;
+  wait: () => void;
+  rerunTransient: () => boolean;
+  repair: (observation: CiObservation) => CiRepairOutcome;
+};
+
+/**
+ * Shared post-push gate. Reading the current head for every observation keeps
+ * CI evidence tied to the commit that is actually being handed off, including
+ * commits produced by a bounded repair/review cycle.
+ */
+export function runPostPushCiGate(dependencies: PostPushCiGateDependencies): CiGateResult {
+  const feedbackDependencies: CiFeedbackDependencies = {
+    observe: () => dependencies.observe(dependencies.currentHead()),
+    wait: dependencies.wait,
+    rerunTransient: dependencies.rerunTransient,
+    repair: dependencies.repair,
   };
-  return runCiFeedbackLoop(dependencies);
+  try {
+    return runCiFeedbackLoop(feedbackDependencies);
+  } catch {
+    return {
+      status: 'CI_BLOCKED',
+      observation: {
+        checks: [],
+        evidence: 'The latest PR head or required CI evidence could not be observed.',
+        transient: false,
+        evidenceComplete: false,
+      },
+      state: { repairCycles: 0, transientReruns: 0, meaningfulProgress: false },
+      classification: 'BLOCKED',
+      reason: 'The latest PR head or required CI evidence could not be observed reliably.',
+    };
+  }
 }
 
 export function runReviewControlFlow(

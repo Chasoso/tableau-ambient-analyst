@@ -1,5 +1,6 @@
 import {
   resolveWorkingDirectory,
+  runExistingPullRequestUpdate,
   runIssueToPullRequest,
   runIndependentReview,
   type IndependentReviewInput,
@@ -26,7 +27,12 @@ const input: IndependentReviewInput = {
 };
 
 const reviewOnly = rawArguments.includes('--review-only');
-const result = reviewOnly ? runIndependentReview(input) : runIssueToPullRequest(input);
+const existingPullRequest = argumentsByName.get('update-pr');
+const result = reviewOnly
+  ? runIndependentReview(input)
+  : existingPullRequest
+    ? runExistingPullRequestUpdate(input, existingPullRequest)
+    : runIssueToPullRequest(input);
 console.log(JSON.stringify(result, null, 2));
 
 if (

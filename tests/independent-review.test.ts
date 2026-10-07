@@ -38,8 +38,12 @@ import {
   reserveReviewCycleAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
+  runExistingPullRequestUpdate,
+  runPostPushCiGate,
   runReadOnlyReview,
   runReviewControlFlow,
+  resolveActivePullRequest,
+  validateAdvancedPullRequestHead,
   observePullRequestCi,
   pushAndCreatePullRequest,
   validateAutoFixChanges,
@@ -51,6 +55,113 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
+  it('resolves only an open pull request with an exact head', () => {
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
+        JSON.stringify({
+          url: 'https://github.com/example/repo/pull/1',
+          state: 'OPEN',
+          headRefName: 'feature/review',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+          headRepository: { nameWithOwner: 'Chasoso/tableau-ambient-analyst' },
+        }),
+      ),
+    ).toEqual({
+      url: 'https://github.com/example/repo/pull/1',
+      branch: 'feature/review',
+      base: 'main',
+      headSha: 'head-sha',
+    });
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
+        JSON.stringify({ state: 'CLOSED' }),
+      ),
+    ).toContain('open PR');
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/other/repo/pull/1', () =>
+        JSON.stringify({
+          url: 'https://github.com/other/repo/pull/1',
+          state: 'OPEN',
+          headRefName: 'feature/review',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+          headRepository: { nameWithOwner: 'other/repo' },
+        }),
+      ),
+    ).toContain('target repository');
+  });
+
+  it('gates an existing-PR update on the latest head from pending to PASS', () => {
+    const heads: string[] = [];
+    let observations = 0;
+    const result = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: (expectedHeadSha) => {
+        heads.push(expectedHeadSha);
+        observations += 1;
+        return observations === 1
+          ? { checks: [{ name: 'validation', state: 'PENDING' }], evidence: '', transient: false }
+          : { checks: [{ name: 'validation', state: 'SUCCESS' }], evidence: '', transient: false };
+      },
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+
+    expect(result.status).toBe('READY_FOR_HUMAN_REVIEW');
+    expect(heads).toEqual(['new-head', 'new-head']);
+    expect(validateAdvancedPullRequestHead('old-head', 'new-head', 'new-head')).toBeUndefined();
+  });
+
+  it('fails closed for stale head and unavailable CI evidence', () => {
+    expect(validateAdvancedPullRequestHead('same-head', 'same-head', 'same-head')).toContain(
+      'did not advance',
+    );
+    expect(validateAdvancedPullRequestHead('old-head', 'new-head', 'old-head')).toContain(
+      'does not match',
+    );
+
+    const stale = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: (expectedHeadSha) => ({
+        checks: expectedHeadSha === 'old-head' ? [{ name: 'validation', state: 'SUCCESS' }] : [],
+        evidence: 'PR head SHA mismatch',
+        evidenceComplete: false,
+        transient: false,
+      }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(stale.status).toBe('CI_BLOCKED');
+
+    const unavailable = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: () => ({ checks: [], evidence: 'checks unavailable', transient: false }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(unavailable.status).toBe('CI_BLOCKED');
+
+    const headUnavailable = runPostPushCiGate({
+      currentHead: () => {
+        throw new Error('HEAD unavailable');
+      },
+      observe: () => ({
+        checks: [{ name: 'validation', state: 'SUCCESS' }],
+        evidence: '',
+        transient: false,
+      }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(headUnavailable.status).toBe('CI_BLOCKED');
+    expect(headUnavailable.classification).toBe('BLOCKED');
+  });
+
   it('observes CI against the exact head and preserves complete failure evidence', () => {
     const commands: string[][] = [];
     const observation = observePullRequestCi(
@@ -1879,6 +1990,145 @@ describe('Issue-to-PR handoff boundaries', () => {
     body: 'Acceptance criteria',
     url: 'https://example.test/29',
   };
+
+  it('pushes an existing PR update and waits for its latest head checks', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-existing-pr-'));
+    const remote = join(directory, 'origin.git');
+    const fakeBin = join(directory, 'bin');
+    const previousPath = process.env.PATH;
+    try {
+      mkdirSync(fakeBin);
+      execFileSync('git', ['init', '-q', '--bare', remote], { cwd: directory });
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: directory });
+      execFileSync('git', ['config', 'user.email', 'test@example.test'], { cwd: directory });
+      writeFileSync(join(directory, 'README.md'), '# fixture\n');
+      execFileSync('git', ['add', 'README.md'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'initial'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: directory });
+      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'main'], {
+        cwd: directory,
+      });
+      execFileSync('git', ['switch', '-q', '-c', 'feature/review'], { cwd: directory });
+      writeFileSync(join(directory, 'old.txt'), 'old\n');
+      execFileSync('git', ['add', 'old.txt'], { cwd: directory });
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'old'],
+        { cwd: directory },
+      );
+      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'feature/review'], {
+        cwd: directory,
+      });
+      writeFileSync(join(directory, 'follow-up.txt'), 'follow-up\n');
+      execFileSync('git', ['add', 'follow-up.txt'], { cwd: directory });
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.test',
+          'commit',
+          '-qm',
+          'follow-up',
+        ],
+        { cwd: directory },
+      );
+
+      const remoteShellPath = remote.replaceAll("'", "'\\''");
+      writeFileSync(
+        join(fakeBin, 'gh'),
+        `#!/bin/sh
+if [ "$1" = "issue" ]; then
+  printf '%s\\n' '{"title":"Issue","body":"Acceptance criteria","url":"https://github.com/Chasoso/tableau-ambient-analyst/issues/38"}'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  head=$(git --git-dir='${remoteShellPath}' rev-parse refs/heads/feature/review)
+  printf '{"url":"https://github.com/Chasoso/tableau-ambient-analyst/pull/38","state":"OPEN","headRefName":"feature/review","baseRefName":"main","headRefOid":"%s","headRepository":{"nameWithOwner":"Chasoso/tableau-ambient-analyst"}}\\n' "$head"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
+  marker='${directory}/checks-seen'
+  if [ -e "$marker" ]; then
+    printf '%s\\n' '[{"name":"validation","bucket":"pass","link":"https://github.com/Chasoso/tableau-ambient-analyst/actions/runs/1"}]'
+  else
+    : > "$marker"
+    printf '%s\\n' '[{"name":"validation","bucket":"pending","link":"https://github.com/Chasoso/tableau-ambient-analyst/actions/runs/1"}]'
+  fi
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' '[]'
+  exit 0
+fi
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(join(fakeBin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+
+      const followUpAccounting: ReviewAccounting = {
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 0,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+      };
+      const followUpDependencies: ReviewRunnerDependencies = {
+        validateScope: () => undefined,
+        runValidation: () => true,
+        readIssue: () => issue,
+        reserveCycle: () => undefined,
+        invokeReviewer: () =>
+          parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          ),
+        currentBranch: () => 'feature/review',
+        readAccounting: () => followUpAccounting,
+        recordReview: () => followUpAccounting,
+        recordAutoFix: () => followUpAccounting,
+        recordTermination: () => followUpAccounting,
+      };
+
+      const result = runExistingPullRequestUpdate(
+        { cwd: directory, base: 'main', issue: '38' },
+        'https://github.com/Chasoso/tableau-ambient-analyst/pull/38',
+        followUpDependencies,
+      );
+
+      expect(result.result).toBe('PASS');
+      expect(result.completionStatus).toBe('READY_FOR_HUMAN_REVIEW');
+      expect(result.ci?.status).toBe('READY_FOR_HUMAN_REVIEW');
+      expect(
+        execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/feature/review'], {
+          cwd: directory,
+          encoding: 'utf8',
+        }).trim(),
+      ).toBe(
+        execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim(),
+      );
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('fails closed when the branch push fails', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-push-failure-'));
