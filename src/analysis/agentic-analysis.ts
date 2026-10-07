@@ -254,6 +254,7 @@ export async function runAgenticTableauAnalysis(
   let responseCount = 0;
   let input: unknown = analysisPrompt(validatedContract);
   let previousResponseId: string | undefined;
+  let failed = false;
 
   try {
     budget.assertCanContinue();
@@ -330,8 +331,19 @@ export async function runAgenticTableauAnalysis(
       previousResponseId = response.id;
       input = outputs;
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    await tools.close();
+    if (!failed) {
+      await tools.close();
+    } else {
+      try {
+        await tools.close();
+      } catch {
+        // Preserve the primary failure; cleanup failure cannot replace it.
+      }
+    }
   }
 }
 

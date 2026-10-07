@@ -252,6 +252,22 @@ describe('application-layer agentic analysis', () => {
     expect(callFailure.closed).toBe(true);
   });
 
+  it('does not let cleanup failure mask the primary analysis failure', async () => {
+    const model: AgenticAnalysisModel = {
+      async respond() {
+        throw new Error('OPERATION_TIMEOUT: model response');
+      },
+    };
+    const tools = toolsFor();
+    tools.close = async () => {
+      throw new Error('cleanup failed');
+    };
+
+    await expect(runAgenticTableauAnalysis(contract, model, tools)).rejects.toThrow(
+      'OPERATION_TIMEOUT: model response',
+    );
+  });
+
   it('rejects malformed provider output and malformed normalized tool evidence', async () => {
     const malformedProvider: AgenticAnalysisModel = {
       async respond() {
