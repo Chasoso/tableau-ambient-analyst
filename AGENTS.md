@@ -51,9 +51,26 @@ and add `Closes #N` only when the Issue is complete.
 
 The local human-owned boundary includes product direction, material
 architecture or external-service selection, security/authentication/
-authorization changes, material cost or data-flow decisions, destructive or
-irreversible operations, and the final merge decision. Missing credentials,
-services, fixtures, or repository prerequisites are `BLOCKED`, not decisions.
+authorization changes, privacy or retention, meaningful recurring cost or
+material data-flow decisions, hypothesis keep/revise/reject decisions,
+conflicting requirements, destructive or irreversible operations, and the
+final merge decision. Missing credentials, services, fixtures, or repository
+prerequisites are `BLOCKED`, not decisions. A human-owned finding must state
+what must be decided, why repository rules cannot decide it, the viable
+options, and a recommendation.
+
+The PR gate is fail-closed: complete self-review and deterministic validation
+must pass, then a fresh Independent Review must return `PASS` with zero
+blocking findings and no unresolved human escalation. A review result that
+is unavailable, malformed, stale, or terminated by a limit does not pass the
+gate. After a repository-managed push, required checks for the exact latest
+head must pass before reporting readiness. The Skill describes this sequence;
+these local gate conditions remain mandatory.
+
+Before handoff, self-review must cover the complete diff, Issue scope and
+acceptance criteria, secrets, debug or temporary files, unfinished TODOs,
+unintended file changes, and documentation consistency. Report checks that
+were not run and never claim validation evidence that does not exist.
 The local existing-PR follow-up entry point is the independent-review runner's
 `--update-pr <url>` mode; a direct push is not a completed handoff.
 
