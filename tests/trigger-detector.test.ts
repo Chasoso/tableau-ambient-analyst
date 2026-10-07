@@ -78,4 +78,15 @@ describe('trigger detector', () => {
 
     expect(utterances).toEqual(before);
   });
+
+  it('does not attach a preceding analytical context to a later casual utterance', () => {
+    const utterances = parseTranscriptFixture(
+      JSON.stringify([
+        { sequence: 0, speaker: 'A', text: 'Because we met earlier.' },
+        { sequence: 1, speaker: 'B', text: "Let's grab coffee." },
+      ]),
+    );
+
+    expect(detectTrigger(utterances)).toMatchObject({ decision: 'IGNORE' });
+  });
 });

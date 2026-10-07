@@ -53,30 +53,40 @@ function reasonFor(
   text: string,
   context: readonly TranscriptUtterance[],
 ): TriggerReason | undefined {
-  const contextText = context.map(({ text: contextUtterance }) => contextUtterance).join(' ');
-  const hasAnalyticalTerm = analyticalTerms.test(contextText);
+  const precedingText = context
+    .slice(0, -1)
+    .map(({ text: contextUtterance }) => contextUtterance)
+    .join(' ');
+  const contextText = `${precedingText} ${text}`.trim();
+  const hasCurrentAnalyticalTerm = analyticalTerms.test(text);
+  const hasContextAnalyticalTerm = analyticalTerms.test(contextText);
   const numericValues = [...contextText.matchAll(/\b\d+(?:[.,]\d+)?\b/g)].map(([value]) => value);
   const hasDistinctNumericValues = new Set(numericValues).size > 1;
   if (
-    causalLanguage.test(contextText) &&
-    (hasAnalyticalTerm || causalHypothesisLanguage.test(contextText))
+    hasCurrentAnalyticalTerm &&
+    (causalLanguage.test(text) ||
+      causalLanguage.test(precedingText) ||
+      causalHypothesisLanguage.test(text))
   ) {
     return 'causal-hypothesis';
   }
-  if (assumptionLanguage.test(contextText) && decisionLanguage.test(contextText)) {
+  if (
+    decisionLanguage.test(text) &&
+    (assumptionLanguage.test(text) || assumptionLanguage.test(precedingText))
+  ) {
     return 'assumption-based-decision';
   }
   if (
-    hasAnalyticalTerm &&
-    (disagreementLanguage.test(contextText) ||
-      /\bbut\b/i.test(contextText) ||
-      hasDistinctNumericValues)
+    hasCurrentAnalyticalTerm &&
+    (disagreementLanguage.test(text) ||
+      /\bbut\b/i.test(text) ||
+      (numericalValue.test(text) && hasDistinctNumericValues && hasContextAnalyticalTerm))
   ) {
     return 'factual-disagreement';
   }
   if (
     numericalValue.test(text) &&
-    ((hasAnalyticalTerm && numericalClaimLanguage.test(text)) ||
+    ((hasCurrentAnalyticalTerm && numericalClaimLanguage.test(text)) ||
       (numericalClaimLanguage.test(text) && !temporalLanguage.test(text)))
   ) {
     return 'numerical-claim';
