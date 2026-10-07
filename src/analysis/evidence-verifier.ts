@@ -107,8 +107,10 @@ function validateEvidence(value: unknown): value is Evidence {
 function statusForQuestion(
   questionId: string,
   entries: readonly Evidence[],
+  hasInvalidEvidence: boolean,
   reasons: string[],
 ): EvidenceStatus {
+  if (hasInvalidEvidence) return 'unresolved';
   if (entries.length === 0) return 'unresolved';
   if (
     entries.some(
@@ -188,7 +190,12 @@ export function verifyEvidence(
   }
   const questionStatus = requiredIds.map((questionId) => ({
     questionId,
-    status: statusForQuestion(questionId, grouped.get(questionId) ?? [], reasons),
+    status: statusForQuestion(
+      questionId,
+      grouped.get(questionId) ?? [],
+      unresolvedFromInvalidEvidence.has(questionId),
+      reasons,
+    ),
   }));
   const unresolvedRequiredEvidence = requiredIds.filter(
     (questionId) =>

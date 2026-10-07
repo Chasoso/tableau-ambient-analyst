@@ -78,6 +78,10 @@ describe('analysis evidence verifier', () => {
 
     expect(malformed.completion).toBe('INSUFFICIENT');
     expect(malformed.unresolvedRequiredEvidence).toEqual(['launch-timing']);
+    expect(malformed.questionStatus).toEqual([
+      { questionId: 'assumption-support', status: 'supported' },
+      { questionId: 'launch-timing', status: 'unresolved' },
+    ]);
     expect(unknown.completion).toBe('INSUFFICIENT');
     expect(unknown.unresolvedRequiredEvidence).toEqual(['assumption-support', 'launch-timing']);
   });
