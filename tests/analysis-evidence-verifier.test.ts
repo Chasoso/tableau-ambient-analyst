@@ -191,4 +191,29 @@ describe('analysis evidence verifier', () => {
     ]);
     expect(directListEvidence.completion).toBe('INSUFFICIENT');
   });
+
+  it('rejects mismatched normalized tool provenance', () => {
+    const records: AgenticEvidenceRecord[] = [
+      {
+        sequence: 1,
+        toolName: 'query_datasource',
+        evidence: {
+          tool: 'get_datasource_metadata' as const,
+          datasourceLuid: stdioDatasourceLuid,
+          fieldCaptions: ['Daily View Count'],
+        },
+        summary: {} as never,
+      },
+    ];
+    expect(() =>
+      interpretAgenticEvidence(records, [
+        {
+          sequence: 1,
+          questionId: 'assumption-support',
+          status: 'supported',
+          observation: 'The metadata supports the assumption.',
+        },
+      ]),
+    ).toThrow('EVIDENCE_MAPPING_PROVENANCE_INVALID');
+  });
 });

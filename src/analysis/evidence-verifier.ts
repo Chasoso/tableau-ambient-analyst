@@ -200,7 +200,11 @@ export function interpretAgenticEvidence(
   const recordsBySequence = new Map(records.map((record) => [record.sequence, record]));
   return interpretations.map((interpretation) => {
     const record = recordsBySequence.get(interpretation.sequence);
-    if (record === undefined || !('tool' in record.evidence)) {
+    if (
+      record === undefined ||
+      !('tool' in record.evidence) ||
+      record.toolName !== record.evidence.tool
+    ) {
       throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
     }
     if (record.evidence.tool === 'list_datasources' && interpretation.status !== 'unresolved') {
