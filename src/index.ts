@@ -44,3 +44,5 @@ export type {
   AgenticAnalysisResult,
   AgenticAnalysisToolRunner,
 } from './analysis/agentic-analysis.js';
+export { decideIntervention } from './intervention/policy.js';
+export type { InterventionDecision, InterventionResult } from './intervention/policy.js';
