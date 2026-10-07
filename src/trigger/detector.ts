@@ -26,7 +26,9 @@ const numericalClaimLanguage =
   /\b(is|are|was|were|shows?|reported|reached|increased|decreased|has|have|had|total(?:ed)?|equals?)\b/i;
 const temporalLanguage = /\b(meeting|clock|o'clock|today|tomorrow|starts?|ends?|am|pm)\b/i;
 const causalLanguage =
-  /\b(because|due to|caused by|leads? to|results? in|driven by|as a result of)\b/i;
+  /\b(because|due to|caused? by|caus(?:e|ed|es|ing)|leads? to|results? in|driven by|as a result of)\b/i;
+const strongCausalLanguage =
+  /\b(caus(?:e|ed|es|ing)|leads? to|results? in|driven by|as a result of)\b/i;
 const causalHypothesisLanguage = /\b(think|believe|might|may|likely|hypothesis|assume)\b/i;
 const assumptionLanguage = /\b(assum(?:e|ed|es|ing|ption)|based on|given that|if .+ then)\b/i;
 const decisionLanguage = /\b(we should|let's|decide|decision|recommend|ship|launch|adopt)\b/i;
@@ -63,7 +65,9 @@ function reasonFor(
   const numericValues = [...contextText.matchAll(/\b\d+(?:[.,]\d+)?\b/g)].map(([value]) => value);
   const hasDistinctNumericValues = new Set(numericValues).size > 1;
   if (
-    hasCurrentAnalyticalTerm &&
+    (hasCurrentAnalyticalTerm ||
+      strongCausalLanguage.test(text) ||
+      causalHypothesisLanguage.test(text)) &&
     (causalLanguage.test(text) ||
       causalLanguage.test(precedingText) ||
       causalHypothesisLanguage.test(text))

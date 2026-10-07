@@ -32,6 +32,17 @@
     "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
   },
   {
+    "id": "explicit-causal-hypothesis",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The new onboarding flow caused more drop-off."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
     "id": "assumption-based-decision",
     "utterances": [
       {
