@@ -57,6 +57,31 @@ describe('analysis evidence verifier', () => {
     expect(result.unresolvedRequiredEvidence).toEqual(['launch-timing']);
   });
 
+  it('reports required questions when complete evidence includes malformed or unknown items', () => {
+    const completeEvidence = [
+      tableauEvidence('assumption-support'),
+      tableauEvidence('launch-timing'),
+    ];
+    const malformed = verifyEvidence(contract, [
+      ...completeEvidence,
+      { questionId: 'launch-timing' },
+    ]);
+    const unknown = verifyEvidence(contract, [
+      ...completeEvidence,
+      {
+        questionId: 'undeclared-question',
+        status: 'supported',
+        provenance: { kind: 'non-tableau', source: 'unknown question' },
+        observation: 'This question is not in the contract.',
+      },
+    ]);
+
+    expect(malformed.completion).toBe('INSUFFICIENT');
+    expect(malformed.unresolvedRequiredEvidence).toEqual(['launch-timing']);
+    expect(unknown.completion).toBe('INSUFFICIENT');
+    expect(unknown.unresolvedRequiredEvidence).toEqual(['assumption-support', 'launch-timing']);
+  });
+
   it('represents a contradicted hypothesis as resolved negative evidence', () => {
     const result = verifyEvidence(contract, [
       tableauEvidence('assumption-support', 'contradicted'),

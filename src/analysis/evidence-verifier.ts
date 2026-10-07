@@ -144,6 +144,18 @@ export function verifyEvidence(
     ...contract.openQuestions.map(({ id }) => id),
   ]);
   const reasons: string[] = [];
+  const unresolvedFromInvalidEvidence = new Set<string>();
+  const markInvalidEvidence = (item: unknown): void => {
+    if (
+      isRecord(item) &&
+      typeof item.questionId === 'string' &&
+      requiredIds.includes(item.questionId)
+    ) {
+      unresolvedFromInvalidEvidence.add(item.questionId);
+      return;
+    }
+    for (const questionId of requiredIds) unresolvedFromInvalidEvidence.add(questionId);
+  };
   if (!Array.isArray(input)) {
     return {
       completion: 'INSUFFICIENT',
@@ -157,10 +169,12 @@ export function verifyEvidence(
   for (const item of input) {
     if (!validateEvidence(item)) {
       reasons.push('evidence contains a malformed item');
+      markInvalidEvidence(item);
       continue;
     }
     if (!allQuestionIds.has(item.questionId)) {
       reasons.push(`evidence references unknown question ${item.questionId}`);
+      markInvalidEvidence(item);
       continue;
     }
     evidence.push(item);
@@ -176,9 +190,11 @@ export function verifyEvidence(
     questionId,
     status: statusForQuestion(questionId, grouped.get(questionId) ?? [], reasons),
   }));
-  const unresolvedRequiredEvidence = questionStatus
-    .filter(({ status }) => status === 'unresolved')
-    .map(({ questionId }) => questionId);
+  const unresolvedRequiredEvidence = requiredIds.filter(
+    (questionId) =>
+      unresolvedFromInvalidEvidence.has(questionId) ||
+      questionStatus.find((status) => status.questionId === questionId)?.status === 'unresolved',
+  );
   return {
     completion:
       reasons.length === 0 && unresolvedRequiredEvidence.length === 0 ? 'COMPLETE' : 'INSUFFICIENT',
