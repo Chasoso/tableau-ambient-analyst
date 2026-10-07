@@ -40,6 +40,7 @@ import {
   runBoundedReviewFixLoop,
   runReadOnlyReview,
   runReviewControlFlow,
+  resolveActivePullRequest,
   observePullRequestCi,
   pushAndCreatePullRequest,
   validateAutoFixChanges,
@@ -51,6 +52,30 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
+  it('resolves only an open pull request with an exact head', () => {
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
+        JSON.stringify({
+          url: 'https://github.com/example/repo/pull/1',
+          state: 'OPEN',
+          headRefName: 'feature/review',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+        }),
+      ),
+    ).toEqual({
+      url: 'https://github.com/example/repo/pull/1',
+      branch: 'feature/review',
+      base: 'main',
+      headSha: 'head-sha',
+    });
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
+        JSON.stringify({ state: 'CLOSED' }),
+      ),
+    ).toContain('open PR');
+  });
+
   it('observes CI against the exact head and preserves complete failure evidence', () => {
     const commands: string[][] = [];
     const observation = observePullRequestCi(

@@ -119,6 +119,22 @@ ordinary CI. Before validation or reviewer invocation, the runner requires a
 clean base branch and an existing base ref. This prevents uncommitted changes
 from entering the autonomous handoff.
 
+For an already-open repository-managed pull request, an agent may complete a
+committed follow-up update with the same gate:
+
+```bash
+npm run review:independent -- \
+  --issue 38 \
+  --base main \
+  --update-pr https://github.com/Chasoso/tableau-ambient-analyst/pull/1
+```
+
+This verifies the active PR and branch, runs validation and a fresh review,
+pushes the existing branch, confirms the exact pushed head, and waits for the
+required checks before reporting completion. It does not create or merge a PR.
+An older green head cannot satisfy the gate; missing or mismatched head/check
+evidence fails closed.
+
 For an already-prepared committed feature branch, the review-only mode remains
 available:
 
