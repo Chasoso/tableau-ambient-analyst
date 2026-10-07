@@ -21,7 +21,13 @@ describe('analysis contract', () => {
       properties: { claim: { pattern: string } };
       $defs: {
         questions: { items: { properties: { question: { pattern: string } } } };
-        context: { items: { required: string[]; additionalProperties: boolean } };
+        context: {
+          items: {
+            required: string[];
+            additionalProperties: boolean;
+            properties: { sequence: { maximum: number } };
+          };
+        };
       };
       $comment: string;
     };
@@ -30,6 +36,7 @@ describe('analysis contract', () => {
     expect(schema.$defs.questions.items.properties.question.pattern).toBe('.*\\S.*');
     expect(schema.$defs.context.items.required).toEqual(['sequence', 'speaker', 'text']);
     expect(schema.$defs.context.items.additionalProperties).toBe(false);
+    expect(schema.$defs.context.items.properties.sequence.maximum).toBe(Number.MAX_SAFE_INTEGER);
     expect(schema.$comment).toContain('question IDs to be unique across');
   });
 
@@ -150,6 +157,18 @@ describe('analysis contract', () => {
       validateAnalysisContract({
         claim: 'A claim',
         context: [{ sequence: 0, speaker: 'A', text: 'A claim', timestamp: 'unexpected' }],
+        requiredEvidence: [{ id: 'value', question: 'What is it?' }],
+        optionalEvidence: [],
+        openQuestions: [],
+      }),
+    ).toThrow(AnalysisContractError);
+  });
+
+  it('rejects context sequences outside the safe integer range', () => {
+    expect(() =>
+      validateAnalysisContract({
+        claim: 'A claim',
+        context: [{ sequence: Number.MAX_SAFE_INTEGER + 1, speaker: 'A', text: 'A claim' }],
         requiredEvidence: [{ id: 'value', question: 'What is it?' }],
         optionalEvidence: [],
         openQuestions: [],
