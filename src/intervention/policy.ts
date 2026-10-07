@@ -16,6 +16,7 @@ const assumptionSupportQuestionId = 'decision-assumption-support';
 function isEvidenceQuestionStatus(value: unknown): value is EvidenceQuestionStatus {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'questionId' && key !== 'status')) return false;
   return (
     typeof record.questionId === 'string' &&
     (record.status === 'supported' ||
@@ -27,7 +28,18 @@ function isEvidenceQuestionStatus(value: unknown): value is EvidenceQuestionStat
 function hasUsableVerificationState(value: unknown): value is EvidenceVerificationResult {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return (
+  if (
+    Object.keys(record).some(
+      (key) =>
+        key !== 'completion' &&
+        key !== 'questionStatus' &&
+        key !== 'unresolvedRequiredEvidence' &&
+        key !== 'reasons',
+    )
+  ) {
+    return false;
+  }
+  if (
     (record.completion === 'COMPLETE' || record.completion === 'INSUFFICIENT') &&
     Array.isArray(record.questionStatus) &&
     record.questionStatus.every(isEvidenceQuestionStatus) &&
@@ -35,9 +47,20 @@ function hasUsableVerificationState(value: unknown): value is EvidenceVerificati
     record.unresolvedRequiredEvidence.every((questionId) => typeof questionId === 'string') &&
     Array.isArray(record.reasons) &&
     record.reasons.every((reason) => typeof reason === 'string') &&
-    (record.completion !== 'COMPLETE' ||
-      (record.unresolvedRequiredEvidence.length === 0 && record.reasons.length === 0))
-  );
+    new Set(record.questionStatus.map(({ questionId }) => questionId)).size ===
+      record.questionStatus.length &&
+    new Set(record.unresolvedRequiredEvidence).size === record.unresolvedRequiredEvidence.length
+  ) {
+    if (record.completion === 'COMPLETE') {
+      return (
+        record.unresolvedRequiredEvidence.length === 0 &&
+        record.reasons.length === 0 &&
+        record.questionStatus.every(({ status }) => status !== 'unresolved')
+      );
+    }
+    return true;
+  }
+  return false;
 }
 
 function isDecisionOpportunity(reason: TriggerReason): boolean {

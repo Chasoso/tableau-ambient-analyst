@@ -63,6 +63,30 @@ describe('intervention policy', () => {
         unresolvedRequiredEvidence: ['decision-assumption-support'],
       },
     ],
+    [
+      'complete verification with an unresolved sibling',
+      {
+        ...verification('COMPLETE', 'contradicted'),
+        questionStatus: [
+          { questionId: 'decision-assumption-support', status: 'contradicted' },
+          { questionId: 'other-required-question', status: 'unresolved' },
+        ],
+      },
+    ],
+    [
+      'duplicate question status',
+      {
+        ...verification('COMPLETE', 'contradicted'),
+        questionStatus: [
+          { questionId: 'decision-assumption-support', status: 'contradicted' },
+          { questionId: 'decision-assumption-support', status: 'supported' },
+        ],
+      },
+    ],
+    [
+      'unsupported verification field',
+      { ...verification('COMPLETE', 'contradicted'), extra: 'unexpected' },
+    ],
     ['missing verification', undefined],
   ])('holds for %s', (_description, state) => {
     expect(decideIntervention(decisionOpportunity, state).decision).toBe('HOLD');
