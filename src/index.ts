@@ -23,3 +23,14 @@ export {
   validateAnalysisContract,
 } from './analysis/contract.js';
 export type { AnalysisContract, AnalysisQuestion } from './analysis/contract.js';
+export {
+  createOpenAiResponsesModel,
+  runAgenticTableauAnalysis,
+  runOpenAiStdioAnalysis,
+} from './analysis/agentic-analysis.js';
+export type {
+  AgenticAnalysisModel,
+  AgenticAnalysisResponse,
+  AgenticAnalysisResult,
+  AgenticAnalysisToolRunner,
+} from './analysis/agentic-analysis.js';

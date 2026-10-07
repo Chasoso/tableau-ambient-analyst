@@ -151,6 +151,10 @@ in [transcript replay](docs/development/transcript-replay.md).
 The initial deterministic trigger boundary is described in
 [trigger detector](docs/development/trigger-detector.md).
 
+The application-layer path from an Analysis Contract to bounded agentic Tableau
+analysis is described in
+[agentic analysis](docs/development/agentic-analysis.md).
+
 ## Safety and external integrations
 
 External integrations are explicit, opt-in, bounded, and observable. Secrets
