@@ -125,6 +125,20 @@ describe('independent review gate contract', () => {
     expect(result.executionStatus).toBe('COMPLETED');
   });
 
+  it('preserves the structured maintainability guard result', () => {
+    const result = parseReviewResult(
+      JSON.stringify({
+        result: 'PASS',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'FOLLOW_UP_MAINTENANCE',
+      }),
+    );
+
+    expect(result.maintainability).toBe('FOLLOW_UP_MAINTENANCE');
+  });
+
   it('rejects an inconsistent PASS result', () => {
     const result = parseReviewResult(
       JSON.stringify({
@@ -216,6 +230,11 @@ describe('independent review gate contract', () => {
               secrets: true,
               documentationConsistency: true,
               unfinishedWork: true,
+            },
+            maintainability: {
+              result: 'NO_DRIFT',
+              findings: [],
+              followUpCandidates: [],
             },
           },
           changes: [{ path: 'src/example.ts', reason: 'affected_location' }],
@@ -777,6 +796,21 @@ describe('independent review runner control flow', () => {
     expect(prompt).toContain('Human Decisions');
     expect(prompt).toContain('live or external');
     expect(prompt).toContain('direct pushes, merges');
+  });
+
+  it('requires the Maintainability Guard in reviewer and implementer prompts', () => {
+    const input = { cwd: '/repo', base: 'main', issue: '30' };
+    const issue = { title: 'Issue', body: 'Body', url: 'https://example.test/issues/30' };
+
+    expect(
+      buildReviewerPrompt(input, issue, ['npm run validate: passed'], 'feat/issue-30'),
+    ).toContain('Maintainability Guard');
+    expect(buildImplementerPrompt(input, issue, 'feat/issue-30')).toContain(
+      'FOLLOW_UP_MAINTENANCE',
+    );
+    expect(buildAutoFixPrompt(input, autoFixReview('deterministic finding'))).toContain(
+      'Maintainability Guard',
+    );
   });
 
   it('does not consume review accounting when pre-review validation fails', () => {

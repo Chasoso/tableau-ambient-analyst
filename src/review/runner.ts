@@ -19,6 +19,7 @@ import {
   findingClassificationsFor,
   maxAutoFixCycles,
   maxReviewInvocations,
+  maintainabilityResults,
   normalizedFindingCategory,
   parseReviewResult,
   repeatedRuleThreshold,
@@ -34,6 +35,7 @@ import {
   type ReviewCycleRecord,
   type ReviewFinding,
   type ReviewGateResult,
+  type MaintainabilityResult,
   type TerminationReason,
 } from './gate.js';
 
@@ -127,6 +129,13 @@ type ImplementerSelfReview = {
   completed: boolean;
   blockingIssues: string[];
   checks: Record<(typeof requiredSelfReviewChecks)[number], boolean>;
+  maintainability: MaintainabilityAssessment;
+};
+
+type MaintainabilityAssessment = {
+  result: MaintainabilityResult;
+  findings: string[];
+  followUpCandidates: string[];
 };
 
 type ImplementerReport = {
@@ -188,6 +197,12 @@ scope, service, credential, privacy, cost, irreversible-action, or recorded
 human-decision choice. BLOCKED means an execution prerequisite is unavailable.
 For a human escalation, explain what must be decided, why repository rules
 cannot decide it, viable options, and the recommendation in the finding.
+
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Return a top-level maintainability result: NO_DRIFT when no
+meaningful concern is found, LOCAL_CLEANUP when a deterministic in-scope cleanup
+is needed, or FOLLOW_UP_MAINTENANCE when a real concern needs separate
+follow-up. Do not block on style preference alone.
 `;
 }
 
@@ -371,6 +386,11 @@ for a sibling explicitly covered by the reviewer's generalized rule.
 required_supporting_change and required_doc_update are only for a
 mechanically necessary helper/configuration or documentation update.
 
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Do not turn this into a broad refactor or block on style
+preference. Report NO_DRIFT, LOCAL_CLEANUP, or FOLLOW_UP_MAINTENANCE with
+findings and follow-up candidates.
+
 Your final response must contain only this JSON object:
 {
   "selfReview": {
@@ -382,6 +402,11 @@ Your final response must contain only this JSON object:
       "secrets": true,
       "documentationConsistency": true,
       "unfinishedWork": true
+    },
+    "maintainability": {
+      "result": "NO_DRIFT",
+      "findings": [],
+      "followUpCandidates": []
     }
   },
   "changes": [
@@ -512,6 +537,8 @@ function parseImplementerReport(output: string): ImplementerReport | string {
   ) {
     return 'Issue implementer self-review did not verify every required check.';
   }
+  const maintainability = parseMaintainabilityAssessment(selfReview.maintainability);
+  if (typeof maintainability === 'string') return maintainability;
   if (!Array.isArray(parsed.changes) || parsed.changes.length === 0) {
     return 'Issue implementer did not report bounded change reasons.';
   }
@@ -533,7 +560,29 @@ function parseImplementerReport(output: string): ImplementerReport | string {
   if (new Set(changes.map((change) => change.path)).size !== changes.length) {
     return 'Issue implementer reported duplicate bounded change paths.';
   }
-  return { selfReview: selfReview as ImplementerSelfReview, changes };
+  return {
+    selfReview: { ...(selfReview as ImplementerSelfReview), maintainability },
+    changes,
+  };
+}
+
+function parseMaintainabilityAssessment(value: unknown): MaintainabilityAssessment | string {
+  if (!isRecord(value)) return 'Issue implementer did not complete the Maintainability Guard.';
+  if (
+    typeof value.result !== 'string' ||
+    !maintainabilityResults.includes(value.result as MaintainabilityResult) ||
+    !Array.isArray(value.findings) ||
+    value.findings.some((finding) => typeof finding !== 'string') ||
+    !Array.isArray(value.followUpCandidates) ||
+    value.followUpCandidates.some((candidate) => typeof candidate !== 'string')
+  ) {
+    return 'Issue implementer returned an invalid Maintainability Guard assessment.';
+  }
+  return {
+    result: value.result as MaintainabilityResult,
+    findings: value.findings as string[],
+    followUpCandidates: value.followUpCandidates as string[],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -872,6 +921,10 @@ ${JSON.stringify(review.blockingFindings, null, 2)}
 After editing, leave the working tree with only the in-scope AUTO_FIX changes.
 Perform a complete self-review before returning. Return only this JSON object,
 including every changed file exactly once with its bounded reason:
+Also perform the Maintainability Guard on the changed diff and directly related
+implementation. Do not broaden the fix into a refactor or block on style
+preference; report NO_DRIFT, LOCAL_CLEANUP, or FOLLOW_UP_MAINTENANCE with
+findings and follow-up candidates.
 {
   "selfReview": {
     "completed": true,
@@ -882,6 +935,11 @@ including every changed file exactly once with its bounded reason:
       "secrets": true,
       "documentationConsistency": true,
       "unfinishedWork": true
+    },
+    "maintainability": {
+      "result": "NO_DRIFT",
+      "findings": [],
+      "followUpCandidates": []
     }
   },
   "changes": [

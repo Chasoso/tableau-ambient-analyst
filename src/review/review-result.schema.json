@@ -2,7 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["result", "blockingFindings", "nonBlockingFindings", "escalationRequired"],
+  "required": [
+    "result",
+    "blockingFindings",
+    "nonBlockingFindings",
+    "escalationRequired",
+    "maintainability"
+  ],
   "properties": {
     "result": {
       "type": "string",
@@ -16,16 +22,30 @@
       "type": "array",
       "items": { "$ref": "#/$defs/nonBlockingFinding" }
     },
-    "escalationRequired": { "type": "boolean" }
+    "escalationRequired": { "type": "boolean" },
+    "maintainability": {
+      "type": "string",
+      "enum": ["NO_DRIFT", "LOCAL_CLEANUP", "FOLLOW_UP_MAINTENANCE"]
+    }
   },
   "$defs": {
     "blockingFinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
+      "required": [
+        "severity",
+        "classification",
+        "finding",
+        "generalized_rule",
+        "affected_locations",
+        "recommended_fix"
+      ],
       "properties": {
         "severity": { "type": "string", "enum": ["blocking"] },
-        "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
+        "classification": {
+          "type": "string",
+          "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"]
+        },
         "finding": { "type": "string" },
         "generalized_rule": { "type": "string" },
         "affected_locations": { "type": "array", "items": { "type": "string" } },
@@ -35,10 +55,20 @@
     "nonBlockingFinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["severity", "classification", "finding", "generalized_rule", "affected_locations", "recommended_fix"],
+      "required": [
+        "severity",
+        "classification",
+        "finding",
+        "generalized_rule",
+        "affected_locations",
+        "recommended_fix"
+      ],
       "properties": {
         "severity": { "type": "string", "enum": ["non-blocking"] },
-        "classification": { "type": "string", "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"] },
+        "classification": {
+          "type": "string",
+          "enum": ["AUTO_FIX", "HUMAN_DECISION_REQUIRED", "BLOCKED"]
+        },
         "finding": { "type": "string" },
         "generalized_rule": { "type": "string" },
         "affected_locations": { "type": "array", "items": { "type": "string" } },
