@@ -235,6 +235,14 @@ describe('application-layer agentic analysis', () => {
     await expect(
       runAgenticTableauAnalysis(contract, malformedToolModel, toolsFor(null)),
     ).rejects.toThrow('MALFORMED_TOOL_RESULT');
+
+    await expect(
+      runAgenticTableauAnalysis(
+        contract,
+        malformedToolModel,
+        toolsFor({} as ModelVisibleMcpEvidence),
+      ),
+    ).rejects.toThrow('MALFORMED_TOOL_RESULT');
   });
 
   it('maps known missing required question IDs and rejects unknown IDs', async () => {

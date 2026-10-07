@@ -4,6 +4,7 @@ import { buildFunctionCallOutput, canContinueWithToolCalls } from '../spike/open
 import {
   openAiStdioTools,
   stdioMaxToolCalls,
+  stdioDatasourceLuid,
   stdioToolNames,
 } from '../spike/stdio-bridge-policy.js';
 import {
@@ -109,10 +110,11 @@ function approvedToolsAvailable(toolNames: readonly unknown[]): boolean {
   return required.every((name) => toolNames.includes(name));
 }
 
-function serializeModelEvidence(value: unknown): string {
+function serializeModelEvidence(value: unknown): ModelVisibleMcpEvidence {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('MALFORMED_TOOL_RESULT');
   }
+  const record = value as Record<string, unknown>;
   let serialized: string;
   try {
     serialized = JSON.stringify(value);
@@ -122,7 +124,69 @@ function serializeModelEvidence(value: unknown): string {
   if (serialized.length === 0 || serialized.length > 200_000) {
     throw new Error('MALFORMED_TOOL_RESULT');
   }
-  return serialized;
+  if (record.tool === 'list_datasources') {
+    if (
+      record.datasourceLuid !== stdioDatasourceLuid ||
+      !Array.isArray(record.datasources) ||
+      record.datasources.length === 0 ||
+      record.datasources.some(
+        (item) =>
+          !isRecord(item) ||
+          item.datasourceLuid !== stdioDatasourceLuid ||
+          typeof item.name !== 'string' ||
+          item.name.length === 0,
+      )
+    ) {
+      throw new Error('MALFORMED_TOOL_RESULT');
+    }
+    return value as ModelVisibleMcpEvidence;
+  }
+  if (record.tool === 'get_datasource_metadata') {
+    if (
+      record.datasourceLuid !== stdioDatasourceLuid ||
+      !Array.isArray(record.fieldCaptions) ||
+      record.fieldCaptions.length === 0 ||
+      record.fieldCaptions.some(
+        (caption) => typeof caption !== 'string' || caption.length === 0 || caption.length > 256,
+      )
+    ) {
+      throw new Error('MALFORMED_TOOL_RESULT');
+    }
+    return value as ModelVisibleMcpEvidence;
+  }
+  if (record.tool === 'query_datasource') {
+    if (
+      record.datasourceLuid !== stdioDatasourceLuid ||
+      !Array.isArray(record.rows) ||
+      record.rows.length > 100 ||
+      record.rows.some(
+        (row) =>
+          !isRecord(row) ||
+          Object.keys(row).length === 0 ||
+          Object.values(row).some(
+            (cell) =>
+              cell !== null &&
+              typeof cell !== 'string' &&
+              typeof cell !== 'number' &&
+              typeof cell !== 'boolean',
+          ),
+      )
+    ) {
+      throw new Error('MALFORMED_TOOL_RESULT');
+    }
+    return value as ModelVisibleMcpEvidence;
+  }
+  if (
+    record.status === 'tool_error' &&
+    (record.category === 'query_error' || record.category === 'tool_error') &&
+    typeof record.message === 'string' &&
+    record.message.length > 0 &&
+    record.message.length <= 8_000 &&
+    record.recoverable === true
+  ) {
+    return value as ModelVisibleMcpEvidence;
+  }
+  throw new Error('MALFORMED_TOOL_RESULT');
 }
 
 function callArguments(call: ResponseItem): {
@@ -240,15 +304,15 @@ export async function runAgenticTableauAnalysis(
           argumentsValue,
           budget.remainingWallClockMs(),
         );
-        serializeModelEvidence(executed.modelEvidence);
+        const evidence = serializeModelEvidence(executed.modelEvidence);
         calls.push(executed.summary);
         normalizedEvidence.push({
           sequence: normalizedEvidence.length + 1,
           toolName,
-          evidence: executed.modelEvidence,
+          evidence,
           summary: executed.summary,
         });
-        outputs.push(buildFunctionCallOutput(callId, executed.modelEvidence));
+        outputs.push(buildFunctionCallOutput(callId, evidence));
       }
 
       if (typeof response.id !== 'string' || response.id.length === 0) {
