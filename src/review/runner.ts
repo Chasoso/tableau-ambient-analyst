@@ -1779,6 +1779,7 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
   const allowedKeys = new Set([
     'reviewInvocation',
     'result',
+    'maintainability',
     'classifications',
     'generalizedRules',
     'findingIdentities',
@@ -1796,6 +1797,9 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
     (record.reviewInvocation as number) <= maxReviewInvocations &&
     typeof record.result === 'string' &&
     reviewResults.includes(record.result as (typeof reviewResults)[number]) &&
+    (record.maintainability === undefined ||
+      (typeof record.maintainability === 'string' &&
+        maintainabilityResults.includes(record.maintainability as MaintainabilityResult))) &&
     Array.isArray(record.classifications) &&
     record.classifications.every(
       (classification) =>
@@ -1927,6 +1931,9 @@ function recordReviewAccounting(
     const currentCycle: ReviewCycleRecord = {
       reviewInvocation: accounting.reviewInvocationCount,
       result: review.result,
+      // Internal failure/fixture results predate the guard field; persisted
+      // review invocations always carry an explicit status for auditability.
+      maintainability: review.maintainability ?? 'NO_DRIFT',
       classifications: findingClassificationsFor(findings),
       generalizedRules: rules,
       findingIdentities,

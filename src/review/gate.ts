@@ -40,6 +40,7 @@ export type TerminationReason = (typeof terminationReasons)[number];
 export type ReviewCycleRecord = {
   reviewInvocation: number;
   result: ReviewResultName;
+  maintainability: MaintainabilityResult;
   classifications: FindingClassification[];
   generalizedRules: string[];
   findingIdentities?: string[];

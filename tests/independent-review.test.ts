@@ -501,6 +501,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: accounting.reviewInvocationCount + 1,
               result: review.result,
+              maintainability: review.maintainability ?? 'NO_DRIFT',
               classifications: [],
               generalizedRules: rules,
               findingIdentities,
@@ -1085,6 +1086,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: 1,
               result: 'CHANGES_REQUIRED',
+              maintainability: 'NO_DRIFT',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
               repositoryChanged: false,
@@ -1092,6 +1094,7 @@ describe('independent review runner control flow', () => {
             {
               reviewInvocation: 2,
               result: 'CHANGES_REQUIRED',
+              maintainability: 'NO_DRIFT',
               classifications: ['AUTO_FIX'],
               generalizedRules: ['same concrete issue'],
               repositoryChanged: false,
