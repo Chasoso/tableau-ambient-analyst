@@ -1,0 +1,56 @@
+[
+  {
+    "id": "casual-statement",
+    "utterances": [
+      { "sequence": 0, "speaker": "Aki", "text": "Let's grab coffee after this meeting." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "numerical-claim",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "The conversion rate is 42% this quarter." }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
+  },
+  {
+    "id": "causal-hypothesis",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The conversion rate increased because the new onboarding flow reduced drop-off."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "causal-hypothesis" }
+  },
+  {
+    "id": "assumption-based-decision",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Morgan",
+        "text": "We should launch next week based on the assumption that demand will stay high."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "assumption-based-decision" }
+  },
+  {
+    "id": "factual-disagreement",
+    "utterances": [
+      {
+        "sequence": 0,
+        "speaker": "Aki",
+        "text": "The data says 80, but the report says 120."
+      }
+    ],
+    "expected": { "decision": "ANALYZE", "reason": "factual-disagreement" }
+  },
+  {
+    "id": "ambiguous-time-statement",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "The meeting starts at 10." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  }
+]

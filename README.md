@@ -148,6 +148,9 @@ validation layers and evidence rules.
 The deterministic transcript replay contract and example fixture are described
 in [transcript replay](docs/development/transcript-replay.md).
 
+The initial deterministic trigger boundary is described in
+[trigger detector](docs/development/trigger-detector.md).
+
 ## Safety and external integrations
 
 External integrations are explicit, opt-in, bounded, and observable. Secrets
