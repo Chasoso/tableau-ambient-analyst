@@ -22,6 +22,7 @@ import {
   type StructuredOutcome,
 } from '../spike/response-telemetry.js';
 import { structuredOutcomeTextFormat } from '../spike/openai-mcp-request.js';
+import { verifyEvidence, type EvidenceVerificationResult } from './evidence-verifier.js';
 
 type ResponseItem = {
   type?: unknown;
@@ -64,6 +65,7 @@ export type AgenticAnalysisResult = {
   contract: AnalysisContract;
   finalAnswer: string;
   structuredOutcome: StructuredOutcome;
+  evidenceVerification: EvidenceVerificationResult;
   modelReportedMissingEvidenceQuestionIds: readonly string[];
   normalizedEvidence: readonly AgenticEvidenceRecord[];
   toolCalls: readonly StdioCallSummary[];
@@ -294,6 +296,7 @@ export async function runAgenticTableauAnalysis(
           contract: validatedContract,
           finalAnswer: truncateFinalAnswer(completeFinalAnswer),
           structuredOutcome,
+          evidenceVerification: verifyEvidence(validatedContract, []),
           modelReportedMissingEvidenceQuestionIds: validateModelReportedMissingEvidence(
             validatedContract,
             structuredOutcome,

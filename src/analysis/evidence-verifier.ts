@@ -1,4 +1,5 @@
 import type { AnalysisContract } from './contract.js';
+import type { AgenticEvidenceRecord } from './agentic-analysis.js';
 import { stdioDatasourceLuid } from '../spike/stdio-bridge-policy.js';
 
 const tableauToolNames = new Set([
@@ -47,6 +48,13 @@ export type EvidenceVerificationResult = {
   questionStatus: readonly EvidenceQuestionStatus[];
   unresolvedRequiredEvidence: readonly string[];
   reasons: readonly string[];
+};
+
+export type AgenticEvidenceMapping = {
+  sequence: number;
+  questionId: string;
+  status: EvidenceStatus;
+  observation: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -173,4 +181,29 @@ export function verifyEvidence(
     unresolvedRequiredEvidence,
     reasons,
   };
+}
+
+/** Converts records only after an explicit sequence-to-question mapping. */
+export function evidenceFromAgenticRecords(
+  records: readonly AgenticEvidenceRecord[],
+  mappings: readonly AgenticEvidenceMapping[],
+): readonly Evidence[] {
+  const recordsBySequence = new Map(records.map((record) => [record.sequence, record]));
+  return mappings.map((mapping) => {
+    const record = recordsBySequence.get(mapping.sequence);
+    if (record === undefined || !('tool' in record.evidence)) {
+      throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
+    }
+    return {
+      questionId: mapping.questionId,
+      status: mapping.status,
+      observation: mapping.observation,
+      provenance: {
+        kind: 'tableau' as const,
+        sequence: record.sequence,
+        toolName: record.toolName,
+        datasourceLuid: record.evidence.datasourceLuid,
+      },
+    };
+  });
 }

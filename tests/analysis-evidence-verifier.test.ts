@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisContract } from '../src/analysis/contract.js';
-import { verifyEvidence } from '../src/analysis/evidence-verifier.js';
+import type { AgenticEvidenceRecord } from '../src/analysis/agentic-analysis.js';
+import { evidenceFromAgenticRecords, verifyEvidence } from '../src/analysis/evidence-verifier.js';
 import { stdioDatasourceLuid } from '../src/spike/stdio-bridge-policy.js';
 
 const contract: AnalysisContract = {
@@ -107,5 +108,36 @@ describe('analysis evidence verifier', () => {
     expect(conflicting.reasons).toContain(
       'conflicting evidence for required question assumption-support',
     );
+  });
+
+  it('requires explicit question mapping before agentic records become Evidence', () => {
+    const records: AgenticEvidenceRecord[] = [
+      {
+        sequence: 1,
+        toolName: 'query_datasource',
+        evidence: {
+          tool: 'query_datasource' as const,
+          datasourceLuid: stdioDatasourceLuid,
+          rows: [{ value: 120 }],
+        },
+        summary: {} as never,
+      },
+    ];
+    const evidence = evidenceFromAgenticRecords(records, [
+      {
+        sequence: 1,
+        questionId: 'assumption-support',
+        status: 'supported',
+        observation: 'The Tableau value supports the assumption.',
+      },
+      {
+        sequence: 1,
+        questionId: 'launch-timing',
+        status: 'contradicted',
+        observation: 'The Tableau value contradicts the timing.',
+      },
+    ]);
+
+    expect(verifyEvidence(contract, evidence).completion).toBe('COMPLETE');
   });
 });
