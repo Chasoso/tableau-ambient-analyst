@@ -38,6 +38,13 @@ import {
   type MaintainabilityResult,
   type TerminationReason,
 } from './gate.js';
+import {
+  runCiFeedbackLoop,
+  type CiFeedbackDependencies,
+  type CiGateResult,
+  type CiObservation,
+  type CiRepairOutcome,
+} from './ci-feedback.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
@@ -115,6 +122,8 @@ export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixRe
 export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
   implementationMaintainability?: MaintainabilityAssessment;
+  completionStatus?: CiGateResult['status'];
+  ci?: CiGateResult;
 };
 
 type PullRequestCreationResult = { ok: true; url: string } | { ok: false; error: string };
@@ -296,10 +305,13 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   if (!pullRequestUrl.ok) {
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
+  const ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url);
   return {
     ...review,
     implementationMaintainability: implementationResult,
     pullRequestUrl: pullRequestUrl.url,
+    completionStatus: ci.status,
+    ci,
   };
 }
 
@@ -633,6 +645,215 @@ export function pushAndCreatePullRequest(
   } catch {
     return { ok: false, error: 'Branch push or pull request creation failed.' };
   }
+}
+
+function commandOutputError(error: unknown): string {
+  if (!isRecord(error)) return '';
+  const output = error.stdout ?? error.stderr;
+  return typeof output === 'string'
+    ? output
+    : output instanceof Buffer
+      ? output.toString('utf8')
+      : '';
+}
+
+export function observePullRequestCi(
+  cwd: string,
+  pullRequestUrl: string,
+  branch: string,
+): CiObservation {
+  const rawChecks = (() => {
+    try {
+      return execFileSync(
+        'gh',
+        ['pr', 'checks', pullRequestUrl, '--required', '--json', 'name,state,bucket,link'],
+        { cwd, encoding: 'utf8' },
+      );
+    } catch (error) {
+      return commandOutputError(error);
+    }
+  })();
+
+  const checks: CiObservation['checks'] = (() => {
+    try {
+      const parsed = JSON.parse(rawChecks) as Array<Record<string, unknown>>;
+      return parsed.map((check) => ({
+        name: typeof check.name === 'string' ? check.name : 'unknown-check',
+        state:
+          check.bucket === 'pass'
+            ? 'SUCCESS'
+            : check.bucket === 'fail' || check.bucket === 'cancel'
+              ? check.bucket === 'cancel'
+                ? 'CANCELLED'
+                : 'FAILURE'
+              : 'PENDING',
+        ...(typeof check.link === 'string' ? { link: check.link } : {}),
+      }));
+    } catch {
+      return [];
+    }
+  })();
+
+  let runId: string | undefined;
+  let logs = '';
+  try {
+    const runs = JSON.parse(
+      execFileSync(
+        'gh',
+        [
+          'run',
+          'list',
+          '--branch',
+          branch,
+          '--limit',
+          '5',
+          '--json',
+          'databaseId,status,conclusion',
+        ],
+        { cwd, encoding: 'utf8' },
+      ),
+    ) as Array<Record<string, unknown>>;
+    const failedRun = runs.find(
+      (run) => run.conclusion === 'failure' || run.conclusion === 'cancelled',
+    );
+    if (failedRun && typeof failedRun.databaseId === 'number') {
+      runId = String(failedRun.databaseId);
+      try {
+        logs = execFileSync('gh', ['run', 'view', runId, '--log-failed'], {
+          cwd,
+          encoding: 'utf8',
+        });
+      } catch (error) {
+        logs = commandOutputError(error);
+      }
+    }
+  } catch {
+    // The check output remains the primary evidence; missing logs are reported.
+  }
+
+  const evidence = `${rawChecks}\n${logs}`.trim();
+  return {
+    checks,
+    evidence,
+    transient:
+      /(runner unavailable|service unavailable|github outage|internal server error|rate limit)/i.test(
+        evidence,
+      ),
+    ...(runId ? { runId } : {}),
+  };
+}
+
+function waitForCiPoll(): void {
+  execFileSync('sleep', ['10'], { encoding: 'utf8' });
+}
+
+function rerunTransientCi(cwd: string, observation: CiObservation): boolean {
+  if (!observation.runId) return false;
+  try {
+    execFileSync('gh', ['run', 'rerun', observation.runId], { cwd, encoding: 'utf8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyCodexCiFix(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  branch: string,
+  observation: CiObservation,
+): CiRepairOutcome {
+  const beforeHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+  }).trim();
+  const prompt = `${untrustedIssueBoundary}
+
+Repository: Chasoso/tableau-ambient-analyst
+Issue: #${input.issue}
+Branch: ${branch}
+
+Issue title: ${issue.title}
+Issue URL: ${issue.url}
+
+<issue-body>
+${issue.body}
+</issue-body>
+
+The pushed PR has a deterministic GitHub Actions failure. Inspect the failed
+check/job/step evidence below and apply only the repository-determined fix.
+Do not change product, architecture, credentials, security policy, branch
+protection, live/external-operation policy, or merge policy. Do not merely
+rerun the failed workflow. Do not use --no-verify or commit unrelated changes.
+
+CI evidence:
+${observation.evidence}
+
+Run the complete self-review and report bounded changed-file reasons using the
+same JSON contract as the Issue implementer, including the Maintainability
+Guard. Return only that JSON object.
+`;
+  const processResult = spawnSync(
+    'codex',
+    ['exec', '--ephemeral', '--sandbox', 'workspace-write', '--json'],
+    {
+      cwd: input.cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      input: prompt,
+      maxBuffer: 1024 * 1024,
+      timeout: reviewerTimeoutMs,
+    },
+  );
+  if (processResult.status !== 0 || processResult.error || processResult.signal) {
+    return { changed: false, validated: false, pushed: false };
+  }
+  const report = parseImplementerReport(processResult.stdout);
+  if (typeof report === 'string') return { changed: false, validated: false, pushed: false };
+  try {
+    if (currentBranch(input.cwd) !== branch) throw new Error('branch changed');
+    if (
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: input.cwd, encoding: 'utf8' }).trim() !==
+      beforeHead
+    ) {
+      throw new Error('commit changed before validation');
+    }
+    const changeError = validateImplementerChanges(input.cwd, input.base, report.changes);
+    if (changeError) throw new Error(changeError);
+    if (!runDeterministicValidation(input.cwd).passed) {
+      throw new Error('local validation failed');
+    }
+    const paths = report.changes.map((change) => change.path);
+    execFileSync('git', ['add', '--', ...paths], { cwd: input.cwd, encoding: 'utf8' });
+    execFileSync('git', ['commit', '-m', 'fix: repair CI failure'], {
+      cwd: input.cwd,
+      encoding: 'utf8',
+    });
+    execFileSync('git', ['push', 'origin', branch], { cwd: input.cwd, encoding: 'utf8' });
+    return { changed: true, validated: true, pushed: true };
+  } catch {
+    return { changed: false, validated: false, pushed: false };
+  }
+}
+
+export function waitForPullRequestCi(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  branch: string,
+  pullRequestUrl: string,
+): CiGateResult {
+  let latestObservation: CiObservation | undefined;
+  const dependencies: CiFeedbackDependencies = {
+    observe: () => {
+      latestObservation = observePullRequestCi(input.cwd, pullRequestUrl, branch);
+      return latestObservation;
+    },
+    wait: waitForCiPoll,
+    rerunTransient: () =>
+      latestObservation ? rerunTransientCi(input.cwd, latestObservation) : false,
+    repair: (observation) => applyCodexCiFix(input, issue, branch, observation),
+  };
+  return runCiFeedbackLoop(dependencies);
 }
 
 export function runReviewControlFlow(
