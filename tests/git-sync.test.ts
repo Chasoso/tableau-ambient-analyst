@@ -57,6 +57,18 @@ describe('local main synchronization', () => {
     }
   });
 
+  it('switches from a clean feature branch to main before synchronizing', () => {
+    const { local, root } = fixture();
+    try {
+      git(local, ['switch', '-q', '-c', 'previous-feature']);
+
+      expect(synchronizeLocalBase(local)).toMatchObject({ status: 'UP_TO_DATE' });
+      expect(git(local, ['branch', '--show-current']).trim()).toBe('main');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fast-forwards local main when origin/main is ahead', () => {
     const { local, remote, root } = fixture();
     try {
@@ -105,6 +117,19 @@ describe('local main synchronization', () => {
     try {
       writeFileSync(join(local, 'uncommitted.txt'), 'dirty\n');
       expect(synchronizeLocalBase(local)).toMatchObject({ status: 'BLOCKED' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a dirty feature branch blocked without switching to main', () => {
+    const { local, root } = fixture();
+    try {
+      git(local, ['switch', '-q', '-c', 'previous-feature']);
+      writeFileSync(join(local, 'uncommitted.txt'), 'dirty\n');
+
+      expect(synchronizeLocalBase(local)).toMatchObject({ status: 'BLOCKED' });
+      expect(git(local, ['branch', '--show-current']).trim()).toBe('previous-feature');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

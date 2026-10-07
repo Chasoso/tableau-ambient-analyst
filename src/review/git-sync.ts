@@ -15,13 +15,28 @@ export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult
   }
 
   try {
-    if (
-      execFileSync('git', ['branch', '--show-current'], { cwd, encoding: 'utf8' }).trim() !== base
-    ) {
-      return { status: 'BLOCKED', reason: `Issue-to-PR workflow must start from ${base}.` };
-    }
     if (execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).trim()) {
       return { status: 'BLOCKED', reason: 'Issue-to-PR workflow requires a clean working tree.' };
+    }
+    const currentBranch = execFileSync('git', ['branch', '--show-current'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+    if (!currentBranch) {
+      return {
+        status: 'BLOCKED',
+        reason: 'Issue-to-PR workflow cannot start from a detached HEAD.',
+      };
+    }
+    if (currentBranch !== base) {
+      try {
+        execFileSync('git', ['switch', base], { cwd, encoding: 'utf8' });
+      } catch {
+        return {
+          status: 'BLOCKED',
+          reason: `Could not safely switch from ${currentBranch} to ${base}.`,
+        };
+      }
     }
     execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], { cwd, encoding: 'utf8' });
     execFileSync('git', ['fetch', 'origin', base], { cwd, encoding: 'utf8' });
