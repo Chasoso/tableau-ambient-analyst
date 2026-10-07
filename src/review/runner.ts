@@ -305,7 +305,7 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   if (!pullRequestUrl.ok) {
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
-  const ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url, () => {
+  let ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url, () => {
     const beforeReviewHead = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: input.cwd,
       encoding: 'utf8',
@@ -326,12 +326,26 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
       return false;
     }
   });
+  if (
+    ci.status === 'READY_FOR_HUMAN_REVIEW' &&
+    !addIssueClosingReference(input, issue, pullRequestUrl.url)
+  ) {
+    ci = {
+      ...ci,
+      status: 'CI_BLOCKED',
+      classification: 'BLOCKED',
+      reason: 'The pull request could not be updated with the Issue closing reference.',
+    };
+  }
   const ciGateResult =
     ci.status === 'READY_FOR_HUMAN_REVIEW'
       ? review
       : {
           ...review,
-          result: 'HUMAN_DECISION_REQUIRED' as const,
+          result:
+            ci.classification === 'HUMAN_DECISION_REQUIRED'
+              ? ('HUMAN_DECISION_REQUIRED' as const)
+              : ('CHANGES_REQUIRED' as const),
           blockingFindings: [
             ...review.blockingFindings,
             {
@@ -676,7 +690,7 @@ export function pushAndCreatePullRequest(
         '--title',
         issue.title,
         '--body',
-        `Closes #${input.issue}\n\nIssue: ${issue.url}`,
+        `Issue: ${issue.url}`,
       ],
       { cwd: input.cwd, encoding: 'utf8' },
     ).trim();
@@ -688,14 +702,30 @@ export function pushAndCreatePullRequest(
   }
 }
 
+function addIssueClosingReference(
+  input: IndependentReviewInput,
+  issue: IssueContext,
+  pullRequestUrl: string,
+): boolean {
+  try {
+    execFileSync(
+      'gh',
+      ['pr', 'edit', pullRequestUrl, '--body', `Closes #${input.issue}\n\nIssue: ${issue.url}`],
+      { cwd: input.cwd, encoding: 'utf8' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function commandOutputError(error: unknown): string {
   if (!isRecord(error)) return '';
-  const output = error.stdout ?? error.stderr;
-  return typeof output === 'string'
-    ? output
-    : output instanceof Buffer
-      ? output.toString('utf8')
-      : '';
+  for (const output of [error.stdout, error.stderr]) {
+    if (typeof output === 'string' && output.trim()) return output;
+    if (output instanceof Buffer && output.length > 0) return output.toString('utf8');
+  }
+  return '';
 }
 
 export function observePullRequestCi(

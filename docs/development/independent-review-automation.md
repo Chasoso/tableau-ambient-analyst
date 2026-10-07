@@ -103,9 +103,10 @@ The command builds the small runner, fetches the Issue body, requires a clean
 `main` checkout, creates a deterministic feature branch, and starts a fresh
 workspace-write Codex implementer. It validates and commits the implementation,
 then starts the bounded independent read-only review/fix loop. Only after a
-validated `PASS` does it push the feature branch and create a pull request with
-`Closes #<issue>`. It then waits for the required GitHub Actions checks and
-reports `READY_FOR_HUMAN_REVIEW` only after they pass. CI repair and transient
+validated `PASS` does it push the feature branch and create a pull request. It
+then waits for the required GitHub Actions checks, adds `Closes #<issue>` only
+after they pass, and reports `READY_FOR_HUMAN_REVIEW` only after that update
+succeeds. CI repair and transient
 reruns are bounded (three repair cycles, two transient reruns, and a bounded
 pending-check observation window). It never merges the pull request. The runner stores only a
 small branch/base accounting state in the local, untracked

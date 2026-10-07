@@ -240,6 +240,7 @@ export function runCiFeedbackLoop(
       return {
         ...decision,
         status: 'CI_REPAIR_LIMIT_REACHED',
+        classification: 'BLOCKED',
         reason: 'CI AUTO_FIX did not produce a validated pushed repository change.',
         state,
       };
