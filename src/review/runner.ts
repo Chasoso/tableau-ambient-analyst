@@ -46,6 +46,7 @@ import {
   type CiObservation,
   type CiRepairOutcome,
 } from './ci-feedback.js';
+import { synchronizeLocalBase } from './git-sync.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
@@ -374,26 +375,8 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
-  if (!/^[A-Za-z0-9._/-]+$/.test(base)) {
-    return 'Base branch name is invalid.';
-  }
-
-  try {
-    const branch = currentBranch(cwd);
-    const status = execFileSync('git', ['status', '--porcelain'], {
-      cwd,
-      encoding: 'utf8',
-    }).trim();
-    if (branch !== base) return `Issue-to-PR workflow must start from ${base}.`;
-    if (status) return 'Issue-to-PR workflow requires a clean working tree.';
-    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
-      cwd,
-      encoding: 'utf8',
-    });
-  } catch {
-    return 'Could not verify the clean base branch for Issue-to-PR workflow.';
-  }
-  return undefined;
+  const sync = synchronizeLocalBase(cwd, base);
+  return sync.status === 'BLOCKED' ? sync.reason : undefined;
 }
 
 function issueBranchName(issue: string, title: string): string {

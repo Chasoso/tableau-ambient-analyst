@@ -100,7 +100,9 @@ npm run review:independent -- \
 ```
 
 The command builds the small runner, fetches the Issue body, requires a clean
-`main` checkout, creates a deterministic feature branch, and starts a fresh
+working tree, switches from a previous feature branch to `main` when needed,
+then fetches `origin/main` and fast-forwards local `main` when safe before
+creating a deterministic feature branch and starting a fresh
 workspace-write Codex implementer. It validates and commits the implementation,
 then starts the bounded independent read-only review/fix loop. Only after a
 validated `PASS` does it push the feature branch and create a pull request. It

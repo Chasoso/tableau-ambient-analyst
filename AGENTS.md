@@ -21,8 +21,14 @@ Decision. Do not ask the user to repeat information already present in those
 sources.
 
 For each Issue, use one Issue, one feature branch, and one PR by default. The
-Issue body is the primary task specification; confirm scope, non-goals,
-acceptance criteria, related docs/ADRs, and validation before editing. The
+normal Issue-to-PR startup must begin with a clean working tree, switch from a
+previous feature branch to local `main` when needed, fetch `origin/main`, and
+fast-forward local `main` when possible before creating the feature branch.
+Ahead, diverged, dirty, or otherwise unsafe states are
+`BLOCKED`; never reset, force-push, discard commits, or resolve conflicts
+automatically. The Issue body is the primary task specification; confirm scope,
+non-goals, acceptance criteria, related docs/ADRs, and validation before editing.
+The
 required path is implementation, self-review, deterministic validation,
 independent review in a fresh context, bounded correction/review cycles, and
 PR creation only after the gate passes. `main` is never pushed directly,
