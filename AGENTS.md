@@ -20,6 +20,12 @@ policy, validation requirements, branch protections, or any explicit Human
 Decision. Do not ask the user to repeat information already present in those
 sources.
 
+The reusable execution procedure is
+[`.agents/skills/issue-to-pr/SKILL.md`](.agents/skills/issue-to-pr/SKILL.md).
+Load it for Issue-to-PR work, but keep this file and explicit Human Decisions
+authoritative; the Skill supplies only the reusable procedure and never
+overrides repository policy.
+
 For each Issue, use one Issue, one feature branch, and one PR by default. The
 normal Issue-to-PR startup must begin with a clean working tree, switch from a
 previous feature branch to local `main` when needed, fetch `origin/main`, and

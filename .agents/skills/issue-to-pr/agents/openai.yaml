@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue-to-PR"
+  short_description: "Run a repository-native Issue-to-PR workflow"
+  default_prompt: "Use the repository rules and issue specification to complete the bounded Issue-to-PR workflow."
