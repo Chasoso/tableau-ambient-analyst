@@ -79,6 +79,25 @@ describe('CI feedback control', () => {
     ).toBe('CI_HUMAN_DECISION_REQUIRED');
   });
 
+  it('fails closed for skipped and unknown required checks', () => {
+    for (const state of ['SKIPPED', 'UNKNOWN'] as const) {
+      const result = runCiFeedbackLoop({
+        observe: () => ({
+          checks: [{ name: 'validation', state }],
+          evidence: '',
+          transient: false,
+        }),
+        wait: () => undefined,
+        rerunTransient: () => false,
+        repair: () => ({ changed: true, validated: true, pushed: true }),
+      });
+
+      expect(result.status).toBe('CI_BLOCKED');
+      expect(result.classification).toBe('BLOCKED');
+      expect(result.state.repairCycles).toBe(0);
+    }
+  });
+
   it('bounds transient reruns and repair cycles', () => {
     const transient = failed('runner unavailable', true);
     expect(

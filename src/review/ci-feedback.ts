@@ -167,6 +167,17 @@ export function runCiFeedbackLoop(
         reason: 'Required GitHub Actions checks could not be observed.',
       };
     }
+    if (
+      observation.checks.some((check) => check.state === 'SKIPPED' || check.state === 'UNKNOWN')
+    ) {
+      return {
+        status: 'CI_BLOCKED',
+        observation,
+        state,
+        classification: 'BLOCKED',
+        reason: 'A required CI check was skipped or could not be normalized.',
+      };
+    }
     if (observation.checks.some((check) => check.state === 'PENDING')) {
       pendingPolls += 1;
       if (pendingPolls >= maxCiPendingPolls) {

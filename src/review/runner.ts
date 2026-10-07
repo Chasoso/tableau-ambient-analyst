@@ -726,18 +726,25 @@ export function observePullRequestCi(
   const checks: CiObservation['checks'] = (() => {
     try {
       const parsed = JSON.parse(rawChecks) as Array<Record<string, unknown>>;
-      return parsed.map((check) => ({
-        name: typeof check.name === 'string' ? check.name : 'unknown-check',
-        state:
+      return parsed.map((check) => {
+        const state =
           check.bucket === 'pass'
             ? 'SUCCESS'
-            : check.bucket === 'fail' || check.bucket === 'cancel'
-              ? check.bucket === 'cancel'
+            : check.bucket === 'fail'
+              ? 'FAILURE'
+              : check.bucket === 'cancel'
                 ? 'CANCELLED'
-                : 'FAILURE'
-              : 'PENDING',
-        ...(typeof check.link === 'string' ? { link: check.link } : {}),
-      }));
+                : check.bucket === 'skip' || check.bucket === 'skipping'
+                  ? 'SKIPPED'
+                  : check.bucket === 'pending'
+                    ? 'PENDING'
+                    : 'UNKNOWN';
+        return {
+          name: typeof check.name === 'string' ? check.name : 'unknown-check',
+          state,
+          ...(typeof check.link === 'string' ? { link: check.link } : {}),
+        };
+      });
     } catch {
       return [];
     }
