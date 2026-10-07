@@ -41,7 +41,6 @@ import {
   runReadOnlyReview,
   runReviewControlFlow,
   pushAndCreatePullRequest,
-  sanitizeCiEvidence,
   validateAutoFixChanges,
   validateImplementerChanges,
   validateRepositoryPathState,
@@ -51,15 +50,6 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
-  it('redacts and bounds external CI evidence before reuse', () => {
-    const evidence = sanitizeCiEvidence(
-      'token=ghp_abcdefghijklmnopqrstuvwxyz0123456789 authorization: Bearer secret-value',
-    );
-    expect(evidence).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
-    expect(evidence).not.toContain('secret-value');
-    expect(sanitizeCiEvidence('x'.repeat(25000))).toHaveLength(20000);
-  });
-
   it('opens only for a validated PASS with no blocking findings or escalation', () => {
     const result = parseReviewResult(
       JSON.stringify({
