@@ -1,4 +1,4 @@
-import type { AnalyzeOpportunity, TriggerReason } from '../trigger/detector.js';
+import type { AnalyzeOpportunity, TriggerContext, TriggerReason } from '../trigger/detector.js';
 
 export type AnalysisQuestion = {
   id: string;
@@ -7,6 +7,7 @@ export type AnalysisQuestion = {
 
 export type AnalysisContract = {
   claim: string;
+  context: readonly TriggerContext[];
   requiredEvidence: readonly AnalysisQuestion[];
   optionalEvidence: readonly AnalysisQuestion[];
   openQuestions: readonly AnalysisQuestion[];
@@ -43,19 +44,11 @@ const questionsByReason: Record<TriggerReason, readonly AnalysisQuestion[]> = {
       question:
         'What evidence supports or contradicts the proposed cause-and-outcome relationship?',
     },
-    {
-      id: 'alternative-explanations',
-      question: 'What relevant alternative explanation should be considered?',
-    },
   ],
   'assumption-based-decision': [
     {
-      id: 'decision-assumption',
-      question: 'Is the assumption underlying the decision supported by evidence?',
-    },
-    {
-      id: 'decision-consequence',
-      question: 'What outcome would the proposed decision produce under the supported assumption?',
+      id: 'decision-assumption-support',
+      question: 'Is the assumption underlying the decision supported or contradicted by evidence?',
     },
   ],
   'factual-disagreement': [
@@ -68,6 +61,18 @@ const questionsByReason: Record<TriggerReason, readonly AnalysisQuestion[]> = {
       question: 'What scope, definition, or time period explains the discrepancy?',
     },
   ],
+};
+
+const optionalQuestionsByReason: Record<TriggerReason, readonly AnalysisQuestion[]> = {
+  'numerical-claim': [],
+  'causal-hypothesis': [
+    {
+      id: 'alternative-explanations',
+      question: 'What relevant alternative explanation should be considered?',
+    },
+  ],
+  'assumption-based-decision': [],
+  'factual-disagreement': [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -103,12 +108,54 @@ function validateQuestionList(value: unknown, location: string): readonly Analys
   return value.map((question, index) => validateQuestion(question, `${location}[${index}]`));
 }
 
+function validateContext(value: unknown, location: string): TriggerContext {
+  if (!isRecord(value)) {
+    throw new AnalysisContractError(`${location} must be an object`);
+  }
+
+  const keys = Object.keys(value);
+  if (keys.some((key) => key !== 'sequence' && key !== 'speaker' && key !== 'text')) {
+    throw new AnalysisContractError(`${location} contains an unsupported field`);
+  }
+
+  const sequence = value.sequence;
+  const speaker = value.speaker;
+  const text = value.text;
+  if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new AnalysisContractError(`${location}.sequence must be a non-negative integer`);
+  }
+  if (typeof speaker !== 'string' || speaker.trim() === '') {
+    throw new AnalysisContractError(`${location}.speaker must be a non-empty string`);
+  }
+  if (typeof text !== 'string' || text.trim() === '') {
+    throw new AnalysisContractError(`${location}.text must be a non-empty string`);
+  }
+
+  return { sequence, speaker, text };
+}
+
+function validateContextList(value: unknown): readonly TriggerContext[] {
+  if (!Array.isArray(value)) {
+    throw new AnalysisContractError('context must be an array');
+  }
+  if (value.length === 0) {
+    throw new AnalysisContractError('context must contain at least one utterance');
+  }
+  return value.map((utterance, index) => validateContext(utterance, `context[${index}]`));
+}
+
 export function validateAnalysisContract(value: unknown): AnalysisContract {
   if (!isRecord(value)) {
     throw new AnalysisContractError('analysis contract must be an object');
   }
 
-  const expectedKeys = new Set(['claim', 'requiredEvidence', 'optionalEvidence', 'openQuestions']);
+  const expectedKeys = new Set([
+    'claim',
+    'context',
+    'requiredEvidence',
+    'optionalEvidence',
+    'openQuestions',
+  ]);
   if (Object.keys(value).some((key) => !expectedKeys.has(key))) {
     throw new AnalysisContractError('analysis contract contains an unsupported field');
   }
@@ -118,6 +165,7 @@ export function validateAnalysisContract(value: unknown): AnalysisContract {
     throw new AnalysisContractError('analysis contract.claim must be a non-empty string');
   }
 
+  const context = validateContextList(value.context);
   const requiredEvidence = validateQuestionList(value.requiredEvidence, 'requiredEvidence');
   const optionalEvidence = validateQuestionList(value.optionalEvidence, 'optionalEvidence');
   const openQuestions = validateQuestionList(value.openQuestions, 'openQuestions');
@@ -132,7 +180,7 @@ export function validateAnalysisContract(value: unknown): AnalysisContract {
     throw new AnalysisContractError('analysis contract question IDs must be unique');
   }
 
-  return { claim, requiredEvidence, optionalEvidence, openQuestions };
+  return { claim, context, requiredEvidence, optionalEvidence, openQuestions };
 }
 
 export function analysisContractFromOpportunity(opportunity: AnalyzeOpportunity): AnalysisContract {
@@ -146,8 +194,9 @@ export function analysisContractFromOpportunity(opportunity: AnalyzeOpportunity)
 
   return validateAnalysisContract({
     claim: opportunity.claim,
+    context: opportunity.context,
     requiredEvidence: questionsByReason[opportunity.reason],
-    optionalEvidence: [],
+    optionalEvidence: optionalQuestionsByReason[opportunity.reason],
     openQuestions: [],
   });
 }

@@ -4,9 +4,10 @@
   "$comment": "The runtime validator additionally requires question IDs to be unique across requiredEvidence, optionalEvidence, and openQuestions. JSON Schema cannot express that cross-array identity constraint without a more complex contract shape.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["claim", "requiredEvidence", "optionalEvidence", "openQuestions"],
+  "required": ["claim", "context", "requiredEvidence", "optionalEvidence", "openQuestions"],
   "properties": {
     "claim": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
+    "context": { "$ref": "#/$defs/context", "minItems": 1 },
     "requiredEvidence": { "$ref": "#/$defs/questions", "minItems": 1 },
     "optionalEvidence": { "$ref": "#/$defs/questions" },
     "openQuestions": { "$ref": "#/$defs/questions" }
@@ -21,6 +22,19 @@
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
           "question": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" }
+        }
+      }
+    },
+    "context": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "speaker", "text"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 0 },
+          "speaker": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
+          "text": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" }
         }
       }
     }
