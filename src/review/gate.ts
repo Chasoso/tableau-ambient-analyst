@@ -174,9 +174,7 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     escalationRequired,
     executionStatus: 'COMPLETED',
     executionPhase: 'REVIEW',
-    ...(maintainability === undefined
-      ? {}
-      : { maintainability: maintainability as MaintainabilityResult }),
+    maintainability: maintainability as MaintainabilityResult,
   };
 }
 
