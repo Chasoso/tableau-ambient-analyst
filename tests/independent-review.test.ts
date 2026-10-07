@@ -42,6 +42,7 @@ import {
   runReadOnlyReview,
   runReviewControlFlow,
   resolveActivePullRequest,
+  validateAdvancedPullRequestHead,
   observePullRequestCi,
   pushAndCreatePullRequest,
   validateAutoFixChanges,
@@ -109,9 +110,17 @@ describe('independent review gate contract', () => {
 
     expect(result.status).toBe('READY_FOR_HUMAN_REVIEW');
     expect(heads).toEqual(['new-head', 'new-head']);
+    expect(validateAdvancedPullRequestHead('old-head', 'new-head', 'new-head')).toBeUndefined();
   });
 
   it('fails closed for stale head and unavailable CI evidence', () => {
+    expect(validateAdvancedPullRequestHead('same-head', 'same-head', 'same-head')).toContain(
+      'did not advance',
+    );
+    expect(validateAdvancedPullRequestHead('old-head', 'new-head', 'old-head')).toContain(
+      'does not match',
+    );
+
     const stale = runPostPushCiGate({
       currentHead: () => 'new-head',
       observe: (expectedHeadSha) => ({

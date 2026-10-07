@@ -410,7 +410,15 @@ export function runExistingPullRequestUpdate(
     encoding: 'utf8',
   }).trim();
   const observedPullRequest = resolveActivePullRequest(input.cwd, pullRequestUrl);
-  if (typeof observedPullRequest === 'string' || observedPullRequest.headSha !== pushedHeadSha) {
+  const pushedHeadError =
+    typeof observedPullRequest === 'string'
+      ? observedPullRequest
+      : validateAdvancedPullRequestHead(
+          activePullRequest.headSha,
+          pushedHeadSha,
+          observedPullRequest.headSha,
+        );
+  if (pushedHeadError) {
     return {
       ...review,
       pullRequestUrl,
@@ -423,7 +431,7 @@ export function runExistingPullRequestUpdate(
           generalized_rule:
             'Repository-managed PR updates must observe checks for the exact pushed head.',
           affected_locations: [],
-          recommended_fix: 'Wait for the active pull request head to reflect the pushed commit.',
+          recommended_fix: pushedHeadError,
         },
       ],
       escalationRequired: true,
@@ -532,6 +540,20 @@ export function resolveActivePullRequest(
   } catch {
     return 'The active pull request could not be resolved reliably.';
   }
+}
+
+export function validateAdvancedPullRequestHead(
+  previousHeadSha: string,
+  pushedHeadSha: string,
+  observedHeadSha: string,
+): string | undefined {
+  if (pushedHeadSha === previousHeadSha) {
+    return 'The existing pull request head did not advance after the update push.';
+  }
+  if (observedHeadSha !== pushedHeadSha) {
+    return 'The active pull request head does not match the latest pushed commit.';
+  }
+  return undefined;
 }
 
 function validateIssueWorkflowScope(cwd: string, base: string): string | undefined {
