@@ -80,6 +80,13 @@
     "expected": { "decision": "IGNORE" }
   },
   {
+    "id": "non-analytical-assumption",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "I assume the meeting starts at 10." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
     "id": "japanese-numerical-claim",
     "utterances": [{ "sequence": 0, "speaker": "葵", "text": "今月の売上は42%増加しました。" }],
     "expected": { "decision": "ANALYZE", "reason": "numerical-claim" }
@@ -112,6 +119,18 @@
   {
     "id": "japanese-casual-statement",
     "utterances": [{ "sequence": 0, "speaker": "葵", "text": "このあとコーヒーに行きましょう。" }],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "casual-modal-statement",
+    "utterances": [
+      { "sequence": 0, "speaker": "Morgan", "text": "I think we should grab coffee." }
+    ],
+    "expected": { "decision": "IGNORE" }
+  },
+  {
+    "id": "casual-personal-number",
+    "utterances": [{ "sequence": 0, "speaker": "Morgan", "text": "I have 2 dogs." }],
     "expected": { "decision": "IGNORE" }
   }
 ]

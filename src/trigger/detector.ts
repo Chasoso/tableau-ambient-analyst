@@ -99,8 +99,8 @@ function reasonFor(
   const numericValues = [...contextText.matchAll(/\b\d+(?:[.,]\d+)?\b/g)].map(([value]) => value);
   const hasDistinctNumericValues = new Set(numericValues).size > 1;
   if (
-    (hasCurrentAnalyticalTerm || currentStrongCausal || currentCausalHypothesis) &&
-    (currentCausal || precedingCausal || currentCausalHypothesis)
+    currentStrongCausal ||
+    (hasCurrentAnalyticalTerm && (currentCausal || precedingCausal || currentCausalHypothesis))
   ) {
     return 'causal-hypothesis';
   }
@@ -117,8 +117,9 @@ function reasonFor(
   }
   if (
     currentNumericalValue &&
-    ((hasCurrentAnalyticalTerm && currentNumericalClaim) ||
-      (currentNumericalClaim && !temporalLanguage.test(text)))
+    hasCurrentAnalyticalTerm &&
+    currentNumericalClaim &&
+    !temporalLanguage.test(text)
   ) {
     return 'numerical-claim';
   }
