@@ -137,6 +137,7 @@ type ActivePullRequest = {
   base: string;
   headSha: string;
 };
+const targetRepository = 'Chasoso/tableau-ambient-analyst';
 
 const requiredSelfReviewChecks = [
   'scope',
@@ -501,7 +502,13 @@ export function resolveActivePullRequest(
   try {
     const parsed = JSON.parse(
       runCommand(
-        ['pr', 'view', pullRequestUrl, '--json', 'url,state,headRefName,baseRefName,headRefOid'],
+        [
+          'pr',
+          'view',
+          pullRequestUrl,
+          '--json',
+          'url,state,headRefName,baseRefName,headRefOid,headRepository',
+        ],
         cwd,
       ),
     ) as Record<string, unknown>;
@@ -510,9 +517,11 @@ export function resolveActivePullRequest(
       typeof parsed.url !== 'string' ||
       typeof parsed.headRefName !== 'string' ||
       typeof parsed.baseRefName !== 'string' ||
-      typeof parsed.headRefOid !== 'string'
+      typeof parsed.headRefOid !== 'string' ||
+      !isRecord(parsed.headRepository) ||
+      parsed.headRepository.nameWithOwner !== targetRepository
     ) {
-      return 'The active pull request could not be resolved as an open PR with a current head.';
+      return 'The active pull request is not an open PR in the target repository with a current head.';
     }
     return {
       url: parsed.url,
@@ -1176,13 +1185,14 @@ export function waitForPullRequestCi(
   reviewAfterRepair: () => boolean,
 ): CiGateResult {
   let latestObservation: CiObservation | undefined;
-  const dependencies: CiFeedbackDependencies = {
-    observe: () => {
-      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+  return runPostPushCiGate({
+    currentHead: () =>
+      execFileSync('git', ['rev-parse', 'HEAD'], {
         cwd: input.cwd,
         encoding: 'utf8',
-      }).trim();
-      latestObservation = observePullRequestCi(input.cwd, pullRequestUrl, headSha);
+      }).trim(),
+    observe: (expectedHeadSha) => {
+      latestObservation = observePullRequestCi(input.cwd, pullRequestUrl, expectedHeadSha);
       return latestObservation;
     },
     wait: waitForCiPoll,
@@ -1193,8 +1203,30 @@ export function waitForPullRequestCi(
       if (!outcome.changed || !outcome.validated || !outcome.pushed) return outcome;
       return { ...outcome, reviewPassed: reviewAfterRepair() };
     },
+  });
+}
+
+export type PostPushCiGateDependencies = {
+  currentHead: () => string;
+  observe: (expectedHeadSha: string) => CiObservation;
+  wait: () => void;
+  rerunTransient: () => boolean;
+  repair: (observation: CiObservation) => CiRepairOutcome;
+};
+
+/**
+ * Shared post-push gate. Reading the current head for every observation keeps
+ * CI evidence tied to the commit that is actually being handed off, including
+ * commits produced by a bounded repair/review cycle.
+ */
+export function runPostPushCiGate(dependencies: PostPushCiGateDependencies): CiGateResult {
+  const feedbackDependencies: CiFeedbackDependencies = {
+    observe: () => dependencies.observe(dependencies.currentHead()),
+    wait: dependencies.wait,
+    rerunTransient: dependencies.rerunTransient,
+    repair: dependencies.repair,
   };
-  return runCiFeedbackLoop(dependencies);
+  return runCiFeedbackLoop(feedbackDependencies);
 }
 
 export function runReviewControlFlow(

@@ -38,6 +38,7 @@ import {
   reserveReviewCycleAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
+  runPostPushCiGate,
   runReadOnlyReview,
   runReviewControlFlow,
   resolveActivePullRequest,
@@ -61,6 +62,7 @@ describe('independent review gate contract', () => {
           headRefName: 'feature/review',
           baseRefName: 'main',
           headRefOid: 'head-sha',
+          headRepository: { nameWithOwner: 'Chasoso/tableau-ambient-analyst' },
         }),
       ),
     ).toEqual({
@@ -74,6 +76,64 @@ describe('independent review gate contract', () => {
         JSON.stringify({ state: 'CLOSED' }),
       ),
     ).toContain('open PR');
+    expect(
+      resolveActivePullRequest('/repo', 'https://github.com/other/repo/pull/1', () =>
+        JSON.stringify({
+          url: 'https://github.com/other/repo/pull/1',
+          state: 'OPEN',
+          headRefName: 'feature/review',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+          headRepository: { nameWithOwner: 'other/repo' },
+        }),
+      ),
+    ).toContain('target repository');
+  });
+
+  it('gates an existing-PR update on the latest head from pending to PASS', () => {
+    const heads: string[] = [];
+    let observations = 0;
+    const result = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: (expectedHeadSha) => {
+        heads.push(expectedHeadSha);
+        observations += 1;
+        return observations === 1
+          ? { checks: [{ name: 'validation', state: 'PENDING' }], evidence: '', transient: false }
+          : { checks: [{ name: 'validation', state: 'SUCCESS' }], evidence: '', transient: false };
+      },
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+
+    expect(result.status).toBe('READY_FOR_HUMAN_REVIEW');
+    expect(heads).toEqual(['new-head', 'new-head']);
+  });
+
+  it('fails closed for stale head and unavailable CI evidence', () => {
+    const stale = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: (expectedHeadSha) => ({
+        checks: expectedHeadSha === 'old-head' ? [{ name: 'validation', state: 'SUCCESS' }] : [],
+        evidence: 'PR head SHA mismatch',
+        evidenceComplete: false,
+        transient: false,
+      }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(stale.status).toBe('CI_BLOCKED');
+
+    const unavailable = runPostPushCiGate({
+      currentHead: () => 'new-head',
+      observe: () => ({ checks: [], evidence: 'checks unavailable', transient: false }),
+      wait: () => undefined,
+      rerunTransient: () => false,
+      repair: () => ({ changed: false, validated: false, pushed: false }),
+    });
+    expect(unavailable.status).toBe('CI_BLOCKED');
   });
 
   it('observes CI against the exact head and preserves complete failure evidence', () => {
