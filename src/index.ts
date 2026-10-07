@@ -23,6 +23,14 @@ export {
   validateAnalysisContract,
 } from './analysis/contract.js';
 export type { AnalysisContract, AnalysisQuestion } from './analysis/contract.js';
+export { verifyEvidence } from './analysis/evidence-verifier.js';
+export type {
+  Evidence,
+  EvidenceProvenance,
+  EvidenceQuestionStatus,
+  EvidenceStatus,
+  EvidenceVerificationResult,
+} from './analysis/evidence-verifier.js';
 export {
   createOpenAiResponsesModel,
   runAgenticTableauAnalysis,
