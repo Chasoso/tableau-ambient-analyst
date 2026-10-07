@@ -19,5 +19,8 @@ be extended by a later, explicitly scoped capability.
 
 `validateAnalysisContract` rejects empty claims, missing required evidence,
 unknown fields, malformed question IDs, empty questions, and duplicate question
-IDs. It validates the completion boundary only; it does not verify evidence or
-call an external service.
+IDs across all three question groups. The JSON Schema mirrors the string and
+shape constraints; the cross-group ID uniqueness check is intentionally kept in
+the small runtime validator because it is a relationship between three arrays.
+It validates the completion boundary only; it does not verify evidence or call
+an external service.

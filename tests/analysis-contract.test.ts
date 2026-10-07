@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   analysisContractFromOpportunity,
   AnalysisContractError,
@@ -13,6 +14,20 @@ const opportunity = (reason: AnalyzeOpportunity['reason']): AnalyzeOpportunity =
 });
 
 describe('analysis contract', () => {
+  it('declares the same non-whitespace string boundary as the runtime validator', () => {
+    const schema = JSON.parse(
+      readFileSync(new URL('../src/analysis/contract.schema.json', import.meta.url), 'utf8'),
+    ) as {
+      properties: { claim: { pattern: string } };
+      $defs: { questions: { items: { properties: { question: { pattern: string } } } } };
+      $comment: string;
+    };
+
+    expect(schema.properties.claim.pattern).toBe('.*\\S.*');
+    expect(schema.$defs.questions.items.properties.question.pattern).toBe('.*\\S.*');
+    expect(schema.$comment).toContain('question IDs to be unique across');
+  });
+
   it.each([
     ['numerical-claim', 'claim-value'],
     ['causal-hypothesis', 'cause-outcome-relationship'],

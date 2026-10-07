@@ -1,11 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Analysis Contract",
+  "$comment": "The runtime validator additionally requires question IDs to be unique across requiredEvidence, optionalEvidence, and openQuestions. JSON Schema cannot express that cross-array identity constraint without a more complex contract shape.",
   "type": "object",
   "additionalProperties": false,
   "required": ["claim", "requiredEvidence", "optionalEvidence", "openQuestions"],
   "properties": {
-    "claim": { "type": "string", "minLength": 1 },
+    "claim": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
     "requiredEvidence": { "$ref": "#/$defs/questions", "minItems": 1 },
     "optionalEvidence": { "$ref": "#/$defs/questions" },
     "openQuestions": { "$ref": "#/$defs/questions" }
@@ -19,7 +20,7 @@
         "required": ["id", "question"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-          "question": { "type": "string", "minLength": 1 }
+          "question": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" }
         }
       }
     }
