@@ -55,6 +55,25 @@ export type CiFeedbackDependencies = {
   repair: (observation: CiObservation) => CiRepairOutcome;
 };
 
+export function sanitizeCiEvidence(evidence: string): string {
+  return evidence
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+      '[REDACTED PRIVATE KEY]',
+    )
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+    .replace(
+      /((?:api[_-]?key|access[_-]?key|secret|password|passwd|token|private[_-]?key|client[_-]?secret)\s*[:=]\s*["']?)[^\s"',;]+/gi,
+      '$1[REDACTED]',
+    )
+    .replace(/(gh[pso]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16})/g, '[REDACTED]')
+    .replace(
+      /\b(sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]+|AIza[0-9A-Za-z_-]{20,})\b/g,
+      '[REDACTED]',
+    )
+    .slice(0, 20000);
+}
+
 export function classifyCiFailure(evidence: string): CiFailureClassification {
   const normalized = evidence.toLowerCase();
   if (

@@ -40,6 +40,7 @@ import {
 } from './gate.js';
 import {
   runCiFeedbackLoop,
+  sanitizeCiEvidence,
   type CiFeedbackDependencies,
   type CiGateResult,
   type CiObservation,
@@ -1035,13 +1036,6 @@ function ciRepairReviewFromEvidence(
     nonBlockingFindings: [],
     escalationRequired: false,
   };
-}
-
-export function sanitizeCiEvidence(evidence: string): string {
-  return evidence
-    .replace(/(gh[pso]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16})/g, '[REDACTED]')
-    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
-    .slice(0, 20000);
 }
 
 export function waitForPullRequestCi(

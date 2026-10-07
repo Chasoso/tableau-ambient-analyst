@@ -6,6 +6,7 @@ import {
   maxCiRepairCycles,
   maxTransientCiReruns,
   runCiFeedbackLoop,
+  sanitizeCiEvidence,
   type CiObservation,
 } from '../src/review/ci-feedback.js';
 
@@ -21,6 +22,17 @@ describe('CI feedback control', () => {
     expect(classifyCiFailure('permission denied reading secret')).toBe('BLOCKED');
     expect(classifyCiFailure('architecture decision required')).toBe('HUMAN_DECISION_REQUIRED');
     expect(classifyCiFailure('dependency registry returned an unknown error')).toBe('BLOCKED');
+  });
+
+  it('redacts common credential formats and bounds CI evidence', () => {
+    const evidence = sanitizeCiEvidence(
+      'api_key=secret-value Authorization: Bearer bearer-value sk-1234567890abcdefghijkl xoxb-secret',
+    );
+    expect(evidence).not.toContain('secret-value');
+    expect(evidence).not.toContain('bearer-value');
+    expect(evidence).not.toContain('sk-1234567890abcdefghijkl');
+    expect(evidence).not.toContain('xoxb-secret');
+    expect(sanitizeCiEvidence('x'.repeat(25000))).toHaveLength(20000);
   });
 
   it('waits for checks and reaches READY_FOR_HUMAN_REVIEW after repair', () => {
