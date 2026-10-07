@@ -148,13 +148,18 @@ describe('application-layer agentic analysis', () => {
     };
     const tools = toolsFor();
 
-    const result = await runAgenticTableauAnalysis(contract, model, tools);
+    const result = await runAgenticTableauAnalysis(contract, model, tools, undefined, [
+      {
+        sequence: 1,
+        questionId: 'decision-assumption-support',
+        status: 'supported',
+        observation: 'The Tableau result supports the assumption.',
+      },
+    ]);
 
     expect(result.structuredOutcome.outcome).toBe('supported');
-    expect(result.evidenceVerification.completion).toBe('INSUFFICIENT');
-    expect(result.evidenceVerification.unresolvedRequiredEvidence).toEqual([
-      'decision-assumption-support',
-    ]);
+    expect(result.evidenceVerification.completion).toBe('COMPLETE');
+    expect(result.evidenceVerification.unresolvedRequiredEvidence).toEqual([]);
     expect(result.modelReportedMissingEvidenceQuestionIds).toEqual([]);
     expect(result.normalizedEvidence).toEqual([
       expect.objectContaining({

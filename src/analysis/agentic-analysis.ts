@@ -22,7 +22,12 @@ import {
   type StructuredOutcome,
 } from '../spike/response-telemetry.js';
 import { structuredOutcomeTextFormat } from '../spike/openai-mcp-request.js';
-import { verifyEvidence, type EvidenceVerificationResult } from './evidence-verifier.js';
+import {
+  evidenceFromAgenticRecords,
+  verifyEvidence,
+  type AgenticEvidenceMapping,
+  type EvidenceVerificationResult,
+} from './evidence-verifier.js';
 
 type ResponseItem = {
   type?: unknown;
@@ -255,6 +260,7 @@ export async function runAgenticTableauAnalysis(
   model: AgenticAnalysisModel,
   tools: AgenticAnalysisToolRunner,
   budget = new StdioRunBudget(),
+  evidenceMappings: readonly AgenticEvidenceMapping[] = [],
 ): Promise<AgenticAnalysisResult> {
   const validatedContract = validateAnalysisContract(contract);
   const calls: StdioCallSummary[] = [];
@@ -292,11 +298,27 @@ export async function runAgenticTableauAnalysis(
         const completeFinalAnswer = extractFinalAnswer(outputItems(response), response.output_text);
         const structuredOutcome = extractStructuredOutcome(completeFinalAnswer);
         if (structuredOutcome === null) throw new Error('ANALYSIS_STRUCTURED_OUTPUT_INVALID');
+        let evidenceVerification: EvidenceVerificationResult;
+        try {
+          evidenceVerification = verifyEvidence(
+            validatedContract,
+            evidenceFromAgenticRecords(normalizedEvidence, evidenceMappings),
+          );
+        } catch (error) {
+          evidenceVerification = verifyEvidence(validatedContract, [
+            {
+              questionId: '__invalid-evidence-mapping__',
+              status: 'unresolved',
+              provenance: { kind: 'unavailable', reason: 'Evidence mapping is invalid.' },
+              observation: error instanceof Error ? error.message : 'Evidence mapping is invalid.',
+            },
+          ]);
+        }
         return {
           contract: validatedContract,
           finalAnswer: truncateFinalAnswer(completeFinalAnswer),
           structuredOutcome,
-          evidenceVerification: verifyEvidence(validatedContract, []),
+          evidenceVerification,
           modelReportedMissingEvidenceQuestionIds: validateModelReportedMissingEvidence(
             validatedContract,
             structuredOutcome,
