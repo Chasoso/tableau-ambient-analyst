@@ -21,6 +21,7 @@ export type CiObservation = {
   checks: CiCheck[];
   evidence: string;
   transient: boolean;
+  evidenceComplete?: boolean;
   runId?: string;
 };
 
@@ -43,6 +44,7 @@ export type CiRepairOutcome = {
   changed: boolean;
   validated: boolean;
   pushed: boolean;
+  reviewPassed?: boolean;
 };
 
 export type CiFeedbackDependencies = {
@@ -81,6 +83,15 @@ export function failureSignature(observation: CiObservation): string {
 
 export function decideCiFailure(observation: CiObservation, state: CiRepairState): CiGateResult {
   const signature = failureSignature(observation);
+  if (observation.evidenceComplete === false) {
+    return {
+      status: 'CI_BLOCKED',
+      observation,
+      state,
+      classification: 'BLOCKED',
+      reason: 'Head-matched failed job, step, or log evidence was unavailable.',
+    };
+  }
   const repeatedWithoutProgress =
     Boolean(signature) && signature === state.lastFailureSignature && !state.meaningfulProgress;
   const nextState = signature ? { ...state, lastFailureSignature: signature } : { ...state };
@@ -190,6 +201,15 @@ export function runCiFeedbackLoop(
     }
 
     const outcome = dependencies.repair(observation);
+    if (outcome.reviewPassed === false) {
+      return {
+        ...decision,
+        status: 'CI_HUMAN_DECISION_REQUIRED',
+        classification: 'HUMAN_DECISION_REQUIRED',
+        reason: 'Fresh Independent Review did not PASS after the CI repair commit.',
+        state,
+      };
+    }
     if (!outcome.changed || !outcome.validated || !outcome.pushed) {
       return {
         ...decision,
