@@ -847,7 +847,7 @@ export function observePullRequestCi(
     // Missing run metadata is incomplete evidence and must fail closed.
   }
 
-  const evidence = `${rawChecks}\n${logs}`.trim();
+  const evidence = sanitizeCiEvidence(`${rawChecks}\n${logs}`.trim());
   const failedChecks = checks.some(
     (check) => check.state === 'FAILURE' || check.state === 'CANCELLED',
   );
@@ -967,7 +967,7 @@ Guard. Return only that JSON object.
     ) {
       throw new Error('CI repair changed files without matching bounded reasons');
     }
-    const repairReview = ciRepairReviewFromEvidence(observation);
+    const repairReview = ciRepairReviewFromEvidence(observation, input.cwd, input.base);
     const allowedPaths = autoFixAllowedPaths(repairReview, input.cwd, input.base);
     if (typeof allowedPaths === 'string' || !allowedPaths.length) {
       throw new Error('CI repair scope unavailable');
@@ -992,13 +992,34 @@ Guard. Return only that JSON object.
   }
 }
 
-function ciRepairReviewFromEvidence(observation: CiObservation): ReviewGateResult {
+function ciRepairReviewFromEvidence(
+  observation: CiObservation,
+  cwd: string,
+  base: string,
+): ReviewGateResult {
   const paths = [
     ...observation.evidence.matchAll(
       /(?:^|[\s("'`])((?:src|tests|docs|\.github)\/[A-Za-z0-9._/-]+|(?:AGENTS|package(?:-lock)?|tsconfig(?:\.build)?|eslint\.config)\.[A-Za-z0-9._-]+)/g,
     ),
-  ].map((match) => match[1]);
-  const uniquePaths = [...new Set(paths)];
+  ]
+    .map((match) => match[1])
+    .filter((path): path is string => Boolean(path));
+  let issueDiffPaths = new Set<string>();
+  try {
+    issueDiffPaths = new Set(
+      execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
+        cwd,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .map((path) => path.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+  } catch {
+    issueDiffPaths = new Set();
+  }
+  const scopedPaths = paths.filter((path) => issueDiffPaths.has(path));
+  const uniquePaths = [...new Set(scopedPaths)];
   return {
     result: 'CHANGES_REQUIRED',
     blockingFindings: [
@@ -1014,6 +1035,13 @@ function ciRepairReviewFromEvidence(observation: CiObservation): ReviewGateResul
     nonBlockingFindings: [],
     escalationRequired: false,
   };
+}
+
+export function sanitizeCiEvidence(evidence: string): string {
+  return evidence
+    .replace(/(gh[pso]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16})/g, '[REDACTED]')
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, '$1[REDACTED]')
+    .slice(0, 20000);
 }
 
 export function waitForPullRequestCi(
