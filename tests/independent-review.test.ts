@@ -20,6 +20,7 @@ import {
   maxReviewInvocations,
   maxReviewCycles,
   normalizedFindingCategory,
+  parseReviewResult,
   parseReviewResult as parseReviewResultContract,
   reviewCycleLimitExceeded,
   reviewerInvocationFailure,
@@ -48,19 +49,6 @@ import {
   type ReviewRunnerDependencies,
 } from '../src/review/runner.js';
 
-function parseReviewResult(raw: string) {
-  try {
-    const value = JSON.parse(raw) as Record<string, unknown>;
-    if (value && typeof value === 'object' && !('maintainability' in value)) {
-      value.maintainability = 'NO_DRIFT';
-      return parseReviewResultContract(JSON.stringify(value));
-    }
-  } catch {
-    // Let the production parser report malformed JSON.
-  }
-  return parseReviewResultContract(raw);
-}
-
 describe('independent review gate contract', () => {
   it('opens only for a validated PASS with no blocking findings or escalation', () => {
     const result = parseReviewResult(
@@ -69,6 +57,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: ['Optional cleanup'],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -85,6 +74,7 @@ describe('independent review gate contract', () => {
       blockingFindings: [],
       nonBlockingFindings: [],
       escalationRequired: false,
+      maintainability: 'NO_DRIFT' as const,
       ...status,
     };
 
@@ -98,6 +88,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Acceptance criterion is missing'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -113,6 +104,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Architecture choice needs human confirmation'],
         nonBlockingFindings: [],
         escalationRequired: true,
+        maintainability: 'NO_DRIFT',
       }),
     );
     const failedInvocation = reviewerInvocationFailure('process unavailable');
@@ -132,6 +124,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Finding'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -172,6 +165,7 @@ describe('independent review gate contract', () => {
         blockingFindings: ['Unexpected finding'],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
 
@@ -195,6 +189,7 @@ describe('independent review gate contract', () => {
           blockingFindings: [finding],
           nonBlockingFindings: [],
           escalationRequired: false,
+          maintainability: 'NO_DRIFT',
         }),
       ).executionStatus,
     ).toBe('FAILED');
@@ -206,6 +201,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: [{ ...humanFinding, severity: 'non-blocking' }],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(hiddenHuman.executionStatus).toBe('FAILED');
@@ -216,6 +212,7 @@ describe('independent review gate contract', () => {
         blockingFindings: [],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(hiddenResultEscalation.executionStatus).toBe('FAILED');
@@ -233,6 +230,7 @@ describe('independent review gate contract', () => {
             blockingFindings: [],
             nonBlockingFindings: [],
             escalationRequired: false,
+            maintainability: 'NO_DRIFT',
           }),
         },
       }),
@@ -374,6 +372,7 @@ describe('independent review gate contract', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(canContinueAutoFix(autoFix)).toBe(true);
@@ -397,6 +396,7 @@ describe('independent review gate contract', () => {
           ],
           nonBlockingFindings: [],
           escalationRequired: false,
+          maintainability: 'NO_DRIFT',
         }),
       );
       expect(canContinueAutoFix(result)).toBe(false);
@@ -420,6 +420,7 @@ describe('independent review gate contract', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
     expect(result.blockingFindings[0]).toMatchObject({
@@ -452,6 +453,7 @@ describe('independent review runner control flow', () => {
         ],
         nonBlockingFindings: [],
         escalationRequired: false,
+        maintainability: 'NO_DRIFT',
       }),
     );
   }
@@ -488,6 +490,7 @@ describe('independent review runner control flow', () => {
             blockingFindings: [],
             nonBlockingFindings: [],
             escalationRequired: false,
+            maintainability: 'NO_DRIFT',
           }),
         ),
       currentBranch: () => 'feature/review',
@@ -669,6 +672,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -708,6 +712,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: ['Missing required acceptance criterion'],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           ),
       }),
@@ -746,6 +751,7 @@ describe('independent review runner control flow', () => {
                   ],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               )
             : parseReviewResult(
@@ -754,6 +760,7 @@ describe('independent review runner control flow', () => {
                   blockingFindings: [],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               );
         },
@@ -785,6 +792,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -856,6 +864,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -894,6 +903,7 @@ describe('independent review runner control flow', () => {
               blockingFindings: [],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           ),
       }),
@@ -981,6 +991,7 @@ describe('independent review runner control flow', () => {
                   blockingFindings: [],
                   nonBlockingFindings: [],
                   escalationRequired: false,
+                  maintainability: 'NO_DRIFT',
                 }),
               );
         },
@@ -1044,6 +1055,7 @@ describe('independent review runner control flow', () => {
               ],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -1070,6 +1082,7 @@ describe('independent review runner control flow', () => {
                 blockingFindings: [],
                 nonBlockingFindings: [],
                 escalationRequired: false,
+                maintainability: 'NO_DRIFT',
               }),
             );
           }
@@ -1088,6 +1101,7 @@ describe('independent review runner control flow', () => {
               ],
               nonBlockingFindings: [],
               escalationRequired: false,
+              maintainability: 'NO_DRIFT',
             }),
           );
         },
@@ -1726,6 +1740,7 @@ describe('AUTO_FIX path scope', () => {
       ],
       nonBlockingFindings: [],
       escalationRequired: false,
+      maintainability: 'NO_DRIFT' as const,
     });
 
     try {
