@@ -22,6 +22,16 @@ describe('CI feedback control', () => {
     expect(classifyCiFailure('permission denied reading secret')).toBe('BLOCKED');
     expect(classifyCiFailure('architecture decision required')).toBe('HUMAN_DECISION_REQUIRED');
     expect(classifyCiFailure('dependency registry returned an unknown error')).toBe('BLOCKED');
+    expect(classifyCiFailure('gitleaks secret scan failed')).toBe('BLOCKED');
+  });
+
+  it('protects security failures from transient reruns', () => {
+    const result = decideCiFailure(
+      failed('runner unavailable; permission denied while reading credentials', true),
+      { repairCycles: 0, transientReruns: 0, meaningfulProgress: false },
+    );
+    expect(result.status).toBe('CI_BLOCKED');
+    expect(result.classification).toBe('BLOCKED');
   });
 
   it('redacts common credential formats and bounds CI evidence', () => {

@@ -77,7 +77,7 @@ export function sanitizeCiEvidence(evidence: string): string {
 export function classifyCiFailure(evidence: string): CiFailureClassification {
   const normalized = evidence.toLowerCase();
   if (
-    /(secret|credential|permission denied|resource not accessible|runner unavailable|service unavailable|github outage|dependency .*unavailable)/.test(
+    /(secret|credential|gitleaks|secret[- ]scan|permission denied|resource not accessible|runner unavailable|service unavailable|github outage|dependency .*unavailable)/.test(
       normalized,
     )
   ) {
@@ -91,7 +91,7 @@ export function classifyCiFailure(evidence: string): CiFailureClassification {
     return 'HUMAN_DECISION_REQUIRED';
   }
   if (
-    /(npm run (validate|format|format:check|lint|typecheck|test|build)|npm test|tsc|typescript|eslint|prettier|vitest|gitleaks|deterministic validation)/.test(
+    /(npm run (validate|format|format:check|lint|typecheck|test|build)|npm test|tsc|typescript|eslint|prettier|vitest|deterministic validation)/.test(
       normalized,
     )
   ) {
@@ -123,7 +123,13 @@ export function decideCiFailure(observation: CiObservation, state: CiRepairState
     Boolean(signature) && signature === state.lastFailureSignature && !state.meaningfulProgress;
   const nextState = signature ? { ...state, lastFailureSignature: signature } : { ...state };
 
-  if (observation.transient) {
+  const classification = classifyCiFailure(observation.evidence);
+  if (
+    observation.transient &&
+    !/(secret|credential|gitleaks|secret[- ]scan|permission denied|resource not accessible)/.test(
+      observation.evidence.toLowerCase(),
+    )
+  ) {
     if (state.transientReruns >= maxTransientCiReruns) {
       return {
         status: 'CI_TRANSIENT_RETRY_LIMIT_REACHED',
@@ -133,10 +139,8 @@ export function decideCiFailure(observation: CiObservation, state: CiRepairState
         reason: `Transient CI rerun limit of ${maxTransientCiReruns} reached.`,
       };
     }
-    return { status: 'CI_FAILED', observation, state: nextState, classification: 'BLOCKED' };
+    return { status: 'CI_FAILED', observation, state: nextState, classification };
   }
-
-  const classification = classifyCiFailure(observation.evidence);
   if (classification === 'BLOCKED') {
     return {
       status: 'CI_BLOCKED',
