@@ -208,6 +208,50 @@ describe('application-layer agentic analysis', () => {
     expect(tools.closed).toBe(true);
   });
 
+  it('propagates tool-runner failures and closes the runner', async () => {
+    const model: AgenticAnalysisModel = {
+      async respond() {
+        return finalResponse();
+      },
+    };
+    const connectFailure = toolsFor();
+    connectFailure.connect = async () => {
+      throw new Error('OPERATION_TIMEOUT: MCP initialize');
+    };
+    await expect(runAgenticTableauAnalysis(contract, model, connectFailure)).rejects.toThrow(
+      'OPERATION_TIMEOUT: MCP initialize',
+    );
+    expect(connectFailure.closed).toBe(true);
+
+    const unavailableTools = toolsFor();
+    unavailableTools.listTools = async () => ({ tools: [{ name: 'query-datasource' }] });
+    await expect(runAgenticTableauAnalysis(contract, model, unavailableTools)).rejects.toThrow(
+      'MCP_PROTOCOL_FAILED',
+    );
+    expect(unavailableTools.closed).toBe(true);
+
+    const callFailureModel: AgenticAnalysisModel = {
+      async respond() {
+        return response([
+          {
+            type: 'function_call',
+            call_id: 'call-failure',
+            name: 'query_datasource',
+            arguments: '{}',
+          },
+        ]);
+      },
+    };
+    const callFailure = toolsFor();
+    callFailure.callTool = async () => {
+      throw new Error('OPERATION_TIMEOUT: MCP query');
+    };
+    await expect(
+      runAgenticTableauAnalysis(contract, callFailureModel, callFailure),
+    ).rejects.toThrow('OPERATION_TIMEOUT: MCP query');
+    expect(callFailure.closed).toBe(true);
+  });
+
   it('rejects malformed provider output and malformed normalized tool evidence', async () => {
     const malformedProvider: AgenticAnalysisModel = {
       async respond() {
@@ -349,6 +393,20 @@ describe('application-layer agentic analysis', () => {
     await expect(model.respond('input', undefined, 1000)).rejects.toThrow(
       'MALFORMED_PROVIDER_RESULT',
     );
+  });
+
+  it('sanitizes provider error payloads', async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { message: 'PAT_VALUE=secret', param: 'authorization' } }),
+    });
+    const model = createOpenAiResponsesModel('test-token', fetchImplementation);
+
+    await expect(model.respond('input', undefined, 1000)).rejects.toThrow(
+      'OPENAI_REQUEST_FAILED: status=401',
+    );
+    await expect(model.respond('input', undefined, 1000)).rejects.not.toThrow('PAT_VALUE=secret');
   });
 
   it('keeps the deterministic baseline no-network by requiring injected boundaries', async () => {

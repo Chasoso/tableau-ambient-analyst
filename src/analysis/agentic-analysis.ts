@@ -9,6 +9,7 @@ import {
 } from '../spike/stdio-bridge-policy.js';
 import {
   TableauStdioBridge,
+  approvedDatasourceName,
   type ModelVisibleMcpEvidence,
   type StdioCallSummary,
 } from '../spike/tableau-stdio-bridge.js';
@@ -134,8 +135,7 @@ function serializeModelEvidence(value: unknown, expectedTool: string): ModelVisi
         (item) =>
           !isRecord(item) ||
           item.datasourceLuid !== stdioDatasourceLuid ||
-          typeof item.name !== 'string' ||
-          item.name.length === 0,
+          item.name !== approvedDatasourceName,
       )
     ) {
       throw new Error('MALFORMED_TOOL_RESULT');
@@ -365,15 +365,7 @@ export function createOpenAiResponsesModel(
         error?: { type?: unknown; code?: unknown; message?: unknown; param?: unknown };
       };
       if (!response.ok) {
-        throw new Error(
-          `OPENAI_REQUEST_FAILED: ${JSON.stringify({
-            status: response.status,
-            type: providerBody.error?.type ?? null,
-            code: providerBody.error?.code ?? null,
-            param: providerBody.error?.param ?? null,
-            message: providerBody.error?.message ?? null,
-          })}`,
-        );
+        throw new Error(`OPENAI_REQUEST_FAILED: status=${response.status}`);
       }
       if (typeof providerBody.status !== 'string' || !Array.isArray(providerBody.output)) {
         throw new Error('MALFORMED_PROVIDER_RESULT');
