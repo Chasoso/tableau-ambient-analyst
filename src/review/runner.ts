@@ -803,6 +803,8 @@ export function observePullRequestCi(
 
   let runId: string | undefined;
   let logs = '';
+  let allFailedRunLogsAvailable = true;
+  let failedRunIds: string[] = [];
   try {
     const runs = JSON.parse(
       execFileSync(
@@ -820,18 +822,25 @@ export function observePullRequestCi(
         { cwd, encoding: 'utf8' },
       ),
     ) as Array<Record<string, unknown>>;
-    const failedRun = runs.find(
+    const failedRuns = runs.filter(
       (run) => run.conclusion === 'failure' || run.conclusion === 'cancelled',
     );
-    if (failedRun && typeof failedRun.databaseId === 'number') {
-      runId = String(failedRun.databaseId);
+    failedRunIds = failedRuns.flatMap((run) =>
+      typeof run.databaseId === 'number' ? [String(run.databaseId)] : [],
+    );
+    for (const failedRunId of failedRunIds) {
+      if (!runId) runId = failedRunId;
       try {
-        logs = execFileSync('gh', ['run', 'view', runId, '--log-failed'], {
+        const runLogs = execFileSync('gh', ['run', 'view', failedRunId, '--log-failed'], {
           cwd,
           encoding: 'utf8',
         });
+        if (runLogs.trim()) logs += `${logs ? '\n' : ''}${runLogs}`;
+        else allFailedRunLogsAvailable = false;
       } catch (error) {
-        logs = commandOutputError(error);
+        const runLogs = commandOutputError(error);
+        if (runLogs.trim()) logs += `${logs ? '\n' : ''}${runLogs}`;
+        else allFailedRunLogsAvailable = false;
       }
     }
   } catch {
@@ -842,6 +851,14 @@ export function observePullRequestCi(
   const failedChecks = checks.some(
     (check) => check.state === 'FAILURE' || check.state === 'CANCELLED',
   );
+  const failedCheckRunIds = checks
+    .filter((check) => check.state === 'FAILURE' || check.state === 'CANCELLED')
+    .map((check) => check.link?.match(/\/runs\/(\d+)/)?.[1])
+    .filter((runId): runId is string => Boolean(runId));
+  const failedChecksCorrelated =
+    !failedChecks ||
+    (failedCheckRunIds.length > 0 &&
+      failedCheckRunIds.every((failedCheckRunId) => failedRunIds.includes(failedCheckRunId)));
   return {
     checks,
     checksPending: checks.length === 0 && rawChecks.trim().length > 0,
@@ -850,7 +867,9 @@ export function observePullRequestCi(
       /(runner unavailable|service unavailable|github outage|internal server error|rate limit)/i.test(
         evidence,
       ),
-    evidenceComplete: !failedChecks || Boolean(runId && logs.trim()),
+    evidenceComplete:
+      !failedChecks ||
+      Boolean(runId && logs.trim() && allFailedRunLogsAvailable && failedChecksCorrelated),
     ...(runId ? { runId } : {}),
   };
 }

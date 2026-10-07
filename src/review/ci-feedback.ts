@@ -71,7 +71,14 @@ export function classifyCiFailure(evidence: string): CiFailureClassification {
   ) {
     return 'HUMAN_DECISION_REQUIRED';
   }
-  return 'AUTO_FIX';
+  if (
+    /(npm run (validate|format|format:check|lint|typecheck|test|build)|npm test|tsc|typescript|eslint|prettier|vitest|gitleaks|deterministic validation)/.test(
+      normalized,
+    )
+  ) {
+    return 'AUTO_FIX';
+  }
+  return 'BLOCKED';
 }
 
 export function failureSignature(observation: CiObservation): string {

@@ -20,6 +20,7 @@ describe('CI feedback control', () => {
     expect(classifyCiFailure('npm run lint failed')).toBe('AUTO_FIX');
     expect(classifyCiFailure('permission denied reading secret')).toBe('BLOCKED');
     expect(classifyCiFailure('architecture decision required')).toBe('HUMAN_DECISION_REQUIRED');
+    expect(classifyCiFailure('dependency registry returned an unknown error')).toBe('BLOCKED');
   });
 
   it('waits for checks and reaches READY_FOR_HUMAN_REVIEW after repair', () => {
