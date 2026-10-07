@@ -216,11 +216,28 @@ export function interpretAgenticEvidence(
   const recordsBySequence = new Map(records.map((record) => [record.sequence, record]));
   return interpretations.map((interpretation) => {
     const record = recordsBySequence.get(interpretation.sequence);
-    if (
-      record === undefined ||
-      !('tool' in record.evidence) ||
-      record.toolName !== record.evidence.tool
-    ) {
+    if (record === undefined) {
+      throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
+    }
+    if ('status' in record.evidence && record.evidence.status === 'tool_error') {
+      if (!tableauToolNames.has(record.toolName)) {
+        throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
+      }
+      if (interpretation.status !== 'unresolved') {
+        throw new Error('EVIDENCE_INTERPRETATION_PROVENANCE_INVALID');
+      }
+      const boundedReason = record.evidence.message.slice(0, 512);
+      return {
+        questionId: interpretation.questionId,
+        status: 'unresolved' as const,
+        observation: record.evidence.message.slice(0, maxEvidenceTextLength),
+        provenance: {
+          kind: 'unavailable' as const,
+          reason: boundedReason,
+        },
+      };
+    }
+    if (!('tool' in record.evidence) || record.toolName !== record.evidence.tool) {
       throw new Error('EVIDENCE_MAPPING_PROVENANCE_INVALID');
     }
     if (record.evidence.tool === 'list_datasources' && interpretation.status !== 'unresolved') {

@@ -166,6 +166,66 @@ describe('analysis evidence verifier', () => {
     expect(verifyEvidence(contract, evidence).completion).toBe('COMPLETE');
   });
 
+  it('maps an unavailable tool result to unresolved evidence and fails closed', () => {
+    const records: AgenticEvidenceRecord[] = [
+      {
+        sequence: 1,
+        toolName: 'query_datasource',
+        evidence: {
+          status: 'tool_error',
+          category: 'query_error',
+          message: 'The Tableau query could not be executed.',
+          recoverable: true,
+        },
+        summary: {} as never,
+      },
+      {
+        sequence: 2,
+        toolName: 'query_datasource',
+        evidence: {
+          tool: 'query_datasource' as const,
+          datasourceLuid: stdioDatasourceLuid,
+          rows: [{ value: 120 }],
+        },
+        summary: {} as never,
+      },
+    ];
+
+    const evidence = interpretAgenticEvidence(records, [
+      {
+        sequence: 1,
+        questionId: 'assumption-support',
+        status: 'unresolved',
+        observation: 'The query result was unavailable.',
+      },
+      {
+        sequence: 2,
+        questionId: 'launch-timing',
+        status: 'supported',
+        observation: 'The Tableau value supports the timing.',
+      },
+    ]);
+
+    expect(evidence[0]).toEqual({
+      questionId: 'assumption-support',
+      status: 'unresolved',
+      observation: 'The Tableau query could not be executed.',
+      provenance: {
+        kind: 'unavailable',
+        reason: 'The Tableau query could not be executed.',
+      },
+    });
+    expect(verifyEvidence(contract, evidence)).toEqual({
+      completion: 'INSUFFICIENT',
+      questionStatus: [
+        { questionId: 'assumption-support', status: 'unresolved' },
+        { questionId: 'launch-timing', status: 'supported' },
+      ],
+      unresolvedRequiredEvidence: ['assumption-support'],
+      reasons: ['required evidence assumption-support is not Tableau-backed'],
+    });
+  });
+
   it('rejects missing sequences and list-only semantic interpretation', () => {
     const records: AgenticEvidenceRecord[] = [
       {
