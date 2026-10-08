@@ -105,6 +105,7 @@ function gitInvocations(segment) {
   const flagOptions = new Set([
     '--bare', '--no-pager', '--no-replace-objects', '--paginate',
     '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
+    '--version', '--help', '-p', '-P',
   ]);
   for (let index = 0; index < segment.length; index += 1) {
     if (executableName(segment[index]) !== 'git') continue;

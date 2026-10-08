@@ -70,6 +70,9 @@ describe('repository-local Codex safety Hook', () => {
   it.each([
     'git status --short',
     'git diff --check',
+    'git --version',
+    'git --help',
+    'git -P status --short',
     'git fetch origin main',
     'git push origin feat/issue-55',
     'git push origin main:refs/heads/feat/issue-55',
