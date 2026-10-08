@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,6 +111,24 @@ describe('canonical Issue workspaces', () => {
       expect(resolveIssueWorkspace(local, '65', 'main', { createBranch: false })).toMatchObject({
         status: 'BLOCKED',
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not create a canonical worktree for review-only resolution when only the branch exists', () => {
+    const { root, local } = fixture();
+    try {
+      git(local, ['branch', canonicalIssueBranch('67'), 'main']);
+      const worktreePath = canonicalIssueWorktreePath(local, '67');
+      const before = git(local, ['worktree', 'list', '--porcelain']);
+
+      expect(resolveIssueWorkspace(local, '67', 'main', { createBranch: false })).toMatchObject({
+        status: 'BLOCKED',
+      });
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(git(local, ['worktree', 'list', '--porcelain'])).toBe(before);
+      expect(git(local, ['branch', '--show-current']).trim()).toBe('main');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

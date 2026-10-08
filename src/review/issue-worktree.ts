@@ -149,10 +149,12 @@ export function resolveIssueWorkspace(
       }
     })();
 
-    if (!options.createBranch && !branchExists) {
+    if (!options.createBranch) {
       return {
         status: 'BLOCKED',
-        reason: `Canonical branch ${branch} and worktree do not exist.`,
+        reason: branchExists
+          ? `Canonical branch ${branch} exists without its canonical worktree.`
+          : `Canonical branch ${branch} and worktree do not exist.`,
       };
     }
 
