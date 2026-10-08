@@ -106,6 +106,47 @@ function noOpportunityResult(
   };
 }
 
+function validateInterpretations(
+  value: unknown,
+  contract: ReturnType<typeof analysisContractFromOpportunity>,
+): readonly AgenticEvidenceInterpretation[] {
+  if (!Array.isArray(value)) throw new Error('EVIDENCE_INTERPRETATION_INVALID');
+  const questionIds = new Set([
+    ...contract.requiredEvidence.map(({ id }) => id),
+    ...contract.optionalEvidence.map(({ id }) => id),
+    ...contract.openQuestions.map(({ id }) => id),
+  ]);
+  return value.map((item) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error('EVIDENCE_INTERPRETATION_INVALID');
+    }
+    const record = item as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (key) => !['sequence', 'questionId', 'status', 'observation'].includes(key),
+      ) ||
+      typeof record.sequence !== 'number' ||
+      !Number.isSafeInteger(record.sequence) ||
+      record.sequence <= 0 ||
+      typeof record.questionId !== 'string' ||
+      record.questionId.trim() === '' ||
+      !questionIds.has(record.questionId) ||
+      !['supported', 'contradicted', 'unresolved'].includes(String(record.status)) ||
+      typeof record.observation !== 'string' ||
+      record.observation.trim() === '' ||
+      record.observation.length > 2_000
+    ) {
+      throw new Error('EVIDENCE_INTERPRETATION_INVALID');
+    }
+    return {
+      sequence: record.sequence,
+      questionId: record.questionId,
+      status: record.status as AgenticEvidenceInterpretation['status'],
+      observation: record.observation,
+    };
+  });
+}
+
 /**
  * Runs the deterministic text-replay vertical slice. External model/tool
  * boundaries and post-analysis interpretation are injected so normal tests
@@ -183,7 +224,10 @@ export async function runTranscriptInterventionFlow(
 
   let evidence: readonly Evidence[];
   try {
-    const interpretations = dependencies.interpretEvidence(analysis);
+    const interpretations = validateInterpretations(
+      dependencies.interpretEvidence(analysis),
+      contract,
+    );
     evidence = interpretAgenticEvidence(analysis.normalizedEvidence, interpretations);
   } catch (error) {
     return failureResult(events, detection, 'evidence', error, contract, analysis);

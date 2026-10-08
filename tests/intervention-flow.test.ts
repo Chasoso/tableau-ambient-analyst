@@ -203,4 +203,24 @@ describe('transcript intervention flow', () => {
       expect.objectContaining({ type: 'flow-failed', stage: 'analysis' }),
     );
   });
+
+  it('fails closed when the interpretation references an unknown question', async () => {
+    const result = await runTranscriptInterventionFlow(decisionFixture, {
+      ...dependencies('supported'),
+      interpretEvidence: () => [
+        {
+          sequence: 1,
+          questionId: 'unknown-question',
+          status: 'supported',
+          observation: 'This interpretation is outside the contract.',
+        },
+      ],
+    });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.intervention?.decision).toBe('HOLD');
+    expect(result.events).toContainEqual(
+      expect.objectContaining({ type: 'flow-failed', stage: 'evidence' }),
+    );
+  });
 });
