@@ -79,6 +79,8 @@ describe('repository-local Codex safety Hook', () => {
     'git worktree add -b feat/issue-55 .worktrees/issue-55 main',
     'git worktree remove .worktrees/issue-55',
     'gh pr view 60 --json state',
+    "printf 'git push --force origin feat/issue-55'",
+    'gh pr list --search merge',
   ])('allows safe command %s', (command) => {
     expect(denial(command)).toBeUndefined();
   });

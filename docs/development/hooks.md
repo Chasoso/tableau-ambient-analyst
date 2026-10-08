@@ -19,6 +19,9 @@ authority, semantic decisions, and Human Decisions. The Issue-to-PR Skill owns
 the procedure. The #59 workspace resolver owns canonical branch/worktree
 selection, `NEW` / `REUSE` / `BLOCKED`, duplicate detection, and semantic
 removal safety. Validation and CI verify the resulting repository state.
+Repository-managed child-process Git/GitHub calls use the same mechanical
+guard before execution; this protects that boundary without moving workflow
+semantics into Hooks.
 
 The Hook intentionally allows read-only inspection, ordinary validation,
 pushes of the already-resolved canonical Issue branch, and non-force

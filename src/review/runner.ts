@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync as nodeExecFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
@@ -144,6 +144,72 @@ type ActivePullRequest = {
   headSha: string;
 };
 const targetRepository = 'Chasoso/tableau-ambient-analyst';
+
+function childExecutableName(file: string): string {
+  return file.split('/').at(-1) ?? file;
+}
+
+function dynamicChildArgument(value: string): boolean {
+  return value.includes('$') || value.includes('`');
+}
+
+export function assertSafeChildProcess(file: string, args: readonly string[]): void {
+  const executable = childExecutableName(file);
+  if (executable === 'gh' && args[0] === 'pr' && args[1] === 'merge') {
+    throw new Error('Pull request merge operations are blocked by the repository Hook.');
+  }
+  if (executable !== 'git') return;
+
+  if (args.includes('--no-verify')) {
+    throw new Error('Git verification bypass (--no-verify) is blocked by the repository Hook.');
+  }
+  const verb = args.find((argument) => !argument.startsWith('-'));
+  const verbIndex = verb === undefined ? -1 : args.indexOf(verb);
+  const commandArgs = verbIndex < 0 ? [] : args.slice(verbIndex + 1);
+  if (verb === 'push') {
+    const positional = commandArgs.filter((argument) => !argument.startsWith('-'));
+    if (
+      commandArgs.some((argument) => argument === '-f' || argument.startsWith('--force')) ||
+      positional.some((argument) => argument.startsWith('+'))
+    ) {
+      throw new Error('Force push is blocked by the repository Hook.');
+    }
+    if (positional.some(dynamicChildArgument)) {
+      throw new Error('Push destination cannot be determined statically; execution is blocked.');
+    }
+    if (positional.length < 2) {
+      throw new Error(
+        'Push destination is implicit; an explicit canonical branch ref is required.',
+      );
+    }
+    const destinations = positional.slice(1);
+    if (
+      destinations.some(
+        (argument) =>
+          argument === 'main' || argument.endsWith('/main') || argument === 'refs/heads/main',
+      )
+    ) {
+      throw new Error('Direct push to protected branch main is blocked by the repository Hook.');
+    }
+    if (destinations.some((argument) => argument === 'HEAD' || argument.startsWith('HEAD:'))) {
+      throw new Error('Ambiguous HEAD push destinations are blocked by the repository Hook.');
+    }
+  }
+  if (verb === 'reset' && commandArgs.includes('--hard')) {
+    throw new Error('Destructive hard reset is blocked by the repository Hook.');
+  }
+  if (verb === 'branch' && (commandArgs.includes('-D') || commandArgs.includes('--force'))) {
+    throw new Error('Force deletion of local branches is blocked by the repository Hook.');
+  }
+  if (verb === 'worktree' && commandArgs[0] === 'remove' && commandArgs.includes('--force')) {
+    throw new Error('Force removal of worktrees is blocked by the repository Hook.');
+  }
+}
+
+const execFileSync = ((file: string, args: readonly string[], options?: unknown) => {
+  assertSafeChildProcess(file, args);
+  return nodeExecFileSync(file, args, options as never);
+}) as typeof nodeExecFileSync;
 
 const requiredSelfReviewChecks = [
   'scope',

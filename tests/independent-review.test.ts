@@ -31,6 +31,7 @@ import {
 } from '../src/review/gate.js';
 import {
   autoFixAllowedPaths,
+  assertSafeChildProcess,
   buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
@@ -55,6 +56,16 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
+  it('applies the mechanical safety guard to repository-managed child processes', () => {
+    expect(() => assertSafeChildProcess('git', ['push', 'origin', 'main'])).toThrow(
+      'protected branch main',
+    );
+    expect(() => assertSafeChildProcess('gh', ['pr', 'merge', '61'])).toThrow('merge operations');
+    expect(() => assertSafeChildProcess('git', ['push', 'origin', '${BRANCH}'])).toThrow(
+      'determined statically',
+    );
+    expect(() => assertSafeChildProcess('git', ['push', 'origin', 'feat/issue-55'])).not.toThrow();
+  });
   it('resolves only an open pull request with an exact head', () => {
     expect(
       resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>

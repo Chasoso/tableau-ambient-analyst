@@ -108,7 +108,7 @@ function gitInvocations(segment) {
     '--version', '--help', '-p', '-P',
   ]);
   for (let index = 0; index < segment.length; index += 1) {
-    if (executableName(segment[index]) !== 'git') continue;
+    if (executableName(segment[index]) !== 'git' || (index !== 0 && segment[index - 1] !== 'command')) continue;
     let cursor = index + 1;
     while (cursor < segment.length && segment[cursor].startsWith('-')) {
       const option = segment[cursor];
@@ -167,7 +167,10 @@ function decision(command) {
       if (verb === 'worktree' && args[0] === 'remove' && args.slice(1).some(forceOption)) return 'Force removal of worktrees is blocked by the repository Hook.';
     }
     for (let index = 0; index < segment.length; index += 1) {
-      if (executableName(segment[index]) === 'gh' && segment.slice(index + 1).includes('pr') && segment.slice(index + 1).includes('merge')) return 'Pull request merge operations are blocked by the repository Hook.';
+      if (executableName(segment[index]) === 'gh' && (index === 0 || segment[index - 1] === 'command')) {
+        const ghArgs = segment.slice(index + 1);
+        if (ghArgs[0] === 'pr' && ghArgs[1] === 'merge') return 'Pull request merge operations are blocked by the repository Hook.';
+      }
     }
   }
   return null;
