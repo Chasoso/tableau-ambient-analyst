@@ -42,7 +42,7 @@ export type TranscriptInterventionEvent =
   | { type: 'intervention-recommended'; result: InterventionResult }
   | { type: 'flow-failed'; stage: FlowFailureStage; reason: string };
 
-export type FlowFailureStage = 'fixture' | 'analysis' | 'evidence' | 'verification';
+export type FlowFailureStage = 'fixture' | 'trigger' | 'analysis' | 'evidence' | 'verification';
 
 export type TranscriptInterventionDependencies = {
   triggerDetector?: TriggerDetector;
@@ -67,14 +67,12 @@ function failureResult(
   events: TranscriptInterventionEvent[],
   detection: TriggerDetection,
   stage: FlowFailureStage,
-  error: unknown,
   contract: TranscriptInterventionFlowResult['contract'] = null,
   analysis: AgenticAnalysisResult | null = null,
   evidence: readonly Evidence[] = [],
   verification: EvidenceVerificationResult | null = null,
 ): TranscriptInterventionFlowResult {
-  const reason = error instanceof Error ? error.message : 'unknown failure';
-  events.push({ type: 'flow-failed', stage, reason });
+  events.push({ type: 'flow-failed', stage, reason: `${stage.toUpperCase()}_FAILED` });
   const intervention: InterventionResult = {
     decision: 'HOLD',
     reason: `Flow failed closed during ${stage}.`,
@@ -106,6 +104,65 @@ function noOpportunityResult(
     verification: null,
     intervention: null,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function validateTriggerContext(value: unknown): void {
+  if (!Array.isArray(value)) throw new Error('TRIGGER_DETECTION_INVALID');
+  for (const item of value) {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['sequence', 'speaker', 'text'])) {
+      throw new Error('TRIGGER_DETECTION_INVALID');
+    }
+    if (
+      typeof item.sequence !== 'number' ||
+      !Number.isSafeInteger(item.sequence) ||
+      item.sequence < 0 ||
+      typeof item.speaker !== 'string' ||
+      item.speaker.trim() === '' ||
+      typeof item.text !== 'string' ||
+      item.text.trim() === ''
+    ) {
+      throw new Error('TRIGGER_DETECTION_INVALID');
+    }
+  }
+}
+
+function validateTriggerDetection(value: unknown): TriggerDetection {
+  if (!isRecord(value) || typeof value.decision !== 'string') {
+    throw new Error('TRIGGER_DETECTION_INVALID');
+  }
+  if (value.decision === 'IGNORE') {
+    if (
+      !hasOnlyKeys(value, ['decision', 'reason', 'context']) ||
+      value.reason !== 'no-analytical-opportunity'
+    ) {
+      throw new Error('TRIGGER_DETECTION_INVALID');
+    }
+    validateTriggerContext(value.context);
+    return value as TriggerDetection;
+  }
+  if (value.decision !== 'ANALYZE' || !hasOnlyKeys(value, ['decision', 'opportunity'])) {
+    throw new Error('TRIGGER_DETECTION_INVALID');
+  }
+  if (
+    !isRecord(value.opportunity) ||
+    !hasOnlyKeys(value.opportunity, ['claim', 'reason', 'context'])
+  ) {
+    throw new Error('TRIGGER_DETECTION_INVALID');
+  }
+  try {
+    analysisContractFromOpportunity(value.opportunity as unknown as AnalyzeOpportunity);
+  } catch {
+    throw new Error('TRIGGER_DETECTION_INVALID');
+  }
+  return value as TriggerDetection;
 }
 
 function validateInterpretations(
@@ -166,12 +223,11 @@ export async function runTranscriptInterventionFlow(
       typeof source === 'string'
         ? parseTranscriptFixture(source, format)
         : parseTranscriptFixture(JSON.stringify(source), 'json');
-  } catch (error) {
+  } catch {
     return failureResult(
       events,
       { decision: 'IGNORE', reason: 'no-analytical-opportunity', context: [] },
       'fixture',
-      error,
     );
   }
 
@@ -187,7 +243,13 @@ export async function runTranscriptInterventionFlow(
   for (const utterance of utterances) {
     replayed.push(utterance);
     events.push({ type: 'utterance-received', utterance });
-    detection = detector.detect(replayed, afterSequence === undefined ? {} : { afterSequence });
+    try {
+      detection = validateTriggerDetection(
+        detector.detect(replayed, afterSequence === undefined ? {} : { afterSequence }),
+      );
+    } catch {
+      return failureResult(events, detection, 'trigger');
+    }
     if (detection.decision === 'ANALYZE') break;
     events.push({
       type: 'trigger-ignored',
@@ -203,8 +265,8 @@ export async function runTranscriptInterventionFlow(
   let contract: ReturnType<typeof analysisContractFromOpportunity>;
   try {
     contract = analysisContractFromOpportunity(detection.opportunity);
-  } catch (error) {
-    return failureResult(events, detection, 'verification', error);
+  } catch {
+    return failureResult(events, detection, 'verification');
   }
   events.push({ type: 'analysis-contract-created', contract });
   events.push({ type: 'tableau-analysis-started' });
@@ -217,8 +279,8 @@ export async function runTranscriptInterventionFlow(
       dependencies.tools,
       dependencies.budget,
     );
-  } catch (error) {
-    return failureResult(events, detection, 'analysis', error, contract);
+  } catch {
+    return failureResult(events, detection, 'analysis', contract);
   }
   events.push({
     type: 'evidence-collected',
@@ -232,8 +294,8 @@ export async function runTranscriptInterventionFlow(
       contract,
     );
     evidence = interpretAgenticEvidence(analysis.normalizedEvidence, interpretations);
-  } catch (error) {
-    return failureResult(events, detection, 'evidence', error, contract, analysis);
+  } catch {
+    return failureResult(events, detection, 'evidence', contract, analysis);
   }
 
   const verification = verifyEvidence(contract, evidence);

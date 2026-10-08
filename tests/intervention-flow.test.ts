@@ -206,6 +206,38 @@ describe('transcript intervention flow', () => {
     expect(detector.detect).toHaveBeenCalledTimes(2);
   });
 
+  it('fails closed when an injected TriggerDetector fails or returns malformed data', async () => {
+    const detector: TriggerDetector = {
+      detect: vi.fn(() => {
+        throw new Error('sensitive provider detail');
+      }),
+    };
+    const failed = await runTranscriptInterventionFlow(decisionFixture, {
+      ...dependencies('supported'),
+      triggerDetector: detector,
+    });
+
+    expect(failed.status).toBe('FAILED');
+    expect(failed.intervention?.decision).toBe('HOLD');
+    expect(failed.events).toContainEqual({
+      type: 'flow-failed',
+      stage: 'trigger',
+      reason: 'TRIGGER_FAILED',
+    });
+    expect(JSON.stringify(failed.events)).not.toContain('sensitive provider detail');
+
+    const malformed = await runTranscriptInterventionFlow(decisionFixture, {
+      ...dependencies('supported'),
+      triggerDetector: {
+        detect: () => ({ decision: 'IGNORE' }) as never,
+      },
+    });
+    expect(malformed.status).toBe('FAILED');
+    expect(malformed.events).toContainEqual(
+      expect.objectContaining({ type: 'flow-failed', stage: 'trigger' }),
+    );
+  });
+
   it('replays a trigger through verification to HOLD for supported evidence', async () => {
     const result = await runTranscriptInterventionFlow(decisionFixture, dependencies('supported'));
 
