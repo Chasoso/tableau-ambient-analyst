@@ -78,7 +78,11 @@ function commandIndex(segment) {
     }
     if (segment[index] === 'sudo') {
       index += 1;
-      while (index < segment.length && segment[index].startsWith('-')) index += 1;
+      while (index < segment.length && segment[index].startsWith('-')) {
+        const option = segment[index];
+        if (option === '-u' || option === '--user' || option === '-g' || option === '--group' || option === '--host' || option === '-p' || option === '--prompt') index += 2;
+        else index += 1;
+      }
       continue;
     }
     break;

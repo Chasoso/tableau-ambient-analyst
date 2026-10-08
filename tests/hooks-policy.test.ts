@@ -99,6 +99,7 @@ describe('repository-local Codex safety Hook', () => {
     'bash -lxc "gh pr merge 61"',
     'env git push --force origin feat/issue-55',
     'sudo git reset --hard HEAD~1',
+    'sudo -u alice git push --force origin feat/issue-55',
     'gh --repo Chasoso/tableau-ambient-analyst pr merge 61',
     'git reset --hard=HEAD~1',
     'git worktree remove -f .worktrees/issue-55',
