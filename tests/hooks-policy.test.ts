@@ -46,6 +46,7 @@ describe('repository-local Codex safety Hook', () => {
     ['git push origin HEAD:refs/heads/main', 'protected branch main'],
     ['git push origin +refs/heads/feat/issue-55', 'Force push'],
     ['git push origin +refs/heads/feat/issue-55:refs/heads/feat/issue-56', 'Force push'],
+    ['git push +refs/heads/feat/issue-55', 'Force push'],
     ['git commit --no-verify -m bypass', 'verification bypass'],
     ['git push --no-verify origin feat/issue-55', 'verification bypass'],
     ['gh pr merge 60', 'merge operations'],

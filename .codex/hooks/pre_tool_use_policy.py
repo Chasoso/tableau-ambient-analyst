@@ -135,7 +135,7 @@ def decision(command: str) -> str | None:
             if verb == "push":
                 positional = [token for token in args if not token.startswith("-")]
                 if any(force_option(option) for option in args) or any(
-                    token.startswith("+") for token in positional[1:]
+                    token.startswith("+") for token in positional
                 ):
                     return "Force push is blocked by the repository Hook."
                 if len(positional) >= 2 and any(protected_destination(token) for token in positional[1:]):
