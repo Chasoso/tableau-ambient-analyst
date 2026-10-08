@@ -47,10 +47,14 @@ describe('repository-local Codex safety Hook', () => {
     ['git push', 'implicit'],
     ['git push origin', 'implicit'],
     ['git push origin HEAD', 'Ambiguous HEAD'],
-    ['git push origin "$(git branch --show-current)"', 'determined statically'],
+    ['git push origin "$(git branch --show-current)"', 'substitution'],
     ['git push origin "${BRANCH}"', 'determined statically'],
     ['git push origin "$TARGET"', 'determined statically'],
-    ['git push origin `git branch --show-current`', 'determined statically'],
+    ['git push origin `git branch --show-current`', 'substitution'],
+    ['FOO=bar git push --force origin feat/issue-55', 'Force push'],
+    ['FOO=bar git reset --hard HEAD~1', 'hard reset'],
+    ['FOO=bar gh pr merge 61', 'merge operations'],
+    ['A=1 B=2 git worktree remove --force .worktrees/issue-55', 'Force removal'],
     ['git push origin +refs/heads/feat/issue-55', 'Force push'],
     ['git push origin +refs/heads/feat/issue-55:refs/heads/feat/issue-56', 'Force push'],
     ['git push +refs/heads/feat/issue-55', 'Force push'],
@@ -75,12 +79,19 @@ describe('repository-local Codex safety Hook', () => {
     'git -P status --short',
     'git fetch origin main',
     'git push origin feat/issue-55',
+    'FOO=bar git status --short',
+    'A=1 B=2 git diff --check',
     'git push origin main:refs/heads/feat/issue-55',
     'git worktree add -b feat/issue-55 .worktrees/issue-55 main',
     'git worktree remove .worktrees/issue-55',
     'gh pr view 60 --json state',
     "printf 'git push --force origin feat/issue-55'",
     'gh pr list --search merge',
+    'echo "${HOME}"',
+    'echo "$HOME"',
+    'printf "{}"',
+    'echo \'{"status":"ok"}\'',
+    "printf '${HOME}'",
   ])('allows safe command %s', (command) => {
     expect(denial(command)).toBeUndefined();
   });
@@ -90,7 +101,7 @@ describe('repository-local Codex safety Hook', () => {
     expect(denial('printf "$(git push --force origin feat/issue-55)"')).toContain('substitution');
     expect(denial("printf '$(git push --force origin feat/issue-55)'")).toBeUndefined();
     expect(denial("bash -c $'git push --force origin feat/issue-55'")).toContain('substitution');
-    expect(denial('git push --{force} origin feat/issue-55')).toContain('substitution');
+    expect(denial('git push --{force} origin feat/issue-55')).toContain('Force push');
   });
 
   it.each([

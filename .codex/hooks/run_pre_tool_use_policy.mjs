@@ -67,6 +67,10 @@ function executableName(token) {
 function commandIndex(segment) {
   let index = 0;
   while (index < segment.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(segment[index])) {
+      index += 1;
+      continue;
+    }
     if (segment[index] === 'command') {
       index += 1;
       continue;
@@ -110,6 +114,7 @@ function shortOptionBundleContains(token, flag) {
 function forceOption(token) {
   return token === '-f' || token === '--force' || token === '--force-with-lease' ||
     token.startsWith('--force=') || token.startsWith('--force-with-lease=') ||
+    token === '--{force}' || token === '--{force-with-lease}' ||
     shortOptionBundleContains(token, 'f');
 }
 
@@ -145,9 +150,7 @@ function executableSubstitution(command) {
     }
     if (
       character === '`' ||
-      (character === '$' && (command[index + 1] === '(' || command[index + 1] === "'")) ||
-      character === '{' ||
-      character === '}'
+      (character === '$' && (command[index + 1] === '(' || command[index + 1] === "'"))
     ) return true;
   }
   return false;
@@ -194,7 +197,7 @@ function shellCommand(segment, index) {
 
 function decision(command) {
   if (executableSubstitution(command)) {
-    return 'Push destination cannot be determined statically because executable shell substitution cannot be analyzed safely; execution is blocked.';
+    return 'Executable shell substitution cannot be analyzed safely; execution is blocked.';
   }
   const tokens = tokensFor(command);
   if (!tokens) return 'Hook could not parse the pending shell command; execution is blocked.';

@@ -53,7 +53,7 @@ import {
   resolveIssueWorkspace,
   validateIssueWorkspace,
 } from './issue-worktree.js';
-import { assertSafeChildProcess as assertSharedChildProcess } from './command-safety.js';
+import { assertSafeChildProcess } from './command-safety.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
@@ -146,144 +146,7 @@ type ActivePullRequest = {
 };
 const targetRepository = 'Chasoso/tableau-ambient-analyst';
 
-function childExecutableName(file: string): string {
-  return file.split('/').at(-1) ?? file;
-}
-
-function dynamicChildArgument(value: string): boolean {
-  return value.includes('$') || value.includes('`');
-}
-
-function childForceOption(value: string): boolean {
-  return (
-    value === '-f' ||
-    value === '--force' ||
-    value === '--force-with-lease' ||
-    value.startsWith('--force=') ||
-    value.startsWith('--force-with-lease=') ||
-    (value.startsWith('-') && !value.startsWith('--') && value.slice(1).includes('f'))
-  );
-}
-
-function childShortOption(value: string, flag: string): boolean {
-  return value.startsWith('-') && !value.startsWith('--') && value.slice(1).includes(flag);
-}
-
-export function assertSafeChildProcess(file: string, args: readonly string[]): void {
-  assertSharedChildProcess(file, args);
-  const executable = childExecutableName(file);
-  if (executable === 'gh') {
-    let cursor = 0;
-    while (cursor < args.length) {
-      const option = args[cursor];
-      if (!option?.startsWith('-')) break;
-      cursor += option?.includes('=') ? 1 : 2;
-    }
-    if (args[cursor] === 'pr' && args[cursor + 1] === 'merge') {
-      throw new Error('Pull request merge operations are blocked by the repository Hook.');
-    }
-    return;
-  }
-  if (executable !== 'git') return;
-
-  if (args.includes('--no-verify')) {
-    throw new Error('Git verification bypass (--no-verify) is blocked by the repository Hook.');
-  }
-  const globalValueOptions = new Set([
-    '-C',
-    '--config-env',
-    '--exec-path',
-    '--git-dir',
-    '--namespace',
-    '--super-prefix',
-    '--work-tree',
-    '-c',
-  ]);
-  const globalFlags = new Set([
-    '--bare',
-    '--no-pager',
-    '--no-replace-objects',
-    '--paginate',
-    '--literal-pathspecs',
-    '--glob-pathspecs',
-    '--noglob-pathspecs',
-    '--version',
-    '--help',
-    '-p',
-    '-P',
-  ]);
-  let verbIndex = 0;
-  while (verbIndex < args.length) {
-    const option = args[verbIndex];
-    if (!option?.startsWith('-')) break;
-    if (globalValueOptions.has(option)) verbIndex += 2;
-    else if (globalFlags.has(option) || (option.startsWith('--') && option.includes('=')))
-      verbIndex += 1;
-    else if ((option.startsWith('-c') || option.startsWith('-C')) && option.length > 2)
-      verbIndex += 1;
-    else break;
-  }
-  const verb = args[verbIndex];
-  const commandArgs = args.slice(verbIndex + 1);
-  if (verb === 'push') {
-    const positional = commandArgs.filter((argument) => !argument.startsWith('-'));
-    if (
-      commandArgs.some(childForceOption) ||
-      positional.some((argument) => argument.startsWith('+'))
-    ) {
-      throw new Error('Force push is blocked by the repository Hook.');
-    }
-    if (positional.some(dynamicChildArgument)) {
-      throw new Error('Push destination cannot be determined statically; execution is blocked.');
-    }
-    if (positional.length < 2) {
-      throw new Error(
-        'Push destination is implicit; an explicit canonical branch ref is required.',
-      );
-    }
-    const destinations = positional.slice(1);
-    if (
-      destinations.some((argument) => {
-        const destination = argument.split(':').at(-1)?.replace(/^\+/, '');
-        return (
-          destination === 'main' ||
-          destination?.endsWith('/main') ||
-          destination === 'refs/heads/main'
-        );
-      })
-    ) {
-      throw new Error('Direct push to protected branch main is blocked by the repository Hook.');
-    }
-    if (destinations.some((argument) => argument === 'HEAD' || argument.startsWith('HEAD:'))) {
-      throw new Error('Ambiguous HEAD push destinations are blocked by the repository Hook.');
-    }
-  }
-  if (
-    verb === 'reset' &&
-    commandArgs.some((argument) => argument === '--hard' || argument.startsWith('--hard='))
-  ) {
-    throw new Error('Destructive hard reset is blocked by the repository Hook.');
-  }
-  const branchDeletion =
-    commandArgs.includes('-d') ||
-    commandArgs.includes('--delete') ||
-    commandArgs.some((argument) => childShortOption(argument, 'd'));
-  if (
-    verb === 'branch' &&
-    (commandArgs.some((argument) => argument === '-D' || childShortOption(argument, 'D')) ||
-      (branchDeletion &&
-        commandArgs.some((argument) => argument === '--force' || childForceOption(argument))))
-  ) {
-    throw new Error('Force deletion of local branches is blocked by the repository Hook.');
-  }
-  if (
-    verb === 'worktree' &&
-    commandArgs[0] === 'remove' &&
-    commandArgs.slice(1).some(childForceOption)
-  ) {
-    throw new Error('Force removal of worktrees is blocked by the repository Hook.');
-  }
-}
+export { assertSafeChildProcess };
 
 const execFileSync = ((file: string, args: readonly string[], options?: unknown) => {
   assertSafeChildProcess(file, args);

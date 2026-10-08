@@ -37,6 +37,9 @@ owns and must not be retried through an obvious equivalent command.
 The Hook runtime is Node 24 only; it has no Python dependency. The checker
 recursively inspects command strings used by `bash`, `sh`, and `zsh` wrappers
 for the supported short-option forms. Dynamic or otherwise statically
-unresolved push destinations fail closed. The deterministic
+unresolved push destinations fail closed, including leading shell assignment
+prefixes such as `FOO=bar`. Ordinary variable expansion and literal braces
+outside protected command boundaries are allowed; executable substitutions
+and dynamic protected destinations are not. The deterministic
 `tests/hooks-policy.test.ts` harness invokes the guard directly with
 representative JSON Hook inputs; it does not use network or live services.
