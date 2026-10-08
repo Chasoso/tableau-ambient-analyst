@@ -47,6 +47,12 @@ import {
   type CiRepairOutcome,
 } from './ci-feedback.js';
 import { synchronizeLocalBase } from './git-sync.js';
+import {
+  canonicalIssueBranch,
+  canonicalIssueWorktreePath,
+  resolveIssueWorkspace,
+  validateIssueWorkspace,
+} from './issue-worktree.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
@@ -267,7 +273,9 @@ the review result.
 }
 
 export function runIndependentReview(input: IndependentReviewInput): ReviewGateResult {
-  return runReadOnlyReview(input, defaultRunnerDependencies());
+  const workspaceInput = resolveReviewWorkspaceInput(input, false);
+  if (typeof workspaceInput === 'string') return reviewerInvocationFailure(workspaceInput);
+  return runReadOnlyReview(workspaceInput, defaultRunnerDependencies());
 }
 
 export function runReadOnlyReview(
@@ -305,32 +313,35 @@ export function runIssueToPullRequest(input: IndependentReviewInput): IssueToPul
   const scopeError = validateIssueWorkflowScope(input.cwd, input.base);
   if (scopeError) return reviewerInvocationFailure(scopeError);
 
-  const branch = issueBranchName(input.issue, issue.title);
-  const branchError = createIssueBranch(input.cwd, input.base, branch);
-  if (branchError) return reviewerInvocationFailure(branchError);
+  const workspace = resolveIssueWorkspace(input.cwd, input.issue, input.base, {
+    createBranch: true,
+  });
+  if (workspace.status === 'BLOCKED') return reviewerInvocationFailure(workspace.reason);
+  const workflowInput = { ...input, cwd: workspace.path };
+  const branch = workspace.branch;
 
-  const implementationResult = runIssueImplementer(input, issue, branch);
+  const implementationResult = runIssueImplementer(workflowInput, issue, branch);
   if (typeof implementationResult === 'string') {
     return reviewerInvocationFailure(implementationResult);
   }
 
-  const review = runBoundedReviewFixLoop(input, defaultRunnerDependencies(), (result) =>
-    applyCodexAutoFix(input, result),
+  const review = runBoundedReviewFixLoop(workflowInput, defaultRunnerDependencies(), (result) =>
+    applyCodexAutoFix(workflowInput, result),
   );
   if (!canOpenPullRequest(true, review)) {
     return { ...review, implementationMaintainability: implementationResult };
   }
 
-  const pullRequestUrl = pushAndCreatePullRequest(input, issue, branch);
+  const pullRequestUrl = pushAndCreatePullRequest(workflowInput, issue, branch);
   if (!pullRequestUrl.ok) {
     return reviewerInvocationFailure(pullRequestUrl.error);
   }
-  let ci = waitForPullRequestCi(input, issue, branch, pullRequestUrl.url, () => {
-    return reviewAndPushAfterCiRepair(input, branch);
+  let ci = waitForPullRequestCi(workflowInput, issue, branch, pullRequestUrl.url, () => {
+    return reviewAndPushAfterCiRepair(workflowInput, branch);
   });
   if (
     ci.status === 'READY_FOR_HUMAN_REVIEW' &&
-    !addIssueClosingReference(input, issue, pullRequestUrl.url)
+    !addIssueClosingReference(workflowInput, issue, pullRequestUrl.url)
   ) {
     ci = {
       ...ci,
@@ -383,7 +394,7 @@ export function runExistingPullRequestUpdate(
   input: IndependentReviewInput,
   pullRequestUrl: string,
   dependencies: ReviewRunnerDependencies = defaultRunnerDependencies(),
-  applyAutoFix: ApplyAutoFix = (result) => applyCodexAutoFix(input, result),
+  applyAutoFix?: ApplyAutoFix,
 ): IssueToPullRequestResult {
   if (!/^\d+$/.test(input.issue)) {
     return reviewerInvocationFailure('Issue number must be numeric.');
@@ -396,18 +407,43 @@ export function runExistingPullRequestUpdate(
   if (activePullRequest.base !== input.base) {
     return reviewerInvocationFailure('The pull request base does not match the requested base.');
   }
-  if (currentBranch(input.cwd) !== activePullRequest.branch) {
-    return reviewerInvocationFailure('The current branch is not the active pull request branch.');
+  let expectedBranch: string;
+  try {
+    expectedBranch = canonicalIssueBranch(input.issue);
+  } catch {
+    return reviewerInvocationFailure('Issue number must be numeric.');
+  }
+  if (activePullRequest.branch !== expectedBranch) {
+    return reviewerInvocationFailure(
+      `The pull request is not on the canonical Issue branch ${expectedBranch}.`,
+    );
   }
 
-  const review = runBoundedReviewFixLoop(input, dependencies, applyAutoFix);
+  const workspaceInput = resolveReviewWorkspaceInput(input, false);
+  if (typeof workspaceInput === 'string') return reviewerInvocationFailure(workspaceInput);
+  const localHeadError = validateLocalPullRequestWorkspace(
+    workspaceInput.cwd,
+    expectedBranch,
+    activePullRequest.headSha,
+  );
+  if (localHeadError) return reviewerInvocationFailure(localHeadError);
+
+  if (currentBranch(workspaceInput.cwd) !== activePullRequest.branch) {
+    return reviewerInvocationFailure(
+      'The canonical worktree is not on the active pull request branch.',
+    );
+  }
+
+  const effectiveApplyAutoFix =
+    applyAutoFix ?? ((result: ReviewGateResult) => applyCodexAutoFix(workspaceInput, result));
+  const review = runBoundedReviewFixLoop(workspaceInput, dependencies, effectiveApplyAutoFix);
   if (!canOpenPullRequest(true, review)) {
     return { ...review, pullRequestUrl };
   }
 
   try {
     execFileSync('git', ['push', 'origin', activePullRequest.branch], {
-      cwd: input.cwd,
+      cwd: workspaceInput.cwd,
       encoding: 'utf8',
     });
   } catch {
@@ -415,10 +451,10 @@ export function runExistingPullRequestUpdate(
   }
 
   const pushedHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: input.cwd,
+    cwd: workspaceInput.cwd,
     encoding: 'utf8',
   }).trim();
-  const observedPullRequest = resolveActivePullRequest(input.cwd, pullRequestUrl);
+  const observedPullRequest = resolveActivePullRequest(workspaceInput.cwd, pullRequestUrl);
   const pushedHeadError =
     typeof observedPullRequest === 'string'
       ? observedPullRequest
@@ -447,9 +483,20 @@ export function runExistingPullRequestUpdate(
     };
   }
 
-  const ci = waitForPullRequestCi(input, issue, activePullRequest.branch, pullRequestUrl, () => {
-    return reviewAndPushAfterCiRepair(input, activePullRequest.branch, dependencies, applyAutoFix);
-  });
+  const ci = waitForPullRequestCi(
+    workspaceInput,
+    issue,
+    activePullRequest.branch,
+    pullRequestUrl,
+    () => {
+      return reviewAndPushAfterCiRepair(
+        workspaceInput,
+        activePullRequest.branch,
+        dependencies,
+        effectiveApplyAutoFix,
+      );
+    },
+  );
   if (ci.status === 'READY_FOR_HUMAN_REVIEW') {
     return { ...review, pullRequestUrl, completionStatus: ci.status, ci };
   }
@@ -573,33 +620,58 @@ function validateIssueWorkflowScope(cwd: string, base: string): string | undefin
   return sync.status === 'BLOCKED' ? sync.reason : undefined;
 }
 
-function issueBranchName(issue: string, title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, fiftyCharacters);
-  return `feat/issue-${issue}-${slug || 'implementation'}`;
+function resolveReviewWorkspaceInput(
+  input: IndependentReviewInput,
+  createBranch: boolean,
+): IndependentReviewInput | string {
+  try {
+    const branch = canonicalIssueBranch(input.issue);
+    const expectedPath = canonicalIssueWorktreePath(input.cwd, input.issue);
+    const current = currentBranch(input.cwd);
+    const currentPath = resolve(input.cwd);
+    if (current === input.base) {
+      const scopeError = validateIssueWorkflowScope(input.cwd, input.base);
+      if (scopeError) return scopeError;
+    } else if (current !== branch || currentPath !== expectedPath) {
+      return 'Issue workflow requires the primary main worktree or the canonical Issue worktree.';
+    }
+
+    const workspace = resolveIssueWorkspace(input.cwd, input.issue, input.base, {
+      createBranch,
+    });
+    if (workspace.status === 'BLOCKED') return workspace.reason;
+    const workspaceError = validateIssueWorkspace(workspace.path, workspace.branch);
+    if (workspaceError) return workspaceError;
+    return { ...input, cwd: workspace.path };
+  } catch {
+    return 'Could not resolve the canonical Issue workspace.';
+  }
 }
 
-const fiftyCharacters = 50;
-
-function createIssueBranch(cwd: string, base: string, branch: string): string | undefined {
+function validateLocalPullRequestWorkspace(
+  cwd: string,
+  branch: string,
+  pullRequestHead: string,
+): string | undefined {
   try {
-    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+    if (currentBranch(cwd) !== branch) {
+      return 'The canonical Issue worktree is not on the expected branch.';
+    }
+    if (
+      execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+        cwd,
+        encoding: 'utf8',
+      }).trim()
+    ) {
+      return 'The canonical Issue worktree is dirty.';
+    }
+    execFileSync('git', ['merge-base', '--is-ancestor', pullRequestHead, 'HEAD'], {
       cwd,
       encoding: 'utf8',
     });
-    return `Feature branch ${branch} already exists.`;
-  } catch {
-    // The branch does not exist; create it from the already verified base.
-  }
-
-  try {
-    execFileSync('git', ['switch', '--create', branch, base], { cwd, encoding: 'utf8' });
     return undefined;
   } catch {
-    return `Could not create feature branch ${branch}.`;
+    return 'The canonical Issue worktree does not contain the active pull request head.';
   }
 }
 

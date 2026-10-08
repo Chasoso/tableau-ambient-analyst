@@ -23,10 +23,17 @@ policy, validation requirements, branch protection, or Human Decisions. Read
 relevant ADRs, docs, tests, and implementation without asking the user to
 repeat information already present there.
 
-The local workflow uses one Issue, one feature branch, and one PR by default.
-It uses `main` as the base, safely switches from a clean previous feature
-branch when needed, fetches `origin/main`, and fast-forwards only when safe.
-Dirty, ahead, diverged, detached, or otherwise unsafe states are `BLOCKED`.
+The local workflow uses one Issue, one canonical feature branch, one canonical
+repository-managed worktree, and one PR by default. The stable identity is the
+Issue number: branch `feat/issue-N`, worktree `.worktrees/issue-N`; Issue title
+slugs must not create alternate identities. The primary worktree is dedicated
+to `main`, safe base synchronization, and worktree lifecycle operations.
+Resolve the canonical workspace at every Issue boundary so a long-lived
+session can move from Issue N to Issue M safely. Reuse a valid canonical
+workspace; create it only when the canonical branch/worktree is absent; and
+return `BLOCKED` for dirty, conflicting, ambiguous, detached, or otherwise
+unsafe states. Never use `git stash` for workflow switching, silently migrate
+legacy title-slug branches, or create a second workspace for one Issue.
 Never reset, force-push, discard commits, auto-resolve conflicts, push directly
 to `main`, use `--no-verify`, or merge a PR as Codex. Use Conventional Commits
 and add `Closes #N` only when the Issue is complete.

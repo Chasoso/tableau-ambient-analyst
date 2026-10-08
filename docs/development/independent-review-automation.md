@@ -100,9 +100,10 @@ npm run review:independent -- \
 ```
 
 The command builds the small runner, fetches the Issue body, requires a clean
-working tree, switches from a previous feature branch to `main` when needed,
-then fetches `origin/main` and fast-forwards local `main` when safe before
-creating a deterministic feature branch and starting a fresh
+primary worktree, resolves the canonical Issue workspace (`feat/issue-N` at
+`.worktrees/issue-N`), and keeps the primary worktree on `main`. It fetches
+`origin/main` and fast-forwards local `main` only when safe before creating or
+reusing the canonical workspace and starting a fresh
 workspace-write Codex implementer. It validates and commits the implementation,
 then starts the bounded independent read-only review/fix loop. Only after a
 validated `PASS` does it push the feature branch and create a pull request. It
@@ -148,6 +149,10 @@ npm run review:independent -- --review-only --issue 29 --base main
 Reviewer invocation. It never launches the workspace-write implementer,
 creates a commit, pushes, or creates a pull request. The bounded AUTO_FIX loop
 is available only to the full Issue-to-PR path.
+
+After a pull request is merged, the canonical worktree and branch remain
+available for explicit follow-up or repository cleanup; this workflow does not
+silently delete worktrees or migrate legacy branches.
 
 The runner is a bounded Issue-to-PR workflow with a bounded review/fix loop.
 When
