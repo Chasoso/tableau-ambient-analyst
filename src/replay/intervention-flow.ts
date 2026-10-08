@@ -282,11 +282,6 @@ export async function runTranscriptInterventionFlow(
   } catch {
     return failureResult(events, detection, 'analysis', contract);
   }
-  events.push({
-    type: 'evidence-collected',
-    sequences: analysis.normalizedEvidence.map(({ sequence }) => sequence),
-  });
-
   let evidence: readonly Evidence[];
   try {
     const interpretations = validateInterpretations(
@@ -297,6 +292,10 @@ export async function runTranscriptInterventionFlow(
   } catch {
     return failureResult(events, detection, 'evidence', contract, analysis);
   }
+  events.push({
+    type: 'evidence-collected',
+    sequences: analysis.normalizedEvidence.map(({ sequence }) => sequence),
+  });
 
   const verification = verifyEvidence(contract, evidence);
   events.push({

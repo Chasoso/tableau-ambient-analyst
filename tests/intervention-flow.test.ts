@@ -283,6 +283,7 @@ describe('transcript intervention flow', () => {
 
     expect(result.status).toBe('FAILED');
     expect(result.intervention?.decision).toBe('HOLD');
+    expect(result.events.map(({ type }) => type)).not.toContain('evidence-collected');
     expect(result.events).toContainEqual(
       expect.objectContaining({ type: 'flow-failed', stage: 'analysis' }),
     );
