@@ -81,6 +81,22 @@ describe('canonical Issue workspaces', () => {
     }
   });
 
+  it('blocks legacy same-Issue worktree paths and slash-separated branches', () => {
+    const { root, local } = fixture();
+    try {
+      const legacyPath = join(local, '.worktrees', 'issue-68-old');
+      mkdirSync(join(local, '.worktrees'));
+      git(local, ['worktree', 'add', '-q', '-b', 'feat/other', legacyPath, 'main']);
+      expect(resolveIssueWorkspace(local, '68')).toMatchObject({ status: 'BLOCKED' });
+
+      git(local, ['branch', 'feat/issue-69/retry', 'main']);
+      expect(resolveIssueWorkspace(local, '69')).toMatchObject({ status: 'BLOCKED' });
+      expect(git(local, ['branch', '--list', 'feat/issue-69'])).toBe('');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('blocks a dirty canonical worktree without stashing or discarding it', () => {
     const { root, local } = fixture();
     try {

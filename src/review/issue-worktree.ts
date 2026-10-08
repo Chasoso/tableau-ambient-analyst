@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 
 export type IssueWorkspaceStatus = 'NEW' | 'REUSE' | 'BLOCKED';
 
@@ -20,7 +20,7 @@ function git(cwd: string, args: string[]): string {
 }
 
 function issuePattern(issue: string): RegExp {
-  return new RegExp(`(?:^|/)issue-${issue}(?:$|-)`);
+  return new RegExp(`(?:^|/)issue-${issue}(?:$|[-/])`);
 }
 
 function repositoryRoot(cwd: string): string {
@@ -117,6 +117,18 @@ export function resolveIssueWorkspace(
     }
 
     const worktrees = parseWorktrees(cwd);
+    const conflictingWorktree = worktrees.find((entry) => {
+      const entryPath = resolve(entry.path);
+      if (entryPath === path) return false;
+      const relativePath = relative(root, entryPath).split('/').join('/');
+      return relativePath.startsWith('.worktrees/') && issuePattern(issue).test(relativePath);
+    });
+    if (conflictingWorktree) {
+      return {
+        status: 'BLOCKED',
+        reason: `Ambiguous worktrees represent Issue #${issue}: ${conflictingWorktree.path}.`,
+      };
+    }
     const attachedCanonical = worktrees.find((entry) => entry.branch === `refs/heads/${branch}`);
     if (attachedCanonical && resolve(attachedCanonical.path) !== path) {
       return {
