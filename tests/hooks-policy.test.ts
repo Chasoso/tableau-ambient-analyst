@@ -44,6 +44,8 @@ describe('repository-local Codex safety Hook', () => {
     ['git reset --hard HEAD~1', 'hard reset'],
     ['git push origin main', 'protected branch main'],
     ['git push origin HEAD:refs/heads/main', 'protected branch main'],
+    ['git push origin +refs/heads/feat/issue-55', 'Force push'],
+    ['git push origin +refs/heads/feat/issue-55:refs/heads/feat/issue-56', 'Force push'],
     ['git commit --no-verify -m bypass', 'verification bypass'],
     ['git push --no-verify origin feat/issue-55', 'verification bypass'],
     ['gh pr merge 60', 'merge operations'],
@@ -62,6 +64,7 @@ describe('repository-local Codex safety Hook', () => {
     'git diff --check',
     'git fetch origin main',
     'git push origin feat/issue-55',
+    'git push origin main:refs/heads/feat/issue-55',
     'git worktree add -b feat/issue-55 .worktrees/issue-55 main',
     'git worktree remove .worktrees/issue-55',
     'gh pr view 60 --json state',
@@ -86,5 +89,12 @@ describe('repository-local Codex safety Hook', () => {
     expect(JSON.parse(runRawHook('{not-json')).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(JSON.parse(runRawHook('{}')).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(denial("git push --force 'unterminated")).toContain('parse');
+  });
+
+  it.each([
+    'git -c core.hooksPath=/dev/null push --force origin feat/issue-55',
+    'git --config-env core.hooksPath=HOOKS push --force origin feat/issue-55',
+  ])('guards prohibited commands after Git global options: %s', (command) => {
+    expect(denial(command)).toContain('Force push');
   });
 });

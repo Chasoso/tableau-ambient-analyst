@@ -50,27 +50,55 @@ def segments(tokens: list[str]) -> list[list[str]]:
     return result
 
 
-def git_invocations(segment: list[str]) -> list[tuple[str, list[str]]]:
+def git_invocations(segment: list[str]) -> tuple[list[tuple[str, list[str]]], bool]:
     invocations: list[tuple[str, list[str]]] = []
+    parse_failed = False
+    value_options = {
+        "-C",
+        "--config-env",
+        "--exec-path",
+        "--git-dir",
+        "--namespace",
+        "--super-prefix",
+        "--work-tree",
+        "-c",
+    }
+    flag_options = {
+        "--bare",
+        "--no-pager",
+        "--no-replace-objects",
+        "--paginate",
+        "--literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+    }
     for index, token in enumerate(segment):
         if executable_name(token) != "git":
             continue
         cursor = index + 1
         while cursor < len(segment) and segment[cursor].startswith("-"):
-            if segment[cursor] in {"-C", "--git-dir", "--work-tree"}:
+            option = segment[cursor]
+            if option in value_options:
                 cursor += 2
-            else:
+            elif option in flag_options or option.startswith("--") and "=" in option:
                 cursor += 1
+            elif option.startswith(("-c", "-C")) and len(option) > 2:
+                cursor += 1
+            else:
+                parse_failed = True
+                break
         if cursor < len(segment):
             invocations.append((segment[cursor], segment[cursor + 1 :]))
-    return invocations
+    return invocations, parse_failed
 
 
-def protected_ref(token: str) -> bool:
-    for ref in token.lstrip("+").split(":"):
-        if ref == "main" or ref.endswith("/main") or ref == "refs/heads/main":
-            return True
-    return False
+def protected_destination(refspec: str) -> bool:
+    destination = refspec.split(":", 1)[-1].lstrip("+")
+    return (
+        destination == "main"
+        or destination.endswith("/main")
+        or destination == "refs/heads/main"
+    )
 
 
 def force_option(token: str) -> bool:
@@ -97,14 +125,20 @@ def decision(command: str) -> str | None:
                 if nested_reason:
                     return nested_reason
 
-        for verb, args in git_invocations(segment):
+        invocations, parse_failed = git_invocations(segment)
+        if parse_failed:
+            return "Hook could not analyze Git global options; execution is blocked."
+        for verb, args in invocations:
             if "--no-verify" in args:
                 return "Git verification bypass (--no-verify) is blocked by the repository Hook."
 
             if verb == "push":
-                if any(force_option(option) for option in args):
+                positional = [token for token in args if not token.startswith("-")]
+                if any(force_option(option) for option in args) or any(
+                    token.startswith("+") for token in positional[1:]
+                ):
                     return "Force push is blocked by the repository Hook."
-                if any(protected_ref(token) for token in args):
+                if len(positional) >= 2 and any(protected_destination(token) for token in positional[1:]):
                     return "Direct push to protected branch main is blocked by the repository Hook."
 
             if verb == "reset" and "--hard" in args:
