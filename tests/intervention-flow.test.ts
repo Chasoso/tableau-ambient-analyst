@@ -157,6 +157,38 @@ describe('transcript intervention flow', () => {
 
   it('uses an injected TriggerDetector implementation', async () => {
     const detector: TriggerDetector = {
+      detect: vi.fn((utterances) =>
+        utterances.length < 2
+          ? {
+              decision: 'IGNORE' as const,
+              reason: 'no-analytical-opportunity' as const,
+              context: [{ sequence: 0, speaker: 'A', text: 'Assuming demand will stay high.' }],
+            }
+          : {
+              decision: 'ANALYZE' as const,
+              opportunity: {
+                claim: 'We should launch next week.',
+                reason: 'assumption-based-decision' as const,
+                context: [
+                  { sequence: 0, speaker: 'A', text: 'Assuming demand will stay high.' },
+                  { sequence: 1, speaker: 'B', text: 'We should launch next week.' },
+                ],
+              },
+            },
+      ),
+    };
+    const result = await runTranscriptInterventionFlow(decisionFixture, {
+      ...dependencies('supported'),
+      triggerDetector: detector,
+    });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(detector.detect).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects detector context that is not grounded in the replayed transcript', async () => {
+    let modelCalled = false;
+    const detector: TriggerDetector = {
       detect: vi.fn(() => ({
         decision: 'ANALYZE' as const,
         opportunity: {
@@ -171,11 +203,103 @@ describe('transcript intervention flow', () => {
     };
     const result = await runTranscriptInterventionFlow(
       '[{"sequence":0,"speaker":"A","text":"Let us discuss lunch."}]',
-      { ...dependencies('supported'), triggerDetector: detector },
+      {
+        ...dependencies('supported'),
+        triggerDetector: detector,
+        model: {
+          async respond() {
+            modelCalled = true;
+            throw new Error('model must not be called');
+          },
+        },
+      },
     );
 
-    expect(result.status).toBe('COMPLETED');
-    expect(detector.detect).toHaveBeenCalledOnce();
+    expect(result.status).toBe('FAILED');
+    expect(result.intervention?.decision).toBe('HOLD');
+    expect(modelCalled).toBe(false);
+    expect(result.events).toContainEqual({
+      type: 'flow-failed',
+      stage: 'trigger',
+      reason: 'TRIGGER_FAILED',
+    });
+  });
+
+  it.each([
+    {
+      name: 'future sequence',
+      context: [
+        { sequence: 0, speaker: 'A', text: 'Let us discuss lunch.' },
+        { sequence: 1, speaker: 'B', text: 'We should launch next week.' },
+      ],
+      source: '[{"sequence":0,"speaker":"A","text":"Let us discuss lunch."}]',
+    },
+    {
+      name: 'mismatched text',
+      context: [{ sequence: 0, speaker: 'A', text: 'Invented text.' }],
+      source: '[{"sequence":0,"speaker":"A","text":"The data says 80."}]',
+    },
+    {
+      name: 'mismatched speaker',
+      context: [{ sequence: 0, speaker: 'B', text: 'The data says 80.' }],
+      source: '[{"sequence":0,"speaker":"A","text":"The data says 80."}]',
+    },
+    {
+      name: 'duplicate sequence',
+      context: [
+        { sequence: 0, speaker: 'A', text: 'The data says 80.' },
+        { sequence: 0, speaker: 'A', text: 'The data says 80.' },
+      ],
+      source: '[{"sequence":0,"speaker":"A","text":"The data says 80."}]',
+    },
+    {
+      name: 'out of order context',
+      context: [
+        { sequence: 1, speaker: 'B', text: 'The report says 120.' },
+        { sequence: 0, speaker: 'A', text: 'The data says 80.' },
+      ],
+      source:
+        '[{"sequence":0,"speaker":"A","text":"The data says 80."},{"sequence":1,"speaker":"B","text":"The report says 120."}]',
+    },
+  ])('rejects $name detector context before analysis', async ({ context, source }) => {
+    const tools = toolsFor();
+    const result = await runTranscriptInterventionFlow(source, {
+      ...dependencies('supported'),
+      triggerDetector: {
+        detect: () => ({
+          decision: 'ANALYZE' as const,
+          opportunity: {
+            claim: 'A semantic claim summary.',
+            reason: 'numerical-claim' as const,
+            context,
+          },
+        }),
+      },
+      tools,
+    });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.intervention?.decision).toBe('HOLD');
+    expect(tools.calls).toBe(0);
+  });
+
+  it('rejects invented context on an ignored detection', async () => {
+    const result = await runTranscriptInterventionFlow(
+      '[{"sequence":0,"speaker":"A","text":"Let us discuss lunch."}]',
+      {
+        ...dependencies('supported'),
+        triggerDetector: {
+          detect: () => ({
+            decision: 'IGNORE' as const,
+            reason: 'no-analytical-opportunity' as const,
+            context: [{ sequence: 1, speaker: 'B', text: 'Invented.' }],
+          }),
+        },
+      },
+    );
+
+    expect(result.status).toBe('FAILED');
+    expect(result.intervention?.decision).toBe('HOLD');
   });
 
   it('does not analyze when an injected TriggerDetector ignores the replay', async () => {

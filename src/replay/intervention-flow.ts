@@ -165,6 +165,43 @@ function validateTriggerDetection(value: unknown): TriggerDetection {
   return value as TriggerDetection;
 }
 
+function validateTriggerGrounding(
+  detection: TriggerDetection,
+  replayed: readonly TranscriptUtterance[],
+): void {
+  const context =
+    detection.decision === 'ANALYZE' ? detection.opportunity.context : detection.context;
+  const replayedBySequence = new Map(replayed.map((utterance) => [utterance.sequence, utterance]));
+  const replayedIndexBySequence = new Map(
+    replayed.map((utterance, index) => [utterance.sequence, index]),
+  );
+  let previousIndex = -1;
+  const seenSequences = new Set<number>();
+
+  if (detection.decision === 'ANALYZE' && context.length === 0) {
+    throw new Error('TRIGGER_DETECTION_UNGROUNDED');
+  }
+
+  for (const item of context) {
+    if (seenSequences.has(item.sequence)) {
+      throw new Error('TRIGGER_DETECTION_UNGROUNDED');
+    }
+    seenSequences.add(item.sequence);
+    const replayedUtterance = replayedBySequence.get(item.sequence);
+    const replayedIndex = replayedIndexBySequence.get(item.sequence);
+    if (
+      replayedUtterance === undefined ||
+      replayedIndex === undefined ||
+      replayedIndex <= previousIndex ||
+      replayedUtterance.speaker !== item.speaker ||
+      replayedUtterance.text !== item.text
+    ) {
+      throw new Error('TRIGGER_DETECTION_UNGROUNDED');
+    }
+    previousIndex = replayedIndex;
+  }
+}
+
 function validateInterpretations(
   value: unknown,
   contract: ReturnType<typeof analysisContractFromOpportunity>,
@@ -247,6 +284,7 @@ export async function runTranscriptInterventionFlow(
       detection = validateTriggerDetection(
         detector.detect(replayed, afterSequence === undefined ? {} : { afterSequence }),
       );
+      validateTriggerGrounding(detection, replayed);
     } catch {
       return failureResult(events, detection, 'trigger');
     }

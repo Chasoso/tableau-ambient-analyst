@@ -43,6 +43,13 @@ is supplied, the current heuristic `triggerDetector` is used. A later detector
 implementation can be injected at this boundary without changing the replay,
 contract, evidence, or intervention stages.
 
+Detector output is treated as untrusted input. Before an Analysis Contract is
+created, its context must be grounded in the utterances already replayed:
+sequence, speaker, and text must match, with no duplicate or out-of-order
+references. A claim may still be a semantic summary and does not need to match
+the final utterance verbatim. Invalid detector context fails closed at the
+trigger stage.
+
 Malformed fixtures, unavailable or malformed Agentic output, and malformed
 Evidence interpretation fail closed as `FAILED` with an auditable `HOLD`
 result. This Issue does not add Extension UI, audio/STT, Live Control, new
