@@ -131,7 +131,7 @@ function dynamicToken(token) {
 }
 
 function braceExpansion(token) {
-  return /\{[^{}]*,[^{}]*\}/.test(token);
+  return /\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(token);
 }
 
 function unsupportedControlStructure(tokens) {
@@ -144,7 +144,7 @@ function unsupportedControlStructure(tokens) {
   });
 }
 
-function executableSubstitution(command) {
+function substitutionReason(command) {
   let quote = null;
   let escaped = false;
   for (let index = 0; index < command.length; index += 1) {
@@ -157,6 +157,11 @@ function executableSubstitution(command) {
       if (character === "'") quote = null;
       continue;
     }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      else if (character === '\\') escaped = true;
+      continue;
+    }
     if (character === '\\') {
       escaped = true;
       continue;
@@ -165,12 +170,29 @@ function executableSubstitution(command) {
       quote = character;
       continue;
     }
-    if (
-      character === '`' ||
-      (character === '$' && (command[index + 1] === '(' || command[index + 1] === "'"))
-    ) return true;
+    if (character === '`') {
+      const end = command.indexOf('`', index + 1);
+      if (end === -1) return 'Executable shell substitution cannot be analyzed safely; execution is blocked.';
+      const reason = decision(command.slice(index + 1, end));
+      if (reason) return reason;
+      index = end;
+      continue;
+    }
+    if (character === '$' && command[index + 1] === '(') {
+      let depth = 1;
+      let end = index + 2;
+      while (end < command.length && depth > 0) {
+        if (command[end] === '(') depth += 1;
+        else if (command[end] === ')') depth -= 1;
+        end += 1;
+      }
+      if (depth !== 0) return 'Executable shell substitution cannot be analyzed safely; execution is blocked.';
+      const reason = decision(command.slice(index + 2, end - 1));
+      if (reason) return reason;
+      index = end - 1;
+    }
   }
-  return false;
+  return null;
 }
 
 function gitInvocations(segment) {
@@ -213,11 +235,10 @@ function shellCommand(segment, index) {
 }
 
 function decision(command) {
-  if (executableSubstitution(command)) {
-    return 'Executable shell substitution cannot be analyzed safely; execution is blocked.';
-  }
   const tokens = tokensFor(command);
   if (!tokens) return 'Hook could not parse the pending shell command; execution is blocked.';
+  const substitution = substitutionReason(command);
+  if (substitution) return substitution;
   if (unsupportedControlStructure(tokens)) {
     return 'Unsupported shell control structure may hide a protected Git or GitHub operation; execution is blocked.';
   }
@@ -226,7 +247,7 @@ function decision(command) {
       const nested = shellCommand(segment, index);
       if (nested !== null) {
         const nestedTokens = tokensFor(nested);
-        if (!nestedTokens || (nestedTokens.length === 1 && dynamicToken(nestedTokens[0]))) {
+        if (!nestedTokens || nested.startsWith('$') || nested.startsWith('`') || (nestedTokens.length === 1 && dynamicToken(nestedTokens[0]))) {
           return 'Shell wrapper command cannot be determined statically; execution is blocked.';
         }
         const nestedReason = decision(nested);

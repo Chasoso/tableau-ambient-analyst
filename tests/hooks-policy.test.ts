@@ -47,10 +47,10 @@ describe('repository-local Codex safety Hook', () => {
     ['git push', 'implicit'],
     ['git push origin', 'implicit'],
     ['git push origin HEAD', 'Ambiguous HEAD'],
-    ['git push origin "$(git branch --show-current)"', 'substitution'],
+    ['git push origin "$(git branch --show-current)"', 'determined statically'],
     ['git push origin "${BRANCH}"', 'determined statically'],
     ['git push origin "$TARGET"', 'determined statically'],
-    ['git push origin `git branch --show-current`', 'substitution'],
+    ['git push origin `git branch --show-current`', 'determined statically'],
     ['FOO=bar git push --force origin feat/issue-55', 'Force push'],
     ['FOO=bar git reset --hard HEAD~1', 'hard reset'],
     ['FOO=bar gh pr merge 61', 'merge operations'],
@@ -75,9 +75,14 @@ describe('repository-local Codex safety Hook', () => {
     ['( git branch -D feat/issue-55 )', 'control structure'],
     ['git push origin {main,feat/issue-55}', 'brace expansion'],
     ['git push origin refs/heads/{main,feat/issue-55}', 'brace expansion'],
+    ['git push origin m{a..a}in', 'brace expansion'],
+    ['git push origin refs/heads/m{a..a}in', 'brace expansion'],
     ['git push --{force,verbose} origin feat/issue-55', 'brace expansion'],
+    ['git push --forc{e..e} origin feat/issue-55', 'brace expansion'],
     ['git branch -{D,v} feat/issue-55', 'brace expansion'],
+    ['git branch -{D..D} feat/issue-55', 'brace expansion'],
     ['git worktree remove --{force,verbose} .worktrees/issue-55', 'brace expansion'],
+    ['git worktree remove --forc{e..e} .worktrees/issue-55', 'brace expansion'],
   ])('denies %s', (command, reason) => {
     expect(denial(command)).toContain(reason);
   });
@@ -100,6 +105,7 @@ describe('repository-local Codex safety Hook', () => {
     'gh pr list --search merge',
     'echo "${HOME}"',
     'echo "$HOME"',
+    'echo "value={a..z}"',
     'printf "{}"',
     'echo \'{"status":"ok"}\'',
     "printf '${HOME}'",
@@ -107,15 +113,19 @@ describe('repository-local Codex safety Hook', () => {
     'bash -c \'echo "$HOME"\'',
     'bash -c \'printf "${HOME}"\'',
     'bash -c \'printf "{}"\'',
+    'echo "$(date)"',
+    'printf "$(pwd)"',
+    'echo `date`',
+    'bash -c \'echo "$(date)"\'',
   ])('allows safe command %s', (command) => {
     expect(denial(command)).toBeUndefined();
   });
 
   it('does not allow a shell-chain bypass of a prohibited command', () => {
     expect(denial('git status && git push --force origin feat/issue-55')).toContain('Force push');
-    expect(denial('printf "$(git push --force origin feat/issue-55)"')).toContain('substitution');
+    expect(denial('printf "$(git push --force origin feat/issue-55)"')).toContain('Force push');
     expect(denial("printf '$(git push --force origin feat/issue-55)'")).toBeUndefined();
-    expect(denial("bash -c $'git push --force origin feat/issue-55'")).toContain('substitution');
+    expect(denial("bash -c $'git push --force origin feat/issue-55'")).toContain('Shell wrapper');
     expect(denial('git push --{force} origin feat/issue-55')).toContain('Force push');
   });
 

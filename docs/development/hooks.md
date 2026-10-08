@@ -40,7 +40,10 @@ for the supported short-option forms. Dynamic or otherwise statically
 unresolved push destinations fail closed, including leading shell assignment
 prefixes such as `FOO=bar`. Ordinary variable expansion and literal braces
 outside protected command boundaries are allowed; executable substitutions
-and dynamic protected destinations are not. Newline-separated commands are
+outside protected command boundaries are allowed; command substitutions are
+inspected only when they contain a protected operation or affect a protected
+destination. Brace comma and sequence forms in protected arguments, and
+dynamic protected destinations, fail closed. Newline-separated commands are
 treated like other command separators. Unsupported shell control structures
 that contain Git/GitHub operations fail closed, while harmless brace or
 variable text remains allowed outside those protected boundaries. The deterministic
