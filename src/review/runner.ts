@@ -225,6 +225,15 @@ implementation. Return a top-level maintainability result: NO_DRIFT when no
 meaningful concern is found, LOCAL_CLEANUP when a deterministic in-scope cleanup
 is needed, or FOLLOW_UP_MAINTENANCE when a real concern needs separate
 follow-up. Do not block on style preference alone.
+
+For every materially changed integration boundary, identify what downstream
+code assumes about the upstream result and verify that important invariants
+are explicitly enforced. For replaceable, injected, model, tool, or provider
+boundaries, mentally test at least one structurally valid but semantically
+wrong substitution and check that unsafe input fails closed when required.
+When an existing interface or abstraction seam applies, verify that the change
+uses it rather than bypassing a concrete implementation. Do not invent a new
+abstraction solely for hypothetical future flexibility.
 `;
 }
 

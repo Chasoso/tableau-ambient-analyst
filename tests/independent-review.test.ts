@@ -1445,6 +1445,23 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('This is scope context only');
     expect(prompt).not.toContain('return PASS');
   });
+
+  it('requires bounded integration-boundary and adversarial seam review', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '57' },
+      { title: 'Strengthen review', body: 'Body', url: 'https://example.test/issues/57' },
+      ['npm run validate: passed'],
+      'feat/issue-57-review-boundaries',
+    );
+
+    expect(prompt).toContain('materially changed integration boundary');
+    expect(prompt).toContain('structurally valid but semantically');
+    expect(prompt).toContain('wrong substitution');
+    expect(prompt).toContain('fails closed');
+    expect(prompt).toContain('existing interface or abstraction seam');
+    expect(prompt).toContain('Do not invent a new');
+    expect(prompt).toContain('abstraction solely for hypothetical future flexibility');
+  });
 });
 
 describe('review cycle state', () => {
