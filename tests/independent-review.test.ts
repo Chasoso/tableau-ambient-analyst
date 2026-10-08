@@ -2012,6 +2012,7 @@ describe('Issue-to-PR handoff boundaries', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-existing-pr-'));
     const remote = join(directory, 'origin.git');
     const fakeBin = join(directory, 'bin');
+    const workspace = join(directory, '.worktrees', 'issue-38');
     const previousPath = process.env.PATH;
     try {
       mkdirSync(fakeBin);
@@ -2019,8 +2020,9 @@ describe('Issue-to-PR handoff boundaries', () => {
       execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
       execFileSync('git', ['config', 'user.name', 'Test'], { cwd: directory });
       execFileSync('git', ['config', 'user.email', 'test@example.test'], { cwd: directory });
+      writeFileSync(join(directory, '.gitignore'), '.worktrees/\n/bin/\n/origin.git/\n');
       writeFileSync(join(directory, 'README.md'), '# fixture\n');
-      execFileSync('git', ['add', 'README.md'], { cwd: directory });
+      execFileSync('git', ['add', '.gitignore', 'README.md'], { cwd: directory });
       execFileSync(
         'git',
         ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'initial'],
@@ -2030,19 +2032,22 @@ describe('Issue-to-PR handoff boundaries', () => {
       execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'main'], {
         cwd: directory,
       });
-      execFileSync('git', ['switch', '-q', '-c', 'feature/review'], { cwd: directory });
-      writeFileSync(join(directory, 'old.txt'), 'old\n');
-      execFileSync('git', ['add', 'old.txt'], { cwd: directory });
+      mkdirSync(join(directory, '.worktrees'));
+      execFileSync('git', ['worktree', 'add', '-q', '-b', 'feat/issue-38', workspace, 'main'], {
+        cwd: directory,
+      });
+      writeFileSync(join(workspace, 'old.txt'), 'old\n');
+      execFileSync('git', ['add', 'old.txt'], { cwd: workspace });
       execFileSync(
         'git',
         ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'old'],
-        { cwd: directory },
+        { cwd: workspace },
       );
-      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'feature/review'], {
-        cwd: directory,
+      execFileSync('git', ['push', '-q', '--set-upstream', 'origin', 'feat/issue-38'], {
+        cwd: workspace,
       });
-      writeFileSync(join(directory, 'follow-up.txt'), 'follow-up\n');
-      execFileSync('git', ['add', 'follow-up.txt'], { cwd: directory });
+      writeFileSync(join(workspace, 'follow-up.txt'), 'follow-up\n');
+      execFileSync('git', ['add', 'follow-up.txt'], { cwd: workspace });
       execFileSync(
         'git',
         [
@@ -2054,7 +2059,7 @@ describe('Issue-to-PR handoff boundaries', () => {
           '-qm',
           'follow-up',
         ],
-        { cwd: directory },
+        { cwd: workspace },
       );
 
       const remoteShellPath = remote.replaceAll("'", "'\\''");
@@ -2066,8 +2071,8 @@ if [ "$1" = "issue" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  head=$(git --git-dir='${remoteShellPath}' rev-parse refs/heads/feature/review)
-  printf '{"url":"https://github.com/Chasoso/tableau-ambient-analyst/pull/38","state":"OPEN","headRefName":"feature/review","baseRefName":"main","headRefOid":"%s","headRepository":{"nameWithOwner":"Chasoso/tableau-ambient-analyst"}}\\n' "$head"
+  head=$(git --git-dir='${remoteShellPath}' rev-parse refs/heads/feat/issue-38)
+  printf '{"url":"https://github.com/Chasoso/tableau-ambient-analyst/pull/38","state":"OPEN","headRefName":"feat/issue-38","baseRefName":"main","headRefOid":"%s","headRepository":{"nameWithOwner":"Chasoso/tableau-ambient-analyst"}}\\n' "$head"
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
@@ -2117,7 +2122,7 @@ exit 1
               maintainability: 'NO_DRIFT',
             }),
           ),
-        currentBranch: () => 'feature/review',
+        currentBranch: () => 'feat/issue-38',
         readAccounting: () => followUpAccounting,
         recordReview: () => followUpAccounting,
         recordAutoFix: () => followUpAccounting,
@@ -2134,12 +2139,12 @@ exit 1
       expect(result.completionStatus).toBe('READY_FOR_HUMAN_REVIEW');
       expect(result.ci?.status).toBe('READY_FOR_HUMAN_REVIEW');
       expect(
-        execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/feature/review'], {
-          cwd: directory,
+        execFileSync('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/feat/issue-38'], {
+          cwd: workspace,
           encoding: 'utf8',
         }).trim(),
       ).toBe(
-        execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim(),
+        execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim(),
       );
     } finally {
       process.env.PATH = previousPath;

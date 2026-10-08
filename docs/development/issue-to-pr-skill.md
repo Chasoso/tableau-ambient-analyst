@@ -8,24 +8,29 @@ questions.
 
 ## Responsibility inventory
 
-| Concern | Reusable procedure in the Skill | Repository-local authority or implementation |
-| --- | --- | --- |
-| Issue resolution and implementation handoff | Resolve the Issue, inspect required context, and use one bounded Issue-to-PR flow | Issue content, `AGENTS.md`, ADRs, and repository implementation |
-| Preflight | Require a clean worktree, safe base synchronization, and a feature branch after synchronization | `src/review/git-sync.ts`, configured base/remote, and local branch policy |
-| Validation, self-review, and Maintainability Guard | Run deterministic validation, complete the guard, record its result and follow-up candidates before review | `package.json` scripts and local acceptance criteria |
-| Independent Review | Use a fresh read-only reviewer, structured findings, generalization, sibling search, and bounded correction | `src/review/runner.ts`, `src/review/gate.ts`, schema, accounting epoch, and Issue #29 compatibility |
-| Finding handling | Continue only for deterministic `AUTO_FIX`; stop for human decisions or missing prerequisites | `AGENTS.md`, Issue/ADR decisions, and repository safety policy |
-| PR handoff and CI triage | Require a fresh PASS and latest-head CI before reporting readiness; classify failures, use bounded repair/transient-rerun limits, fail closed, and never merge | `src/review/runner.ts`, `src/review/ci-feedback.ts`, GitHub checks, branch protection |
-| Security and external operations | Preserve untrusted Issue/evidence boundaries and fail closed | `AGENTS.md` and `docs/development/external-integration-safety.md` |
+| Concern                                            | Reusable procedure in the Skill                                                                                                                                | Repository-local authority or implementation                                                              |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Issue resolution and implementation handoff        | Resolve the Issue, inspect required context, and use one bounded Issue-to-PR flow                                                                              | Issue content, `AGENTS.md`, ADRs, and repository implementation                                           |
+| Preflight                                          | Require a clean primary worktree, safe base synchronization, and canonical Issue workspace resolution                                                          | `src/review/git-sync.ts`, `src/review/issue-worktree.ts`, configured base/remote, and local branch policy |
+| Validation, self-review, and Maintainability Guard | Run deterministic validation, complete the guard, record its result and follow-up candidates before review                                                     | `package.json` scripts and local acceptance criteria                                                      |
+| Independent Review                                 | Use a fresh read-only reviewer, structured findings, generalization, sibling search, and bounded correction                                                    | `src/review/runner.ts`, `src/review/gate.ts`, schema, accounting epoch, and Issue #29 compatibility       |
+| Finding handling                                   | Continue only for deterministic `AUTO_FIX`; stop for human decisions or missing prerequisites                                                                  | `AGENTS.md`, Issue/ADR decisions, and repository safety policy                                            |
+| PR handoff and CI triage                           | Require a fresh PASS and latest-head CI before reporting readiness; classify failures, use bounded repair/transient-rerun limits, fail closed, and never merge | `src/review/runner.ts`, `src/review/ci-feedback.ts`, GitHub checks, branch protection                     |
+| Security and external operations                   | Preserve untrusted Issue/evidence boundaries and fail closed                                                                                                   | `AGENTS.md` and `docs/development/external-integration-safety.md`                                         |
 
 ## Lessons incorporated
 
 - Issue #32's CI feedback loop is a shared post-push completion gate, not an
   initial-PR-only feature. Existing-PR updates use the same latest-head check,
   classification, repair, and bounded rerun behavior.
-- Issue #34's preflight synchronizes local `main` safely before creating a
-  branch. A clean previous feature branch may be switched to `main`; dirty,
+- Issue #34's preflight established safe base synchronization. Under the
+  Issue #59 workspace boundary, the primary worktree remains on `main`; dirty,
   ahead, diverged, detached, or unsafe states remain blocked.
+- Issue #59's workspace boundary keeps the primary worktree on `main` and
+  derives both `feat/issue-N` and `.worktrees/issue-N` from the Issue number.
+  Existing canonical workspaces are reused; legacy title-slug ambiguity,
+  dirty worktrees, and conflicting attachments remain blocked. The workflow
+  never uses stash as a switching mechanism.
 - Issue #29's review accounting, finding classification, sibling search,
   convergence, legacy migration boundary, and Human Decision ownership stay
   repository-local. The Skill only describes when and how to invoke those

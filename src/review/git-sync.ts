@@ -6,8 +6,9 @@ export type MainSyncResult =
 
 /**
  * Fetch and safely align a clean local base branch with its remote tracking
- * branch. This intentionally supports fast-forward-only movement and never
- * rewrites or discards local history.
+ * branch. The caller must provide the primary main worktree; this intentionally
+ * supports fast-forward-only movement and never switches or discards local
+ * history.
  */
 export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult {
   if (!/^[A-Za-z0-9._/-]+$/.test(base)) {
@@ -29,14 +30,10 @@ export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult
       };
     }
     if (currentBranch !== base) {
-      try {
-        execFileSync('git', ['switch', base], { cwd, encoding: 'utf8' });
-      } catch {
-        return {
-          status: 'BLOCKED',
-          reason: `Could not safely switch from ${currentBranch} to ${base}.`,
-        };
-      }
+      return {
+        status: 'BLOCKED',
+        reason: `Primary worktree must already be on ${base}; branch switching is forbidden.`,
+      };
     }
     execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], { cwd, encoding: 'utf8' });
     execFileSync('git', ['fetch', 'origin', base], { cwd, encoding: 'utf8' });
