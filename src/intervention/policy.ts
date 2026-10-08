@@ -1,5 +1,5 @@
 import type { AnalysisContract } from '../analysis/contract.js';
-import { validateAnalysisContract } from '../analysis/contract.js';
+import { analysisContractFromOpportunity, validateAnalysisContract } from '../analysis/contract.js';
 import type { AnalyzeOpportunity, TriggerReason } from '../trigger/detector.js';
 import type {
   EvidenceQuestionStatus,
@@ -76,16 +76,12 @@ function hasMatchingAnalysisChain(
 ): boolean {
   try {
     validateAnalysisContract(contract);
+    const expectedContract = analysisContractFromOpportunity(opportunity);
+    if (JSON.stringify(contract) !== JSON.stringify(expectedContract)) return false;
   } catch {
     return false;
   }
   if (opportunity.claim !== contract.claim) return false;
-  if (
-    isDecisionOpportunity(opportunity.reason) &&
-    !contract.requiredEvidence.some(({ id }) => id === assumptionSupportQuestionId)
-  ) {
-    return false;
-  }
 
   const requiredIds = contract.requiredEvidence.map(({ id }) => id);
   const verifiedIds = verification.questionStatus.map(({ questionId }) => questionId);

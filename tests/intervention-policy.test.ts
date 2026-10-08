@@ -1,34 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import type { AnalysisContract } from '../src/analysis/contract.js';
+import {
+  analysisContractFromOpportunity,
+  type AnalysisContract,
+} from '../src/analysis/contract.js';
 import type { AnalyzeOpportunity } from '../src/trigger/detector.js';
 import { decideIntervention } from '../src/intervention/policy.js';
 
-const contract: AnalysisContract = {
+const decisionOpportunity: AnalyzeOpportunity = {
   claim: 'We should launch next week.',
+  reason: 'assumption-based-decision',
   context: [
     { sequence: 0, speaker: 'A', text: 'Assuming demand will stay high.' },
     { sequence: 1, speaker: 'B', text: 'We should launch next week.' },
   ],
-  requiredEvidence: [
-    { id: 'decision-assumption-support', question: 'Is the assumption supported?' },
-  ],
-  optionalEvidence: [],
-  openQuestions: [],
 };
-
-const decisionOpportunity: AnalyzeOpportunity = {
-  claim: contract.claim,
-  reason: 'assumption-based-decision',
-  context: contract.context,
-};
+const contract = analysisContractFromOpportunity(decisionOpportunity);
 
 const verification = (
   completion: 'COMPLETE' | 'INSUFFICIENT',
   status: 'supported' | 'contradicted' | 'unresolved',
+  questionId = 'decision-assumption-support',
 ) => ({
   completion,
-  questionStatus: [{ questionId: 'decision-assumption-support', status }],
-  unresolvedRequiredEvidence: completion === 'COMPLETE' ? [] : ['decision-assumption-support'],
+  questionStatus: [{ questionId, status }],
+  unresolvedRequiredEvidence: completion === 'COMPLETE' ? [] : [questionId],
   reasons: completion === 'COMPLETE' ? [] : ['required evidence is unresolved'],
 });
 
@@ -54,9 +49,17 @@ describe('intervention policy', () => {
       ...decisionOpportunity,
       reason: 'numerical-claim',
     };
+    const numericalContract = analysisContractFromOpportunity(numericalOpportunity);
+    const numericalVerification = {
+      ...verification('COMPLETE', 'contradicted', 'claim-value'),
+      questionStatus: [
+        { questionId: 'claim-value', status: 'contradicted' as const },
+        { questionId: 'claim-scope', status: 'supported' as const },
+      ],
+    };
 
     expect(
-      decideIntervention(numericalOpportunity, contract, verification('COMPLETE', 'contradicted')),
+      decideIntervention(numericalOpportunity, numericalContract, numericalVerification),
     ).toEqual({
       decision: 'HOLD',
       reason:
@@ -120,6 +123,45 @@ describe('intervention policy', () => {
     const mismatchedContract: AnalysisContract = {
       ...contract,
       requiredEvidence: [{ id: 'other-question', question: 'Is the other claim supported?' }],
+    };
+
+    expect(
+      decideIntervention(
+        decisionOpportunity,
+        mismatchedContract,
+        verification('COMPLETE', 'contradicted'),
+      ),
+    ).toEqual({
+      decision: 'HOLD',
+      reason: 'Evidence verification does not match the analysis contract.',
+    });
+  });
+
+  it('holds when a same-claim contract has different context', () => {
+    const mismatchedContract: AnalysisContract = {
+      ...contract,
+      context: [{ sequence: 0, speaker: 'A', text: 'A different assumption.' }],
+    };
+
+    expect(
+      decideIntervention(
+        decisionOpportunity,
+        mismatchedContract,
+        verification('COMPLETE', 'contradicted'),
+      ),
+    ).toEqual({
+      decision: 'HOLD',
+      reason: 'Evidence verification does not match the analysis contract.',
+    });
+  });
+
+  it('holds when a same-claim contract has additional required evidence', () => {
+    const mismatchedContract: AnalysisContract = {
+      ...contract,
+      requiredEvidence: [
+        ...contract.requiredEvidence,
+        { id: 'other-question', question: 'Is the other claim supported?' },
+      ],
     };
 
     expect(
