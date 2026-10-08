@@ -1,10 +1,12 @@
 # Intervention policy
 
 Issue #46 adds the first conservative intervention boundary after evidence
-verification. `decideIntervention` consumes the detected analytical
-opportunity and the deterministic `EvidenceVerificationResult`; it does not
-choose Tableau tools, start another analysis, score opportunities, or send a
-message.
+verification. `decideIntervention` consumes the detected `AnalyzeOpportunity`,
+its matching `AnalysisContract`, and the deterministic
+`EvidenceVerificationResult`; it does not choose Tableau tools, start another
+analysis, score opportunities, or send a message. The policy verifies the
+claim and required question IDs before it can return `INTERVENE`. A `COMPLETE`
+verification from another contract must not authorize intervention.
 
 The policy is deliberately small:
 
@@ -23,15 +25,13 @@ Control, persistence, user profiling, or domain-specific ranking.
 The lifecycle is:
 
 ```text
-Trigger opportunity
+AnalyzeOpportunity
         ↓
-Agentic Tableau analysis
+AnalysisContract
         ↓
-normalized evidence
+EvidenceVerificationResult
         ↓
-deterministic Evidence verifier
-        ↓
-minimal intervention policy
+Intervention Policy
         ↓
 INTERVENE | HOLD
 ```

@@ -1,3 +1,5 @@
+import type { AnalysisContract } from '../analysis/contract.js';
+import { validateAnalysisContract } from '../analysis/contract.js';
 import type { AnalyzeOpportunity, TriggerReason } from '../trigger/detector.js';
 import type {
   EvidenceQuestionStatus,
@@ -67,6 +69,32 @@ function isDecisionOpportunity(reason: TriggerReason): boolean {
   return reason === 'assumption-based-decision';
 }
 
+function hasMatchingAnalysisChain(
+  opportunity: AnalyzeOpportunity,
+  contract: AnalysisContract,
+  verification: EvidenceVerificationResult,
+): boolean {
+  try {
+    validateAnalysisContract(contract);
+  } catch {
+    return false;
+  }
+  if (opportunity.claim !== contract.claim) return false;
+  if (
+    isDecisionOpportunity(opportunity.reason) &&
+    !contract.requiredEvidence.some(({ id }) => id === assumptionSupportQuestionId)
+  ) {
+    return false;
+  }
+
+  const requiredIds = contract.requiredEvidence.map(({ id }) => id);
+  const verifiedIds = verification.questionStatus.map(({ questionId }) => questionId);
+  return (
+    requiredIds.length === verifiedIds.length &&
+    requiredIds.every((questionId) => verifiedIds.includes(questionId))
+  );
+}
+
 /**
  * Applies the first conservative intervention policy. It consumes only the
  * detected opportunity and a verifier result; it never chooses tools or
@@ -74,6 +102,7 @@ function isDecisionOpportunity(reason: TriggerReason): boolean {
  */
 export function decideIntervention(
   opportunity: AnalyzeOpportunity,
+  contract: AnalysisContract,
   verification: unknown,
 ): InterventionResult {
   if (!hasUsableVerificationState(verification)) {
@@ -87,6 +116,13 @@ export function decideIntervention(
     return {
       decision: 'HOLD',
       reason: 'Required evidence is incomplete or invalid.',
+    };
+  }
+
+  if (!hasMatchingAnalysisChain(opportunity, contract, verification)) {
+    return {
+      decision: 'HOLD',
+      reason: 'Evidence verification does not match the analysis contract.',
     };
   }
 
