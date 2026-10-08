@@ -64,6 +64,28 @@ function executableName(token) {
   return token.split('/').at(-1);
 }
 
+function commandIndex(segment) {
+  let index = 0;
+  while (index < segment.length) {
+    if (segment[index] === 'command') {
+      index += 1;
+      continue;
+    }
+    if (segment[index] === 'env') {
+      index += 1;
+      while (index < segment.length && (segment[index].includes('=') || segment[index].startsWith('-'))) index += 1;
+      continue;
+    }
+    if (segment[index] === 'sudo') {
+      index += 1;
+      while (index < segment.length && segment[index].startsWith('-')) index += 1;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
 function splitSegments(tokens) {
   const result = [];
   let current = [];
@@ -108,7 +130,7 @@ function gitInvocations(segment) {
     '--version', '--help', '-p', '-P',
   ]);
   for (let index = 0; index < segment.length; index += 1) {
-    if (executableName(segment[index]) !== 'git' || (index !== 0 && segment[index - 1] !== 'command')) continue;
+    if (index !== commandIndex(segment) || executableName(segment[index]) !== 'git') continue;
     let cursor = index + 1;
     while (cursor < segment.length && segment[cursor].startsWith('-')) {
       const option = segment[cursor];
@@ -158,7 +180,7 @@ function decision(command) {
         if (positional.slice(1).some(protectedDestination)) return 'Direct push to protected branch main is blocked by the repository Hook.';
         if (positional.slice(1).some((token) => token === 'HEAD' || token.startsWith('HEAD:'))) return 'Ambiguous HEAD push destinations are blocked by the repository Hook.';
       }
-      if (verb === 'reset' && args.includes('--hard')) return 'Destructive hard reset is blocked by the repository Hook.';
+      if (verb === 'reset' && args.some((argument) => argument === '--hard' || argument.startsWith('--hard='))) return 'Destructive hard reset is blocked by the repository Hook.';
       if (verb === 'branch') {
         const deleteBranch = args.includes('-d') || args.includes('--delete') || args.some((token) => shortOptionBundleContains(token, 'd'));
         const forceDelete = args.includes('-D') || args.some((token) => shortOptionBundleContains(token, 'D')) || (deleteBranch && args.some(forceOption));
@@ -167,9 +189,13 @@ function decision(command) {
       if (verb === 'worktree' && args[0] === 'remove' && args.slice(1).some(forceOption)) return 'Force removal of worktrees is blocked by the repository Hook.';
     }
     for (let index = 0; index < segment.length; index += 1) {
-      if (executableName(segment[index]) === 'gh' && (index === 0 || segment[index - 1] === 'command')) {
+      if (index === commandIndex(segment) && executableName(segment[index]) === 'gh') {
         const ghArgs = segment.slice(index + 1);
-        if (ghArgs[0] === 'pr' && ghArgs[1] === 'merge') return 'Pull request merge operations are blocked by the repository Hook.';
+        let ghCursor = 0;
+        while (ghCursor < ghArgs.length && ghArgs[ghCursor].startsWith('-')) {
+          ghCursor += ghArgs[ghCursor].includes('=') ? 1 : 2;
+        }
+        if (ghArgs[ghCursor] === 'pr' && ghArgs[ghCursor + 1] === 'merge') return 'Pull request merge operations are blocked by the repository Hook.';
       }
     }
   }
