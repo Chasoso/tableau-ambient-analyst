@@ -200,6 +200,19 @@ applicable when appropriate rather than silently omitting it.
   preference as non-blocking, search directly related siblings, and record a
   follow-up candidate when a real concern is outside the current scope.
 
+### Integration-boundary review
+
+For every materially changed integration boundary, identify what downstream
+code assumes about the upstream result and verify that important boundary
+invariants are explicitly enforced rather than implied only by types or names.
+For replaceable, injected, model, tool, provider, or callback boundaries,
+mentally test at least one structurally valid but semantically wrong
+substitution and check that unsafe input fails closed where repository policy
+requires it. When an existing interface, adapter, or contract seam applies,
+verify that the new code uses that seam instead of bypassing a concrete
+implementation. Do not create speculative abstractions solely for future
+flexibility.
+
 ### Security and external integration
 
 When relevant:
@@ -258,14 +271,16 @@ output for the reviewer CLI schema. New reviewer findings must use this shape:
 ```json
 {
   "result": "CHANGES_REQUIRED",
-  "blockingFindings": [{
-    "severity": "blocking",
-    "classification": "AUTO_FIX",
-    "finding": "...",
-    "generalized_rule": "...",
-    "affected_locations": ["src/example.ts:10", "src/other.ts:20"],
-    "recommended_fix": "..."
-  }],
+  "blockingFindings": [
+    {
+      "severity": "blocking",
+      "classification": "AUTO_FIX",
+      "finding": "...",
+      "generalized_rule": "...",
+      "affected_locations": ["src/example.ts:10", "src/other.ts:20"],
+      "recommended_fix": "..."
+    }
+  ],
   "nonBlockingFindings": [],
   "escalationRequired": false,
   "maintainability": "NO_DRIFT"
@@ -363,6 +378,14 @@ Check requirements, scope, correctness and failure behavior, tests and
 validation, documentation consistency, architecture/maintainability, security
 and external-integration boundaries, and complete diff/PR integrity.
 
+For every materially changed integration boundary, identify downstream
+assumptions about upstream results and verify the boundary invariants. For an
+injected, replaceable, model, tool, provider, or callback boundary, try at
+least one structurally valid but semantically wrong substitution and check
+that it fails safely where required. Verify that existing interfaces or
+abstraction seams are used rather than bypassed; do not invent speculative
+abstractions for future flexibility.
+
 Classify findings as blocking only when they prevent acceptance, indicate a
 correctness or safety problem, reveal a material scope or documentation
 failure, require missing validation, or require a human-owned decision. Keep
@@ -394,6 +417,22 @@ or PR when useful:
 
 This Issue does not require a measurement system or a structured review
 database. Use the pilot evidence to decide whether automation is worthwhile.
+
+## Missed-finding retrospective
+
+For the next few representative PRs, record a lightweight retrospective when
+a later human, ChatGPT, or PR review finds a material issue that Independent
+Review missed. Record the PR or Issue, the missed finding, its generalized
+category, why the current reviewer may have missed it, and a candidate
+reusable reviewer rule. Keep this as a small Issue/PR note; do not add a
+database, telemetry system, automatic prompt mutation, or scoring model.
+
+After roughly 3–5 meaningful missed findings, review the categories together
+and add another generalized reviewer rule only when repeated evidence
+justifies it. A single miss is learning input, not permission to expand the
+review framework. Useful categories include boundary invariant, provenance or
+grounding, architecture seam, failure behavior, security boundary, and test
+blind spot, without requiring a closed taxonomy.
 
 ## Out of scope
 
