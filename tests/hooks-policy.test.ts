@@ -48,6 +48,8 @@ describe('repository-local Codex safety Hook', () => {
     ['git push --no-verify origin feat/issue-55', 'verification bypass'],
     ['gh pr merge 60', 'merge operations'],
     ['git branch -D feat/issue-60', 'Force deletion'],
+    ['git branch -df feat/issue-60', 'Force deletion'],
+    ['git push -uf origin feat/issue-55', 'Force push'],
     ['git branch --delete -f feat/issue-60', 'Force deletion'],
     ['git branch --delete --force feat/issue-60', 'Force deletion'],
     ['git worktree remove --force .worktrees/issue-60', 'Force removal'],

@@ -74,9 +74,15 @@ def protected_ref(token: str) -> bool:
 
 
 def force_option(token: str) -> bool:
-    return token in {"-f", "--force", "--force-with-lease"} or token.startswith(
-        ("--force=", "--force-with-lease=")
+    return (
+        token in {"-f", "--force", "--force-with-lease"}
+        or token.startswith(("--force=", "--force-with-lease="))
+        or (token.startswith("-") and not token.startswith("--") and "f" in token[1:])
     )
+
+
+def short_option_bundle_contains(token: str, flag: str) -> bool:
+    return token.startswith("-") and not token.startswith("--") and flag in token[1:]
 
 
 def decision(command: str) -> str | None:
@@ -105,16 +111,20 @@ def decision(command: str) -> str | None:
                 return "Destructive hard reset is blocked by the repository Hook."
 
             if verb == "branch":
-                force_delete = "-D" in args or (
-                    ("-d" in args or "--delete" in args)
-                    and any(option in {"-f", "--force"} for option in args)
+                delete = "-d" in args or "--delete" in args or any(
+                    short_option_bundle_contains(option, "d") for option in args
+                )
+                force_delete = "-D" in args or any(
+                    short_option_bundle_contains(option, "D") for option in args
+                ) or (
+                    delete and any(force_option(option) for option in args)
                 )
                 if force_delete:
                     return "Force deletion of local branches is blocked by the repository Hook."
 
             if verb == "worktree" and len(args) >= 2 and args[0] == "remove":
                 if any(
-                    option in {"-f", "--force"} or option.startswith("--force=")
+                    force_option(option)
                     for option in args[1:]
                 ):
                     return "Force removal of worktrees is blocked by the repository Hook."
