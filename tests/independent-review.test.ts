@@ -106,6 +106,15 @@ describe('independent review gate contract', () => {
       assertSafeChildProcess('git', ['-c', 'alias.fp=push -f', 'fp', 'origin', 'feat/issue-55']),
     ).toThrow('alias injection');
     expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.fp=push +refs/heads/foo:refs/heads/bar', 'fp']),
+    ).toThrow('alias injection');
+    expect(() => assertSafeChildProcess('git', ['-c', 'alias.pm=push origin main', 'pm'])).toThrow(
+      'alias injection',
+    );
+    expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.bd=branch -df', 'bd', 'feat/issue-55']),
+    ).toThrow('alias injection');
+    expect(() =>
       assertSafeChildProcess('git', [
         '-c',
         'alias.wr=worktree remove -f',

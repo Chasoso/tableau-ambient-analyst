@@ -26,21 +26,14 @@ function dangerousAlias(value: string): boolean {
   if (!match) return false;
   const expansion = match[1]?.trim() ?? '';
   if (expansion.startsWith('!')) return true;
-  return (
-    (expansion.startsWith('push') &&
-      (expansion.includes('force') ||
-        /(^|\s)-[^\s]*f/.test(expansion) ||
-        expansion.includes('$'))) ||
-    (expansion.startsWith('reset') && expansion.includes('--hard')) ||
-    (expansion.startsWith('branch') &&
-      (/(^|\s)-[^\s]*D/.test(expansion) ||
-        expansion.includes('--delete') ||
-        expansion.includes('--force'))) ||
-    (expansion.startsWith('worktree') &&
-      expansion.includes('remove') &&
-      (expansion.includes('force') || /(^|\s)-[^\s]*f/.test(expansion))) ||
-    (expansion.startsWith('update-ref') && expansion.includes('refs/heads/'))
-  );
+  const expansionArgs = expansion.split(/\s+/).filter(Boolean);
+  if (!expansionArgs.length) return true;
+  try {
+    assertSafeChildProcess('git', expansionArgs);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function hasDangerousAlias(args: readonly string[]): boolean {
