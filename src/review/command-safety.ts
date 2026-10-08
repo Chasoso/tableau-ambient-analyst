@@ -21,6 +21,35 @@ function shortOption(value: string, flag: string): boolean {
   return value.startsWith('-') && !value.startsWith('--') && value.slice(1).includes(flag);
 }
 
+function dangerousAlias(value: string): boolean {
+  const match = /^alias\.[^=]+=([\s\S]*)$/.exec(value);
+  if (!match) return false;
+  const expansion = match[1]?.trim() ?? '';
+  if (expansion.startsWith('!')) return true;
+  return (
+    (expansion.startsWith('push') && (expansion.includes('force') || expansion.includes('$'))) ||
+    (expansion.startsWith('reset') && expansion.includes('--hard')) ||
+    (expansion.startsWith('branch') &&
+      (expansion.includes(' -D') ||
+        expansion.includes('--delete') ||
+        expansion.includes('--force'))) ||
+    (expansion.startsWith('worktree') &&
+      expansion.includes('remove') &&
+      expansion.includes('force')) ||
+    (expansion.startsWith('update-ref') && expansion.includes('refs/heads/'))
+  );
+}
+
+function hasDangerousAlias(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const option = args[index];
+    const value =
+      option === '-c' ? args[index + 1] : option?.startsWith('-c') ? option.slice(2) : undefined;
+    if (value && dangerousAlias(value)) return true;
+  }
+  return false;
+}
+
 function gitVerb(args: readonly string[]): [string | undefined, readonly string[]] {
   const valueOptions = new Set([
     '-C',
@@ -67,6 +96,22 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
     if (args[index] === 'pr' && args[index + 1] === 'merge') {
       throw new Error('Pull request merge operations are blocked by the repository Hook.');
     }
+    if (args[index] === 'api') {
+      const apiArgs = args.slice(index + 1);
+      let method: string | undefined;
+      for (let apiIndex = 0; apiIndex < apiArgs.length; apiIndex += 1) {
+        if (apiArgs[apiIndex] === '-X' || apiArgs[apiIndex] === '--method')
+          method = apiArgs[apiIndex + 1];
+        else if (apiArgs[apiIndex]?.startsWith('--method='))
+          method = apiArgs[apiIndex]?.slice('--method='.length);
+      }
+      if (
+        method?.toUpperCase() === 'PUT' &&
+        apiArgs.some((argument) => /\/pulls\/[^/]+\/merge(?:$|[?])/.test(argument))
+      ) {
+        throw new Error('Pull request merge operations are blocked by the repository Hook.');
+      }
+    }
     return;
   }
   if (executable !== 'git' || args.includes('--no-verify')) {
@@ -74,6 +119,11 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
       throw new Error('Git verification bypass (--no-verify) is blocked by the repository Hook.');
     }
     return;
+  }
+  if (hasDangerousAlias(args)) {
+    throw new Error(
+      'Git alias injection for protected operations is blocked by the repository Hook.',
+    );
   }
   const [verb, commandArgs] = gitVerb(args);
   if (verb === 'push') {
@@ -117,6 +167,13 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
         commandArgs.some((argument) => argument === '--force' || forceOption(argument))))
   )
     throw new Error('Force deletion of local branches is blocked by the repository Hook.');
+  if (
+    verb === 'update-ref' &&
+    (commandArgs.includes('-d') || commandArgs.includes('--delete')) &&
+    commandArgs.some((argument) => argument.startsWith('refs/heads/'))
+  ) {
+    throw new Error('Deletion of local branch refs is blocked by the repository Hook.');
+  }
   if (verb === 'worktree' && commandArgs[0] === 'remove' && commandArgs.slice(1).some(forceOption))
     throw new Error('Force removal of worktrees is blocked by the repository Hook.');
 }

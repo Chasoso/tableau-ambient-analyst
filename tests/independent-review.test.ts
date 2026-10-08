@@ -61,6 +61,9 @@ describe('independent review gate contract', () => {
       'protected branch main',
     );
     expect(() => assertSafeChildProcess('gh', ['pr', 'merge', '61'])).toThrow('merge operations');
+    expect(() =>
+      assertSafeChildProcess('gh', ['api', '-X', 'PUT', 'repos/x/y/pulls/61/merge']),
+    ).toThrow('merge operations');
     expect(() => assertSafeChildProcess('git', ['push', 'origin', '${BRANCH}'])).toThrow(
       'determined statically',
     );
@@ -90,6 +93,22 @@ describe('independent review gate contract', () => {
       assertSafeChildProcess('git', ['push', 'origin', 'refs/heads/feature:refs/heads/main']),
     ).toThrow('protected branch main');
     expect(() => assertSafeChildProcess('git', ['push', 'origin', 'feat/issue-55'])).not.toThrow();
+    expect(() =>
+      assertSafeChildProcess('git', [
+        '-c',
+        'alias.fp=push --force',
+        'fp',
+        'origin',
+        'feat/issue-55',
+      ]),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', ['update-ref', '-d', 'refs/heads/feat/issue-55']),
+    ).toThrow('local branch refs');
+    expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.st=status', 'st', '--short']),
+    ).not.toThrow();
+    expect(() => assertSafeChildProcess('gh', ['api', 'repos/x/y/pulls/61'])).not.toThrow();
   });
   it('resolves only an open pull request with an exact head', () => {
     expect(

@@ -90,6 +90,30 @@ describe('repository-local Codex safety Hook', () => {
     ['git branch -{D..D} feat/issue-55', 'brace expansion'],
     ['git worktree remove --{force,verbose} .worktrees/issue-55', 'brace expansion'],
     ['git worktree remove --forc{e..e} .worktrees/issue-55', 'brace expansion'],
+    ['! git push --force origin feat/issue-55', 'Force push'],
+    ['! git reset --hard HEAD~1', 'hard reset'],
+    ['time git push --force origin feat/issue-55', 'Force push'],
+    ['time gh pr merge 61', 'merge operations'],
+    ['time -p git reset --hard HEAD~1', 'hard reset'],
+    ['exec git push --force origin feat/issue-55', 'Force push'],
+    ['exec gh pr merge 61', 'merge operations'],
+    ['command -p git push --force origin feat/issue-55', 'Force push'],
+    ['command -- git reset --hard HEAD~1', 'hard reset'],
+    ["eval 'git push --force origin feat/issue-55'", 'Force push'],
+    ["eval 'git reset --hard HEAD~1'", 'hard reset'],
+    ["eval 'gh pr merge 61'", 'merge operations'],
+    ['eval "$CMD"', 'Eval command content'],
+    ["git -c alias.fp='push --force' fp origin feat/issue-55", 'Git global options'],
+    ["git -c alias.hr='reset --hard' hr HEAD~1", 'Git global options'],
+    ["git -c alias.bd='branch -D' bd feat/issue-55", 'Git global options'],
+    ['git -c alias.fp=\'!git push --force "$@"\' fp origin feat/issue-55', 'Git global options'],
+    ['gh api -X PUT repos/Chasoso/tableau-ambient-analyst/pulls/61/merge', 'merge operations'],
+    [
+      'gh api --method PUT repos/Chasoso/tableau-ambient-analyst/pulls/61/merge',
+      'merge operations',
+    ],
+    ['git update-ref -d refs/heads/feat/issue-55', 'local branch refs'],
+    ['git update-ref --delete refs/heads/feat/issue-55', 'local branch refs'],
   ])('denies %s', (command, reason) => {
     expect(denial(command)).toContain(reason);
   });
@@ -127,6 +151,17 @@ describe('repository-local Codex safety Hook', () => {
     'printf "$(pwd)"',
     'echo `date`',
     'bash -c \'echo "$(date)"\'',
+    '! git status --short',
+    'time git status --short',
+    'time -p git diff --check',
+    'exec git status --short',
+    'command -p git status --short',
+    'command -- git diff --check',
+    "eval 'git status --short'",
+    "eval 'printf hello'",
+    'git -c alias.st=status st --short',
+    'gh api repos/Chasoso/tableau-ambient-analyst/pulls/61',
+    'git update-ref refs/heads/some-safe-ref deadbeef',
   ])('allows safe command %s', (command) => {
     expect(denial(command)).toBeUndefined();
   });

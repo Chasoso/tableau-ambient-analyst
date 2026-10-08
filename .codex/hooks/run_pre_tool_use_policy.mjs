@@ -77,8 +77,22 @@ function commandIndex(segment) {
       index += 1;
       continue;
     }
+    if (segment[index] === '!') {
+      index += 1;
+      continue;
+    }
+    if (segment[index] === 'time') {
+      index += 1;
+      while (index < segment.length && segment[index].startsWith('-')) index += 1;
+      continue;
+    }
+    if (segment[index] === 'exec') {
+      index += 1;
+      continue;
+    }
     if (segment[index] === 'command') {
       index += 1;
+      while (index < segment.length && segment[index].startsWith('-')) index += 1;
       continue;
     }
     if (segment[index] === 'env') {
@@ -135,6 +149,14 @@ function dynamicToken(token) {
 
 function braceExpansion(token) {
   return /\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(token);
+}
+
+function dangerousAlias(value) {
+  const match = /^alias\.[^=]+=([\s\S]*)$/.exec(value);
+  if (!match) return false;
+  const expansion = match[1].trim();
+  if (expansion.startsWith('!')) return true;
+  return Boolean(decision(`git ${expansion}`));
 }
 
 function unsupportedControlStructure(tokens) {
@@ -214,7 +236,13 @@ function gitInvocations(segment) {
     let cursor = index + 1;
     while (cursor < segment.length && segment[cursor].startsWith('-')) {
       const option = segment[cursor];
-      if (valueOptions.has(option)) cursor += 2;
+      if (option === '-c') {
+        if (dangerousAlias(segment[cursor + 1] ?? '')) return { invocations: [], parseFailed: true };
+        cursor += 2;
+      } else if (option.startsWith('-c') && option.length > 2) {
+        if (dangerousAlias(option.slice(2))) return { invocations: [], parseFailed: true };
+        cursor += 1;
+      } else if (valueOptions.has(option)) cursor += 2;
       else if (flagOptions.has(option) || (option.startsWith('--') && option.includes('='))) cursor += 1;
       else if ((option.startsWith('-c') || option.startsWith('-C')) && option.length > 2) cursor += 1;
       else return { invocations: [], parseFailed: true };
@@ -246,6 +274,15 @@ function decision(command) {
     return 'Unsupported shell control structure may hide a protected Git or GitHub operation; execution is blocked.';
   }
   for (const segment of splitSegments(tokens)) {
+    const executableIndex = commandIndex(segment);
+    if (executableName(segment[executableIndex]) === 'eval') {
+      const evalArguments = segment.slice(executableIndex + 1);
+      if (evalArguments.length !== 1 || dynamicToken(evalArguments[0])) {
+        return 'Eval command content cannot be determined statically; execution is blocked.';
+      }
+      const evalReason = decision(evalArguments[0]);
+      if (evalReason) return evalReason;
+    }
     for (let index = 0; index < segment.length; index += 1) {
       const nested = shellCommand(segment, index);
       if (nested !== null) {
@@ -277,6 +314,9 @@ function decision(command) {
         const forceDelete = args.includes('-D') || args.some((token) => shortOptionBundleContains(token, 'D')) || (deleteBranch && args.some(forceOption));
         if (forceDelete) return 'Force deletion of local branches is blocked by the repository Hook.';
       }
+      if (verb === 'update-ref' && (args.includes('-d') || args.includes('--delete')) && args.some((argument) => argument.startsWith('refs/heads/'))) {
+        return 'Deletion of local branch refs is blocked by the repository Hook.';
+      }
       if (verb === 'worktree' && args[0] === 'remove') {
         if (args.some(braceExpansion)) return 'Protected Git arguments with brace expansion cannot be determined statically; execution is blocked.';
         if (args.slice(1).some(forceOption)) return 'Force removal of worktrees is blocked by the repository Hook.';
@@ -290,6 +330,16 @@ function decision(command) {
           ghCursor += ghArgs[ghCursor].includes('=') ? 1 : 2;
         }
         if (ghArgs[ghCursor] === 'pr' && ghArgs[ghCursor + 1] === 'merge') return 'Pull request merge operations are blocked by the repository Hook.';
+        if (ghArgs[ghCursor] === 'api') {
+          const apiArgs = ghArgs.slice(ghCursor + 1);
+          let method;
+          for (let apiIndex = 0; apiIndex < apiArgs.length; apiIndex += 1) {
+            if (apiArgs[apiIndex] === '-X' || apiArgs[apiIndex] === '--method') method = apiArgs[apiIndex + 1];
+            else if (apiArgs[apiIndex]?.startsWith('--method=')) method = apiArgs[apiIndex].slice('--method='.length);
+          }
+          const endpoint = apiArgs.find((argument) => /\/pulls\/[^/]+\/merge(?:$|[?])/.test(argument));
+          if (String(method).toUpperCase() === 'PUT' && endpoint) return 'Pull request merge operations are blocked by the repository Hook.';
+        }
       }
     }
   }

@@ -27,6 +27,11 @@ The Hook intentionally allows read-only inspection, ordinary validation,
 pushes of the already-resolved canonical Issue branch, and non-force
 repository-managed worktree commands. It does not decide which Issue or
 worktree is canonical and must not be expanded into a generic policy engine.
+The Phase 1 mechanical boundary also covers common execution prefixes,
+literal `eval` content, same-invocation protected Git aliases, `gh api` PR
+merge endpoints, and deletion of `refs/heads/*` through `git update-ref`.
+It does not attempt to interpret arbitrary scripts, functions, `xargs`,
+`find -exec`, raw HTTP clients, or pre-existing aliases.
 
 Project-local Hooks are loaded only when the project is trusted by Codex. A
 human must review and trust the repository Hook definition when Codex asks for
