@@ -31,7 +31,9 @@ that activation; this Issue does not install or modify user-global or
 system-wide configuration. A Hook denial is final for the command class it
 owns and must not be retried through an obvious equivalent command.
 
-The deterministic `tests/hooks-policy.test.ts` harness invokes the guard
-directly with representative JSON Hook inputs; it does not use network or
-live services. The repository requires Node 24 or newer; the wrapper also
-fails closed if its Python policy runtime is unavailable or fails.
+The Hook runtime is Node 24 only; it has no Python dependency. The checker
+recursively inspects command strings used by `bash`, `sh`, and `zsh` wrappers
+for the supported short-option forms. Dynamic or otherwise statically
+unresolved push destinations fail closed. The deterministic
+`tests/hooks-policy.test.ts` harness invokes the guard directly with
+representative JSON Hook inputs; it does not use network or live services.

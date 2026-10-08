@@ -4,18 +4,17 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const hook = resolve('.codex/hooks/pre_tool_use_policy.py');
 const wrapper = resolve('.codex/hooks/run_pre_tool_use_policy.mjs');
 
 function runHook(command: string): string {
-  return execFileSync('python3', [hook], {
+  return execFileSync('node', [wrapper], {
     input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
     encoding: 'utf8',
   });
 }
 
 function runRawHook(input: string): string {
-  return execFileSync('python3', [hook], { input, encoding: 'utf8' });
+  return execFileSync('node', [wrapper], { input, encoding: 'utf8' });
 }
 
 function denial(command: string): string | undefined {
@@ -48,6 +47,10 @@ describe('repository-local Codex safety Hook', () => {
     ['git push', 'implicit'],
     ['git push origin', 'implicit'],
     ['git push origin HEAD', 'Ambiguous HEAD'],
+    ['git push origin "$(git branch --show-current)"', 'determined statically'],
+    ['git push origin "${BRANCH}"', 'determined statically'],
+    ['git push origin "$TARGET"', 'determined statically'],
+    ['git push origin `git branch --show-current`', 'determined statically'],
     ['git push origin +refs/heads/feat/issue-55', 'Force push'],
     ['git push origin +refs/heads/feat/issue-55:refs/heads/feat/issue-56', 'Force push'],
     ['git push +refs/heads/feat/issue-55', 'Force push'],
@@ -83,6 +86,10 @@ describe('repository-local Codex safety Hook', () => {
 
   it.each([
     'bash -c "git push --force origin feat/issue-55"',
+    'bash -lc "git push --force origin feat/issue-55"',
+    'sh -ec "git reset --hard HEAD~1"',
+    'zsh -fc "git branch -D feat/issue-55"',
+    'bash -lxc "gh pr merge 61"',
     'command git reset --hard HEAD~1',
     '/usr/bin/git push --force origin feat/issue-55',
     'command gh pr merge 60',
@@ -96,7 +103,7 @@ describe('repository-local Codex safety Hook', () => {
     expect(denial("git push --force 'unterminated")).toContain('parse');
   });
 
-  it('uses the repository Node runtime wrapper and fails closed for malformed input', () => {
+  it('uses the repository Node-only runtime and fails closed for malformed input', () => {
     expect(readFileSync(resolve('.codex/hooks.json'), 'utf8')).toContain(
       'run_pre_tool_use_policy.mjs',
     );
@@ -105,6 +112,7 @@ describe('repository-local Codex safety Hook', () => {
       encoding: 'utf8',
     });
     expect(JSON.parse(result).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(readFileSync(resolve('.codex/hooks.json'), 'utf8')).not.toContain('python3');
   });
 
   it.each([
