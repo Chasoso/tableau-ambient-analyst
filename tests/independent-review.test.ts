@@ -1595,6 +1595,103 @@ describe('review cycle state', () => {
     }
   });
 
+  it('fails closed for inconsistent epoch metadata', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const contents = JSON.stringify({
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewEpoch: 2,
+      reviewInvocationCount: 0,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: [],
+      resumeAuthorizationSource: 'explicit-cli',
+      resumedFromEpoch: 1,
+    });
+    writeFileSync(statePath, contents, 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+      expect(readFileSync(statePath, 'utf8')).toBe(contents);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes concurrent human resumes into one new epoch', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const workerPath = join(directory, 'resume-worker.mjs');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+    execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+    writeFileSync(
+      workerPath,
+      `import { resumeReviewAfterLimitAtPath } from ${JSON.stringify(
+        join(process.cwd(), 'dist/review/runner.js'),
+      )};
+const result = resumeReviewAfterLimitAtPath(process.argv[2], 'feature/review', 'main');
+process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
+`,
+      'utf8',
+    );
+
+    try {
+      const workers = Array.from(
+        { length: 2 },
+        () =>
+          new Promise<string>((resolve, reject) => {
+            const child = spawn(process.execPath, [workerPath, statePath], {
+              cwd: process.cwd(),
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            let output = '';
+            child.stdout.on('data', (chunk: Buffer) => {
+              output += chunk.toString();
+            });
+            child.on('error', reject);
+            child.on('close', (code) => {
+              if (code === 0) resolve(output);
+              else reject(new Error(`resume worker exited with ${code}`));
+            });
+          }),
+      );
+      const results = await Promise.all(workers);
+      expect(results.filter((result) => result === 'resumed')).toHaveLength(1);
+      expect(results.filter((result) => result === 'blocked')).toHaveLength(1);
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewHistory: [{ reviewEpoch: 1 }],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15000);
+
   it('migrates the known Issue #29 legacy state without resetting either bound', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');

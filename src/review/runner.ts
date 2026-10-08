@@ -2248,6 +2248,8 @@ export function resumeReviewAfterLimitAtPath(
         resumedAt,
         authorizedByHuman: true,
         authorizationSource: 'explicit-cli',
+        resumeAfterPolicyChange: accounting.resumeAfterPolicyChange,
+        migrationCompatibility: accounting.migrationCompatibility,
       };
       const next: ReviewAccounting = {
         ...emptyAccounting(),
@@ -2431,7 +2433,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.resumeAuthorizationSource !== undefined &&
       state.resumeAuthorizationSource !== 'explicit-cli') ||
     (state.resumedFromEpoch !== undefined &&
-      (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1))
+      (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
+    !isReviewEpochMetadataConsistent(state)
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -2656,8 +2659,13 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'authorizedByHuman',
     'authorizationSource',
   ];
+  const allowedKeys = new Set([
+    ...requiredKeys,
+    'resumeAfterPolicyChange',
+    'migrationCompatibility',
+  ]);
   return (
-    Object.keys(history).every((key) => requiredKeys.includes(key)) &&
+    Object.keys(history).every((key) => allowedKeys.has(key)) &&
     requiredKeys.every((key) => Object.hasOwn(history, key)) &&
     Number.isInteger(history.reviewEpoch) &&
     (history.reviewEpoch as number) >= 1 &&
@@ -2689,7 +2697,41 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
     typeof history.resumedAt === 'string' &&
     history.authorizedByHuman === true &&
-    history.authorizationSource === 'explicit-cli'
+    history.authorizationSource === 'explicit-cli' &&
+    (history.resumeAfterPolicyChange === undefined ||
+      typeof history.resumeAfterPolicyChange === 'string') &&
+    (history.migrationCompatibility === undefined ||
+      typeof history.migrationCompatibility === 'string')
+  );
+}
+
+function isReviewEpochMetadataConsistent(state: Record<string, unknown>): boolean {
+  const epochFields = [
+    state.reviewEpoch,
+    state.reviewHistory,
+    state.resumeAuthorizedAt,
+    state.resumeAuthorizationSource,
+    state.resumedFromEpoch,
+  ];
+  const hasEpochMetadata = epochFields.some((field) => field !== undefined);
+  if (!hasEpochMetadata) return true;
+  if (!Number.isInteger(state.reviewEpoch) || (state.reviewEpoch as number) < 1) return false;
+
+  const epoch = state.reviewEpoch as number;
+  const history = state.reviewHistory;
+  const hasAuthorization =
+    state.resumeAuthorizedAt !== undefined || state.resumeAuthorizationSource !== undefined;
+  if (epoch === 1) {
+    return history === undefined && state.resumedFromEpoch === undefined && !hasAuthorization;
+  }
+  return (
+    Array.isArray(history) &&
+    history.length === epoch - 1 &&
+    history.every((entry, index) => entry.reviewEpoch === index + 1) &&
+    history.at(-1)?.reviewEpoch === (state.resumedFromEpoch as number) &&
+    state.resumedFromEpoch === epoch - 1 &&
+    typeof state.resumeAuthorizedAt === 'string' &&
+    state.resumeAuthorizationSource === 'explicit-cli'
   );
 }
 

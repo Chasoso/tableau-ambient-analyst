@@ -63,6 +63,8 @@ export type ReviewEpochHistory = {
   resumedAt: string;
   authorizedByHuman: true;
   authorizationSource: 'explicit-cli';
+  resumeAfterPolicyChange?: string | undefined;
+  migrationCompatibility?: string | undefined;
 };
 
 export type ReviewAccounting = {
