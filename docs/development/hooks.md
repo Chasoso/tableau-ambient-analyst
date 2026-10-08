@@ -33,7 +33,8 @@ merge endpoints, and deletion of `refs/heads/*` through `git update-ref`.
 `update-ref --stdin` and zero-OID updates for local branch refs fail closed;
 same-invocation aliases supplied through `--config-env` also fail closed because
 their value cannot be determined safely at the command boundary. The Hook and
-the repository-managed child-process guard use the same protected alias matrix.
+the repository-managed child-process guard use the same protected alias matrix
+and small quote-aware alias tokenization; malformed alias quoting fails closed.
 It does not attempt to interpret arbitrary scripts, functions, `xargs`,
 `find -exec`, raw HTTP clients, or pre-existing aliases.
 

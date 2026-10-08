@@ -112,6 +112,19 @@ describe('independent review gate contract', () => {
       'alias injection',
     );
     expect(() =>
+      assertSafeChildProcess('git', ['-c', "alias.pm=push origin 'main'", 'pm']),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.pm=push origin "HEAD:refs/heads/main"', 'pm']),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', [
+        '-c',
+        "alias.fp=push origin '+refs/heads/foo:refs/heads/bar'",
+        'fp',
+      ]),
+    ).toThrow('alias injection');
+    expect(() =>
       assertSafeChildProcess('git', ['-c', 'alias.bd=branch -df', 'bd', 'feat/issue-55']),
     ).toThrow('alias injection');
     expect(() =>
@@ -148,6 +161,12 @@ describe('independent review gate contract', () => {
     ).toThrow('local branch refs');
     expect(() =>
       assertSafeChildProcess('git', ['-c', 'alias.st=status', 'st', '--short']),
+    ).not.toThrow();
+    expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.st=status --short', 'st']),
+    ).not.toThrow();
+    expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.df=diff --check', 'df']),
     ).not.toThrow();
     expect(() => assertSafeChildProcess('gh', ['api', 'repos/x/y/pulls/61'])).not.toThrow();
   });

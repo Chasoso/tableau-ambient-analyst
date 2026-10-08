@@ -21,13 +21,53 @@ function shortOption(value: string, flag: string): boolean {
   return value.startsWith('-') && !value.startsWith('--') && value.slice(1).includes(flag);
 }
 
+function tokenizeAliasExpansion(value: string): string[] | undefined {
+  const tokens: string[] = [];
+  let token = '';
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  const flush = (): void => {
+    if (token) {
+      tokens.push(token);
+      token = '';
+    }
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === undefined) continue;
+    if (escaped) {
+      token += character;
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      else token += character;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = undefined;
+      else if (character === '\\' && value[index + 1] === '"') escaped = true;
+      else token += character;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === '\\') escaped = true;
+    else if (/\s/.test(character)) flush();
+    else token += character;
+  }
+  if (quote || escaped) return undefined;
+  flush();
+  return tokens;
+}
+
 function dangerousAlias(value: string): boolean {
   const match = /^alias\.[^=]+=([\s\S]*)$/.exec(value);
   if (!match) return false;
   const expansion = match[1]?.trim() ?? '';
   if (expansion.startsWith('!')) return true;
-  const expansionArgs = expansion.split(/\s+/).filter(Boolean);
-  if (!expansionArgs.length) return true;
+  const expansionArgs = tokenizeAliasExpansion(expansion);
+  if (!expansionArgs?.length) return true;
   try {
     assertSafeChildProcess('git', expansionArgs);
     return false;
