@@ -53,6 +53,7 @@ import {
   resolveIssueWorkspace,
   validateIssueWorkspace,
 } from './issue-worktree.js';
+import { assertSafeChildProcess as assertSharedChildProcess } from './command-safety.js';
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
@@ -169,6 +170,7 @@ function childShortOption(value: string, flag: string): boolean {
 }
 
 export function assertSafeChildProcess(file: string, args: readonly string[]): void {
+  assertSharedChildProcess(file, args);
   const executable = childExecutableName(file);
   if (executable === 'gh') {
     let cursor = 0;
@@ -241,10 +243,14 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
     }
     const destinations = positional.slice(1);
     if (
-      destinations.some(
-        (argument) =>
-          argument === 'main' || argument.endsWith('/main') || argument === 'refs/heads/main',
-      )
+      destinations.some((argument) => {
+        const destination = argument.split(':').at(-1)?.replace(/^\+/, '');
+        return (
+          destination === 'main' ||
+          destination?.endsWith('/main') ||
+          destination === 'refs/heads/main'
+        );
+      })
     ) {
       throw new Error('Direct push to protected branch main is blocked by the repository Hook.');
     }

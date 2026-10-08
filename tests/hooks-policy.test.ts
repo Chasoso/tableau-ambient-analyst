@@ -99,6 +99,7 @@ describe('repository-local Codex safety Hook', () => {
     'sh -ec "git reset --hard HEAD~1"',
     'zsh -fc "git branch -D feat/issue-55"',
     'bash -lxc "gh pr merge 61"',
+    'bash -c "$CMD"',
     'env git push --force origin feat/issue-55',
     'sudo git reset --hard HEAD~1',
     'sudo -u alice git push --force origin feat/issue-55',

@@ -83,6 +83,12 @@ describe('independent review gate contract', () => {
     expect(() =>
       assertSafeChildProcess('git', ['branch', '--force', 'feature/rebased', 'main']),
     ).not.toThrow();
+    expect(() => assertSafeChildProcess('git', ['push', 'origin', ':main'])).toThrow(
+      'protected branch main',
+    );
+    expect(() =>
+      assertSafeChildProcess('git', ['push', 'origin', 'refs/heads/feature:refs/heads/main']),
+    ).toThrow('protected branch main');
     expect(() => assertSafeChildProcess('git', ['push', 'origin', 'feat/issue-55'])).not.toThrow();
   });
   it('resolves only an open pull request with an exact head', () => {

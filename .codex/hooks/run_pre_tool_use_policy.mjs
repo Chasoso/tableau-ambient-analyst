@@ -202,6 +202,9 @@ function decision(command) {
     for (let index = 0; index < segment.length; index += 1) {
       const nested = shellCommand(segment, index);
       if (nested !== null) {
+        if (nested.includes('$') || nested.includes('`')) {
+          return 'Shell wrapper command cannot be determined statically; execution is blocked.';
+        }
         const nestedReason = decision(nested);
         if (nestedReason) return nestedReason;
       }
