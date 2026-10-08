@@ -89,6 +89,8 @@ describe('repository-local Codex safety Hook', () => {
     expect(denial('git status && git push --force origin feat/issue-55')).toContain('Force push');
     expect(denial('printf "$(git push --force origin feat/issue-55)"')).toContain('substitution');
     expect(denial("printf '$(git push --force origin feat/issue-55)'")).toBeUndefined();
+    expect(denial("bash -c $'git push --force origin feat/issue-55'")).toContain('substitution');
+    expect(denial('git push --{force} origin feat/issue-55')).toContain('substitution');
   });
 
   it.each([

@@ -143,7 +143,12 @@ function executableSubstitution(command) {
       quote = character;
       continue;
     }
-    if (character === '`' || (character === '$' && command[index + 1] === '(')) return true;
+    if (
+      character === '`' ||
+      (character === '$' && (command[index + 1] === '(' || command[index + 1] === "'")) ||
+      character === '{' ||
+      character === '}'
+    ) return true;
   }
   return false;
 }
