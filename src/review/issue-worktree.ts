@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 export type IssueWorkspaceStatus = 'NEW' | 'REUSE' | 'BLOCKED';
 
@@ -120,8 +120,8 @@ export function resolveIssueWorkspace(
     const conflictingWorktree = worktrees.find((entry) => {
       const entryPath = resolve(entry.path);
       if (entryPath === path) return false;
-      const relativePath = relative(root, entryPath).split('/').join('/');
-      return relativePath.startsWith('.worktrees/') && issuePattern(issue).test(relativePath);
+      const normalizedPath = entryPath.replaceAll('\\', '/');
+      return issuePattern(issue).test(normalizedPath);
     });
     if (conflictingWorktree) {
       return {

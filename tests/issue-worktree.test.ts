@@ -92,6 +92,18 @@ describe('canonical Issue workspaces', () => {
       git(local, ['branch', 'feat/issue-69/retry', 'main']);
       expect(resolveIssueWorkspace(local, '69')).toMatchObject({ status: 'BLOCKED' });
       expect(git(local, ['branch', '--list', 'feat/issue-69'])).toBe('');
+
+      const externalLegacyPath = join(root, 'issue-70-old');
+      git(local, [
+        'worktree',
+        'add',
+        '-q',
+        '-b',
+        'feat/other-external',
+        externalLegacyPath,
+        'main',
+      ]);
+      expect(resolveIssueWorkspace(local, '70')).toMatchObject({ status: 'BLOCKED' });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
