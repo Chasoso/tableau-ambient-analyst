@@ -8,6 +8,13 @@ export {
   TranscriptFixtureError,
 } from './replay/transcript.js';
 export type { TranscriptFixtureFormat, TranscriptUtterance } from './replay/transcript.js';
+export { runTranscriptInterventionFlow } from './replay/intervention-flow.js';
+export type {
+  FlowFailureStage,
+  TranscriptInterventionDependencies,
+  TranscriptInterventionEvent,
+  TranscriptInterventionFlowResult,
+} from './replay/intervention-flow.js';
 export { detectTrigger, triggerDetector } from './trigger/detector.js';
 export type {
   AnalyzeOpportunity,
