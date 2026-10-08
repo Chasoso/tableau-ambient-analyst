@@ -118,6 +118,32 @@ function dynamicToken(token) {
   return token.includes('$') || token.includes('`');
 }
 
+function executableSubstitution(command) {
+  let quote = null;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '`' || (character === '$' && command[index + 1] === '(')) return true;
+  }
+  return false;
+}
+
 function gitInvocations(segment) {
   const invocations = [];
   const valueOptions = new Set([
@@ -158,6 +184,9 @@ function shellCommand(segment, index) {
 }
 
 function decision(command) {
+  if (executableSubstitution(command)) {
+    return 'Push destination cannot be determined statically because executable shell substitution cannot be analyzed safely; execution is blocked.';
+  }
   const tokens = tokensFor(command);
   if (!tokens) return 'Hook could not parse the pending shell command; execution is blocked.';
   for (const segment of splitSegments(tokens)) {

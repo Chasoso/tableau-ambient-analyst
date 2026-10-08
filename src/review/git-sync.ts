@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 
+import { assertSafeChildProcess } from './command-safety.js';
+
 export type MainSyncResult =
   | { status: 'UP_TO_DATE' | 'FAST_FORWARD'; local: string; remote: string }
   | { status: 'BLOCKED'; reason: string };
@@ -16,10 +18,18 @@ export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult
   }
 
   try {
-    if (execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).trim()) {
+    const guardedExecFileSync = (
+      file: string,
+      args: string[],
+      options: { cwd: string; encoding: 'utf8' },
+    ): string => {
+      assertSafeChildProcess(file, args);
+      return execFileSync(file, args, options);
+    };
+    if (guardedExecFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).trim()) {
       return { status: 'BLOCKED', reason: 'Issue-to-PR workflow requires a clean working tree.' };
     }
-    const currentBranch = execFileSync('git', ['branch', '--show-current'], {
+    const currentBranch = guardedExecFileSync('git', ['branch', '--show-current'], {
       cwd,
       encoding: 'utf8',
     }).trim();
@@ -35,9 +45,12 @@ export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult
         reason: `Primary worktree must already be on ${base}; branch switching is forbidden.`,
       };
     }
-    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], { cwd, encoding: 'utf8' });
-    execFileSync('git', ['fetch', 'origin', base], { cwd, encoding: 'utf8' });
-    const counts = execFileSync(
+    guardedExecFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+    guardedExecFileSync('git', ['fetch', 'origin', base], { cwd, encoding: 'utf8' });
+    const counts = guardedExecFileSync(
       'git',
       ['rev-list', '--left-right', '--count', `${base}...origin/${base}`],
       { cwd, encoding: 'utf8' },
@@ -62,7 +75,7 @@ export function synchronizeLocalBase(cwd: string, base = 'main'): MainSyncResult
     if (behind === 0) {
       return { status: 'UP_TO_DATE', local: base, remote: `origin/${base}` };
     }
-    execFileSync('git', ['merge', '--ff-only', `origin/${base}`], { cwd, encoding: 'utf8' });
+    guardedExecFileSync('git', ['merge', '--ff-only', `origin/${base}`], { cwd, encoding: 'utf8' });
     return { status: 'FAST_FORWARD', local: base, remote: `origin/${base}` };
   } catch {
     return {

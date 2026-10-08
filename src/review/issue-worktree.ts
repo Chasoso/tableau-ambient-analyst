@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
+import { assertSafeChildProcess } from './command-safety.js';
+
 export type IssueWorkspaceStatus = 'NEW' | 'REUSE' | 'BLOCKED';
 
 export type IssueWorkspaceResult =
@@ -16,6 +18,7 @@ export type IssueWorkspaceResult =
 type WorktreeEntry = { path: string; branch?: string };
 
 function git(cwd: string, args: string[]): string {
+  assertSafeChildProcess('git', args);
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
