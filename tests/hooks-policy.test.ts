@@ -67,6 +67,17 @@ describe('repository-local Codex safety Hook', () => {
     ['git branch --delete -f feat/issue-60', 'Force deletion'],
     ['git branch --delete --force feat/issue-60', 'Force deletion'],
     ['git worktree remove --force .worktrees/issue-60', 'Force removal'],
+    ['git status --short\ngit push --force origin feat/issue-55', 'Force push'],
+    ['git status --short\ngh pr merge 61', 'merge operations'],
+    ['if true; then git push --force origin feat/issue-55; fi', 'control structure'],
+    ['if true; then gh pr merge 61; fi', 'control structure'],
+    ['{ git reset --hard HEAD~1; }', 'control structure'],
+    ['( git branch -D feat/issue-55 )', 'control structure'],
+    ['git push origin {main,feat/issue-55}', 'brace expansion'],
+    ['git push origin refs/heads/{main,feat/issue-55}', 'brace expansion'],
+    ['git push --{force,verbose} origin feat/issue-55', 'brace expansion'],
+    ['git branch -{D,v} feat/issue-55', 'brace expansion'],
+    ['git worktree remove --{force,verbose} .worktrees/issue-55', 'brace expansion'],
   ])('denies %s', (command, reason) => {
     expect(denial(command)).toContain(reason);
   });
@@ -92,6 +103,10 @@ describe('repository-local Codex safety Hook', () => {
     'printf "{}"',
     'echo \'{"status":"ok"}\'',
     "printf '${HOME}'",
+    'git status --short\ngit diff --check',
+    'bash -c \'echo "$HOME"\'',
+    'bash -c \'printf "${HOME}"\'',
+    'bash -c \'printf "{}"\'',
   ])('allows safe command %s', (command) => {
     expect(denial(command)).toBeUndefined();
   });
@@ -111,6 +126,9 @@ describe('repository-local Codex safety Hook', () => {
     'zsh -fc "git branch -D feat/issue-55"',
     'bash -lxc "gh pr merge 61"',
     'bash -c "$CMD"',
+    'bash -c \'git push origin "$TARGET"\'',
+    'bash -c \'git push origin "${BRANCH}"\'',
+    'bash -c \'git push origin "$(git branch --show-current)"\'',
     'env git push --force origin feat/issue-55',
     'sudo git reset --hard HEAD~1',
     'sudo -u alice git push --force origin feat/issue-55',

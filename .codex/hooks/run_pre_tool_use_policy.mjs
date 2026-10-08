@@ -45,7 +45,10 @@ function tokensFor(command) {
     }
     if (character === "'" || character === '"') quote = character;
     else if (character === '\\') escaped = true;
-    else if (/\s/.test(character)) flush();
+    else if (character === '\n') {
+      flush();
+      tokens.push(';');
+    } else if (/\s/.test(character)) flush();
     else if (character === ';' || character === '|' || character === '&') {
       flush();
       const next = command[index + 1];
@@ -127,6 +130,20 @@ function dynamicToken(token) {
   return token.includes('$') || token.includes('`');
 }
 
+function braceExpansion(token) {
+  return /\{[^{}]*,[^{}]*\}/.test(token);
+}
+
+function unsupportedControlStructure(tokens) {
+  const hasIfStructure = tokens.includes('if') && (tokens.includes('then') || tokens.includes('fi'));
+  const hasGroupStructure = tokens.includes('{') || tokens.includes('}') || tokens.includes('(') || tokens.includes(')');
+  if (!hasIfStructure && !hasGroupStructure) return false;
+  return tokens.some((token, index) => {
+    if (executableName(token) !== 'git' && executableName(token) !== 'gh') return false;
+    return hasIfStructure || index === 0 || ['then', '{', '('].includes(tokens[index - 1]);
+  });
+}
+
 function executableSubstitution(command) {
   let quote = null;
   let escaped = false;
@@ -201,11 +218,15 @@ function decision(command) {
   }
   const tokens = tokensFor(command);
   if (!tokens) return 'Hook could not parse the pending shell command; execution is blocked.';
+  if (unsupportedControlStructure(tokens)) {
+    return 'Unsupported shell control structure may hide a protected Git or GitHub operation; execution is blocked.';
+  }
   for (const segment of splitSegments(tokens)) {
     for (let index = 0; index < segment.length; index += 1) {
       const nested = shellCommand(segment, index);
       if (nested !== null) {
-        if (nested.includes('$') || nested.includes('`')) {
+        const nestedTokens = tokensFor(nested);
+        if (!nestedTokens || (nestedTokens.length === 1 && dynamicToken(nestedTokens[0]))) {
           return 'Shell wrapper command cannot be determined statically; execution is blocked.';
         }
         const nestedReason = decision(nested);
@@ -218,6 +239,7 @@ function decision(command) {
       if (args.includes('--no-verify')) return 'Git verification bypass (--no-verify) is blocked by the repository Hook.';
       if (verb === 'push') {
         const positional = args.filter((token) => !token.startsWith('-'));
+        if (args.some(braceExpansion)) return 'Protected Git arguments with brace expansion cannot be determined statically; execution is blocked.';
         if (args.some(forceOption) || positional.some((token) => token.startsWith('+'))) return 'Force push is blocked by the repository Hook.';
         if (positional.some(dynamicToken)) return 'Push destination cannot be determined statically; execution is blocked.';
         if (positional.length < 2) return 'Push destination is implicit; an explicit canonical branch ref is required.';
@@ -226,11 +248,15 @@ function decision(command) {
       }
       if (verb === 'reset' && args.some((argument) => argument === '--hard' || argument.startsWith('--hard='))) return 'Destructive hard reset is blocked by the repository Hook.';
       if (verb === 'branch') {
+        if (args.some(braceExpansion)) return 'Protected Git arguments with brace expansion cannot be determined statically; execution is blocked.';
         const deleteBranch = args.includes('-d') || args.includes('--delete') || args.some((token) => shortOptionBundleContains(token, 'd'));
         const forceDelete = args.includes('-D') || args.some((token) => shortOptionBundleContains(token, 'D')) || (deleteBranch && args.some(forceOption));
         if (forceDelete) return 'Force deletion of local branches is blocked by the repository Hook.';
       }
-      if (verb === 'worktree' && args[0] === 'remove' && args.slice(1).some(forceOption)) return 'Force removal of worktrees is blocked by the repository Hook.';
+      if (verb === 'worktree' && args[0] === 'remove') {
+        if (args.some(braceExpansion)) return 'Protected Git arguments with brace expansion cannot be determined statically; execution is blocked.';
+        if (args.slice(1).some(forceOption)) return 'Force removal of worktrees is blocked by the repository Hook.';
+      }
     }
     for (let index = 0; index < segment.length; index += 1) {
       if (index === commandIndex(segment) && executableName(segment[index]) === 'gh') {

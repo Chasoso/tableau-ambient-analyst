@@ -40,6 +40,9 @@ for the supported short-option forms. Dynamic or otherwise statically
 unresolved push destinations fail closed, including leading shell assignment
 prefixes such as `FOO=bar`. Ordinary variable expansion and literal braces
 outside protected command boundaries are allowed; executable substitutions
-and dynamic protected destinations are not. The deterministic
+and dynamic protected destinations are not. Newline-separated commands are
+treated like other command separators. Unsupported shell control structures
+that contain Git/GitHub operations fail closed, while harmless brace or
+variable text remains allowed outside those protected boundaries. The deterministic
 `tests/hooks-policy.test.ts` harness invokes the guard directly with
 representative JSON Hook inputs; it does not use network or live services.
