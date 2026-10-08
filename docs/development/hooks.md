@@ -1,8 +1,10 @@
 # Project-local Codex Hooks
 
 Issue #55 adds a small repository-local `PreToolUse` Hook at
-`.codex/hooks.json`. It invokes `.codex/hooks/pre_tool_use_policy.py` for Bash
-commands and denies only the mechanical safety classes owned by this Issue:
+`.codex/hooks.json`. It invokes the Node-based fail-closed wrapper
+`.codex/hooks/run_pre_tool_use_policy.mjs` for Bash commands, which runs the
+policy checker and denies only the mechanical safety classes owned by this
+Issue:
 
 - force push;
 - `git reset --hard`;
@@ -31,4 +33,5 @@ owns and must not be retried through an obvious equivalent command.
 
 The deterministic `tests/hooks-policy.test.ts` harness invokes the guard
 directly with representative JSON Hook inputs; it does not use network or
-live services.
+live services. The repository requires Node 24 or newer; the wrapper also
+fails closed if its Python policy runtime is unavailable or fails.

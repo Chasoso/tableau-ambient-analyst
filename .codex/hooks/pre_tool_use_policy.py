@@ -138,8 +138,15 @@ def decision(command: str) -> str | None:
                     token.startswith("+") for token in positional
                 ):
                     return "Force push is blocked by the repository Hook."
-                if len(positional) >= 2 and any(protected_destination(token) for token in positional[1:]):
+                if len(positional) < 2:
+                    return "Push destination is implicit; an explicit canonical branch ref is required."
+                if any(protected_destination(token) for token in positional[1:]):
                     return "Direct push to protected branch main is blocked by the repository Hook."
+                if any(
+                    token == "HEAD" or token.startswith("HEAD:")
+                    for token in positional[1:]
+                ):
+                    return "Ambiguous HEAD push destinations are blocked by the repository Hook."
 
             if verb == "reset" and "--hard" in args:
                 return "Destructive hard reset is blocked by the repository Hook."
@@ -174,7 +181,7 @@ def decision(command: str) -> str | None:
     return None
 
 
-def main() -> int:
+def run() -> int:
     try:
         payload: Any = json.load(sys.stdin)
     except (json.JSONDecodeError, OSError):
@@ -195,6 +202,14 @@ def main() -> int:
     if reason:
         deny(reason)
     return 0
+
+
+def main() -> int:
+    try:
+        return run()
+    except Exception:
+        deny("Repository safety Hook failed closed; execution is blocked.")
+        return 0
 
 
 if __name__ == "__main__":

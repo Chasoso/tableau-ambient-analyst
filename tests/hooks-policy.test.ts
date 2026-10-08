@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const hook = resolve('.codex/hooks/pre_tool_use_policy.py');
+const wrapper = resolve('.codex/hooks/run_pre_tool_use_policy.mjs');
 
 function runHook(command: string): string {
   return execFileSync('python3', [hook], {
@@ -33,7 +34,7 @@ describe('repository-local Codex safety Hook', () => {
     };
     expect(configuration.hooks.PreToolUse[0]?.matcher).toBe('^Bash$');
     expect(configuration.hooks.PreToolUse[0]?.hooks[0]?.command).toContain(
-      '.codex/hooks/pre_tool_use_policy.py',
+      '.codex/hooks/run_pre_tool_use_policy.mjs',
     );
   });
 
@@ -44,6 +45,9 @@ describe('repository-local Codex safety Hook', () => {
     ['git reset --hard HEAD~1', 'hard reset'],
     ['git push origin main', 'protected branch main'],
     ['git push origin HEAD:refs/heads/main', 'protected branch main'],
+    ['git push', 'implicit'],
+    ['git push origin', 'implicit'],
+    ['git push origin HEAD', 'Ambiguous HEAD'],
     ['git push origin +refs/heads/feat/issue-55', 'Force push'],
     ['git push origin +refs/heads/feat/issue-55:refs/heads/feat/issue-56', 'Force push'],
     ['git push +refs/heads/feat/issue-55', 'Force push'],
@@ -90,6 +94,17 @@ describe('repository-local Codex safety Hook', () => {
     expect(JSON.parse(runRawHook('{not-json')).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(JSON.parse(runRawHook('{}')).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(denial("git push --force 'unterminated")).toContain('parse');
+  });
+
+  it('uses the repository Node runtime wrapper and fails closed for malformed input', () => {
+    expect(readFileSync(resolve('.codex/hooks.json'), 'utf8')).toContain(
+      'run_pre_tool_use_policy.mjs',
+    );
+    const result = execFileSync('node', [wrapper], {
+      input: '{not-json',
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(result).hookSpecificOutput.permissionDecision).toBe('deny');
   });
 
   it.each([
