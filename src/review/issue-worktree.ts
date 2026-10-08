@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 export type IssueWorkspaceStatus = 'NEW' | 'REUSE' | 'BLOCKED';
@@ -26,6 +26,26 @@ function issuePattern(issue: string): RegExp {
 function repositoryRoot(cwd: string): string {
   const commonDirectory = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   return resolve(dirname(commonDirectory));
+}
+
+function validateCanonicalPath(root: string, path: string): string | undefined {
+  const worktreeRoot = resolve(root, '.worktrees');
+  try {
+    const worktreeRootStat = lstatSync(worktreeRoot);
+    if (worktreeRootStat.isSymbolicLink() || !worktreeRootStat.isDirectory()) {
+      return 'Canonical worktree root is not a real repository-managed directory.';
+    }
+  } catch {
+    // The managed root is created below when it does not exist.
+  }
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      return 'Canonical Issue worktree path must not be a symbolic link.';
+    }
+  } catch {
+    // The canonical path is expected to be absent for a new workspace.
+  }
+  return undefined;
 }
 
 function parseWorktrees(cwd: string): WorktreeEntry[] {
@@ -85,6 +105,9 @@ export function resolveIssueWorkspace(
   try {
     const branch = canonicalIssueBranch(issue);
     const path = canonicalIssueWorktreePath(cwd, issue);
+    const root = repositoryRoot(cwd);
+    const pathError = validateCanonicalPath(root, path);
+    if (pathError) return { status: 'BLOCKED', reason: pathError };
     const alternateBranches = localBranchesForIssue(cwd, issue, branch);
     if (alternateBranches.length > 0) {
       return {

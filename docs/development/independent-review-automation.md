@@ -150,9 +150,12 @@ Reviewer invocation. It never launches the workspace-write implementer,
 creates a commit, pushes, or creates a pull request. The bounded AUTO_FIX loop
 is available only to the full Issue-to-PR path.
 
-After a pull request is merged, the canonical worktree and branch remain
-available for explicit follow-up or repository cleanup; this workflow does not
-silently delete worktrees or migrate legacy branches.
+After a human merges a pull request, cleanup is explicit and conservative:
+optionally remove the remote feature branch, remove the canonical worktree only
+when it is clean and no longer needed, delete the corresponding local branch,
+and prune stale remote-tracking refs. Dirty, ambiguous, unmerged, ahead,
+unpushed, or otherwise unsafe state is never automatically deleted, and legacy
+branches are not silently migrated.
 
 The runner is a bounded Issue-to-PR workflow with a bounded review/fix loop.
 When

@@ -38,6 +38,12 @@ Never reset, force-push, discard commits, auto-resolve conflicts, push directly
 to `main`, use `--no-verify`, or merge a PR as Codex. Use Conventional Commits
 and add `Closes #N` only when the Issue is complete.
 
+After a human merges a PR, cleanup is an explicit safe operation: optionally
+remove the remote feature branch, remove the canonical worktree only when it
+is clean and no longer needed, delete the corresponding local branch, and
+prune stale remote-tracking refs. Never automatically delete dirty, ambiguous,
+unmerged, ahead, unpushed, or otherwise unsafe state.
+
 ### Local gate configuration
 
 - Review results are `PASS`, `CHANGES_REQUIRED`, or

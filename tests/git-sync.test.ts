@@ -57,13 +57,13 @@ describe('local main synchronization', () => {
     }
   });
 
-  it('switches from a clean feature branch to main before synchronizing', () => {
+  it('blocks a clean feature checkout instead of switching it to main', () => {
     const { local, root } = fixture();
     try {
       git(local, ['switch', '-q', '-c', 'previous-feature']);
 
-      expect(synchronizeLocalBase(local)).toMatchObject({ status: 'UP_TO_DATE' });
-      expect(git(local, ['branch', '--show-current']).trim()).toBe('main');
+      expect(synchronizeLocalBase(local)).toMatchObject({ status: 'BLOCKED' });
+      expect(git(local, ['branch', '--show-current']).trim()).toBe('previous-feature');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,6 +103,21 @@ describe('canonical Issue workspaces', () => {
       expect(resolveIssueWorkspace(local, '65', 'main', { createBranch: false })).toMatchObject({
         status: 'BLOCKED',
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks a symlinked managed worktree root', () => {
+    const { root, local } = fixture();
+    try {
+      const outside = join(root, 'outside');
+      mkdirSync(outside);
+      symlinkSync(outside, join(local, '.worktrees'));
+
+      expect(resolveIssueWorkspace(local, '66')).toMatchObject({ status: 'BLOCKED' });
+      expect(lstatSync(join(local, '.worktrees')).isSymbolicLink()).toBe(true);
+      expect(git(local, ['branch', '--list', 'feat/issue-66'])).toBe('');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
