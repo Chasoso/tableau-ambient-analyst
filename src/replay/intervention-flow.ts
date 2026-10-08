@@ -19,8 +19,9 @@ import {
   type TranscriptUtterance,
 } from './transcript.js';
 import {
-  detectTrigger,
+  triggerDetector as defaultTriggerDetector,
   type AnalyzeOpportunity,
+  type TriggerDetector,
   type TriggerDetection,
 } from '../trigger/detector.js';
 import { StdioRunBudget } from '../spike/run-budget.js';
@@ -44,6 +45,7 @@ export type TranscriptInterventionEvent =
 export type FlowFailureStage = 'fixture' | 'analysis' | 'evidence' | 'verification';
 
 export type TranscriptInterventionDependencies = {
+  triggerDetector?: TriggerDetector;
   model: AgenticAnalysisModel;
   tools: AgenticAnalysisToolRunner;
   interpretEvidence: (analysis: AgenticAnalysisResult) => readonly AgenticEvidenceInterpretation[];
@@ -174,6 +176,7 @@ export async function runTranscriptInterventionFlow(
   }
 
   const replayed: TranscriptUtterance[] = [];
+  const detector = dependencies.triggerDetector ?? defaultTriggerDetector;
   let afterSequence: number | undefined;
   let detection: TriggerDetection = {
     decision: 'IGNORE',
@@ -184,7 +187,7 @@ export async function runTranscriptInterventionFlow(
   for (const utterance of utterances) {
     replayed.push(utterance);
     events.push({ type: 'utterance-received', utterance });
-    detection = detectTrigger(replayed, afterSequence === undefined ? {} : { afterSequence });
+    detection = detector.detect(replayed, afterSequence === undefined ? {} : { afterSequence });
     if (detection.decision === 'ANALYZE') break;
     events.push({
       type: 'trigger-ignored',

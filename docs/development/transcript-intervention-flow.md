@@ -23,7 +23,7 @@ The flow is:
 ```text
 Transcript Replay
   ↓
-Trigger Detector
+TriggerDetector boundary
   ↓
 Analysis Contract
   ↓
@@ -37,6 +37,11 @@ Intervention Policy
   ↓
 INTERVENE | HOLD
 ```
+
+The flow depends on the existing `TriggerDetector` interface. When no detector
+is supplied, the current heuristic `triggerDetector` is used. A later detector
+implementation can be injected at this boundary without changing the replay,
+contract, evidence, or intervention stages.
 
 Malformed fixtures, unavailable or malformed Agentic output, and malformed
 Evidence interpretation fail closed as `FAILED` with an auditable `HOLD`

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runTranscriptInterventionFlow } from '../src/replay/intervention-flow.js';
 import type {
   AgenticAnalysisModel,
@@ -10,6 +10,7 @@ import type {
   StdioCallSummary,
 } from '../src/spike/tableau-stdio-bridge.js';
 import { stdioDatasourceLuid } from '../src/spike/stdio-bridge-policy.js';
+import type { TriggerDetector } from '../src/trigger/detector.js';
 
 const decisionFixture = [
   JSON.stringify({ sequence: 0, speaker: 'A', text: 'Assuming demand will stay high.' }),
@@ -152,6 +153,57 @@ describe('transcript intervention flow', () => {
       'trigger-ignored',
     ]);
     expect(tools.calls).toBe(0);
+  });
+
+  it('uses an injected TriggerDetector implementation', async () => {
+    const detector: TriggerDetector = {
+      detect: vi.fn(() => ({
+        decision: 'ANALYZE' as const,
+        opportunity: {
+          claim: 'We should launch next week.',
+          reason: 'assumption-based-decision' as const,
+          context: [
+            { sequence: 0, speaker: 'A', text: 'Assuming demand will stay high.' },
+            { sequence: 1, speaker: 'B', text: 'We should launch next week.' },
+          ],
+        },
+      })),
+    };
+    const result = await runTranscriptInterventionFlow(
+      '[{"sequence":0,"speaker":"A","text":"Let us discuss lunch."}]',
+      { ...dependencies('supported'), triggerDetector: detector },
+    );
+
+    expect(result.status).toBe('COMPLETED');
+    expect(detector.detect).toHaveBeenCalledOnce();
+  });
+
+  it('does not analyze when an injected TriggerDetector ignores the replay', async () => {
+    let modelCalled = false;
+    const detector: TriggerDetector = {
+      detect: vi.fn(() => ({
+        decision: 'IGNORE' as const,
+        reason: 'no-analytical-opportunity' as const,
+        context: [],
+      })),
+    };
+    const tools = toolsFor();
+    const result = await runTranscriptInterventionFlow(decisionFixture, {
+      ...dependencies('supported'),
+      triggerDetector: detector,
+      model: {
+        async respond() {
+          modelCalled = true;
+          throw new Error('model must not be called');
+        },
+      },
+      tools,
+    });
+
+    expect(result.status).toBe('IGNORED');
+    expect(modelCalled).toBe(false);
+    expect(tools.calls).toBe(0);
+    expect(detector.detect).toHaveBeenCalledTimes(2);
   });
 
   it('replays a trigger through verification to HOLD for supported evidence', async () => {
