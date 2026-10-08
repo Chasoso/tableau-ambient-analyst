@@ -159,6 +159,10 @@ function dangerousAlias(value) {
   return Boolean(decision(`git ${expansion}`));
 }
 
+function configEnvAlias(value) {
+  return value.startsWith('alias.');
+}
+
 function unsupportedControlStructure(tokens) {
   const hasIfStructure = tokens.includes('if') && (tokens.includes('then') || tokens.includes('fi'));
   const hasGroupStructure = tokens.includes('{') || tokens.includes('}') || tokens.includes('(') || tokens.includes(')');
@@ -242,6 +246,12 @@ function gitInvocations(segment) {
       } else if (option.startsWith('-c') && option.length > 2) {
         if (dangerousAlias(option.slice(2))) return { invocations: [], parseFailed: true };
         cursor += 1;
+      } else if (option === '--config-env') {
+        if (configEnvAlias(segment[cursor + 1] ?? '')) return { invocations: [], parseFailed: true };
+        cursor += 2;
+      } else if (option.startsWith('--config-env=')) {
+        if (configEnvAlias(option.slice('--config-env='.length))) return { invocations: [], parseFailed: true };
+        cursor += 1;
       } else if (valueOptions.has(option)) cursor += 2;
       else if (flagOptions.has(option) || (option.startsWith('--') && option.includes('='))) cursor += 1;
       else if ((option.startsWith('-c') || option.startsWith('-C')) && option.length > 2) cursor += 1;
@@ -315,6 +325,12 @@ function decision(command) {
         if (forceDelete) return 'Force deletion of local branches is blocked by the repository Hook.';
       }
       if (verb === 'update-ref' && (args.includes('-d') || args.includes('--delete')) && args.some((argument) => argument.startsWith('refs/heads/'))) {
+        return 'Deletion of local branch refs is blocked by the repository Hook.';
+      }
+      if (verb === 'update-ref' && args.includes('--stdin')) {
+        return 'Update-ref stdin operations cannot be determined statically; execution is blocked.';
+      }
+      if (verb === 'update-ref' && args.some((argument) => argument.startsWith('refs/heads/')) && args.some((argument) => /^0{40}$|^0{64}$/.test(argument))) {
         return 'Deletion of local branch refs is blocked by the repository Hook.';
       }
       if (verb === 'worktree' && args[0] === 'remove') {

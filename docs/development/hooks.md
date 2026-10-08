@@ -30,6 +30,10 @@ worktree is canonical and must not be expanded into a generic policy engine.
 The Phase 1 mechanical boundary also covers common execution prefixes,
 literal `eval` content, same-invocation protected Git aliases, `gh api` PR
 merge endpoints, and deletion of `refs/heads/*` through `git update-ref`.
+`update-ref --stdin` and zero-OID updates for local branch refs fail closed;
+same-invocation aliases supplied through `--config-env` also fail closed because
+their value cannot be determined safely at the command boundary. The Hook and
+the repository-managed child-process guard use the same protected alias matrix.
 It does not attempt to interpret arbitrary scripts, functions, `xargs`,
 `find -exec`, raw HTTP clients, or pre-existing aliases.
 

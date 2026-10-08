@@ -27,15 +27,18 @@ function dangerousAlias(value: string): boolean {
   const expansion = match[1]?.trim() ?? '';
   if (expansion.startsWith('!')) return true;
   return (
-    (expansion.startsWith('push') && (expansion.includes('force') || expansion.includes('$'))) ||
+    (expansion.startsWith('push') &&
+      (expansion.includes('force') ||
+        /(^|\s)-[^\s]*f/.test(expansion) ||
+        expansion.includes('$'))) ||
     (expansion.startsWith('reset') && expansion.includes('--hard')) ||
     (expansion.startsWith('branch') &&
-      (expansion.includes(' -D') ||
+      (/(^|\s)-[^\s]*D/.test(expansion) ||
         expansion.includes('--delete') ||
         expansion.includes('--force'))) ||
     (expansion.startsWith('worktree') &&
       expansion.includes('remove') &&
-      expansion.includes('force')) ||
+      (expansion.includes('force') || /(^|\s)-[^\s]*f/.test(expansion))) ||
     (expansion.startsWith('update-ref') && expansion.includes('refs/heads/'))
   );
 }
@@ -43,8 +46,16 @@ function dangerousAlias(value: string): boolean {
 function hasDangerousAlias(args: readonly string[]): boolean {
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
+    const configEnv = option === '--config-env' || option?.startsWith('--config-env=');
     const value =
-      option === '-c' ? args[index + 1] : option?.startsWith('-c') ? option.slice(2) : undefined;
+      option === '-c' || option === '--config-env'
+        ? args[index + 1]
+        : option?.startsWith('-c')
+          ? option.slice(2)
+          : option?.startsWith('--config-env=')
+            ? option.slice('--config-env='.length)
+            : undefined;
+    if (configEnv && value?.startsWith('alias.')) return true;
     if (value && dangerousAlias(value)) return true;
   }
   return false;
@@ -167,6 +178,17 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
         commandArgs.some((argument) => argument === '--force' || forceOption(argument))))
   )
     throw new Error('Force deletion of local branches is blocked by the repository Hook.');
+  if (verb === 'update-ref' && commandArgs.includes('--stdin'))
+    throw new Error(
+      'Update-ref stdin operations cannot be determined statically; execution is blocked.',
+    );
+  if (
+    verb === 'update-ref' &&
+    commandArgs.some((argument) => argument.startsWith('refs/heads/')) &&
+    commandArgs.some((argument) => /^0{40}$|^0{64}$/.test(argument))
+  ) {
+    throw new Error('Deletion of local branch refs is blocked by the repository Hook.');
+  }
   if (
     verb === 'update-ref' &&
     (commandArgs.includes('-d') || commandArgs.includes('--delete')) &&

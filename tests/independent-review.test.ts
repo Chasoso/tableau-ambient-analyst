@@ -103,7 +103,39 @@ describe('independent review gate contract', () => {
       ]),
     ).toThrow('alias injection');
     expect(() =>
+      assertSafeChildProcess('git', ['-c', 'alias.fp=push -f', 'fp', 'origin', 'feat/issue-55']),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', [
+        '-c',
+        'alias.wr=worktree remove -f',
+        'wr',
+        '.worktrees/issue-55',
+      ]),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', [
+        '-c',
+        'alias.ur=update-ref -d refs/heads/feat-issue-55',
+        'ur',
+      ]),
+    ).toThrow('alias injection');
+    expect(() =>
+      assertSafeChildProcess('git', [
+        '--config-env=alias.fp=ALIAS',
+        'fp',
+        'origin',
+        'feat/issue-55',
+      ]),
+    ).toThrow('alias injection');
+    expect(() =>
       assertSafeChildProcess('git', ['update-ref', '-d', 'refs/heads/feat/issue-55']),
+    ).toThrow('local branch refs');
+    expect(() => assertSafeChildProcess('git', ['update-ref', '--stdin'])).toThrow(
+      'Update-ref stdin',
+    );
+    expect(() =>
+      assertSafeChildProcess('git', ['update-ref', 'refs/heads/feat', '0'.repeat(40)]),
     ).toThrow('local branch refs');
     expect(() =>
       assertSafeChildProcess('git', ['-c', 'alias.st=status', 'st', '--short']),

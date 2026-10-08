@@ -114,6 +114,18 @@ describe('repository-local Codex safety Hook', () => {
     ],
     ['git update-ref -d refs/heads/feat/issue-55', 'local branch refs'],
     ['git update-ref --delete refs/heads/feat/issue-55', 'local branch refs'],
+    ['git update-ref --stdin', 'Update-ref stdin'],
+    ['git update-ref --stdin -z', 'Update-ref stdin'],
+    ["printf 'delete refs/heads/feat/issue-55\\n' | git update-ref --stdin", 'Update-ref stdin'],
+    [
+      'git update-ref refs/heads/feat/issue-55 0000000000000000000000000000000000000000',
+      'local branch refs',
+    ],
+    [
+      "ALIAS='push --force' git --config-env=alias.fp=ALIAS fp origin feat/issue-55",
+      'Git global options',
+    ],
+    ["ALIAS='reset --hard' git --config-env=alias.hr=ALIAS hr HEAD~1", 'Git global options'],
   ])('denies %s', (command, reason) => {
     expect(denial(command)).toContain(reason);
   });
