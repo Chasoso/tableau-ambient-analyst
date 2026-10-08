@@ -33,6 +33,7 @@ import {
   findingClassifications,
   type ReviewAccounting,
   type ReviewCycleRecord,
+  type ReviewEpochHistory,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -1418,8 +1419,6 @@ function runBoundedReviewFixLoopUnsafe(
     if (
       ((initialAccounting.terminationReason === 'NO_PROGRESS' &&
         initialAccounting.resumeAfterPolicyChange === 'issue-29-bounded-scope-v3') ||
-        (initialAccounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
-          initialAccounting.resumeAfterPolicyChange === 'issue-29-review-budget-v2') ||
         (initialAccounting.terminationReason === 'MAX_AUTO_FIX_CYCLES' &&
           initialAccounting.resumeAfterPolicyChange === issue29ValidationPhaseResume)) &&
       dependencies.recordResume
@@ -2212,6 +2211,71 @@ export function reserveReviewCycleAtPath(
   return reserveReviewInvocationAtPath(statePath, branch, base);
 }
 
+/**
+ * Explicit human-authorized recovery after the review invocation limit.
+ * Normal review/update commands never reset or advance an exhausted epoch.
+ */
+export function resumeReviewAfterLimitAtPath(
+  statePath: string,
+  branch: string,
+  base: string,
+): ReviewAccounting | string {
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      if (
+        accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+        accounting.reviewInvocationCount !== maxReviewInvocations
+      ) {
+        return 'Review limit resume requires an exhausted review invocation state.';
+      }
+
+      const resumedAt = new Date().toISOString();
+      const reviewEpoch = accounting.reviewEpoch ?? 1;
+      const previousEpoch: ReviewEpochHistory = {
+        reviewEpoch,
+        accountingEpochStart: accounting.accountingEpochStart,
+        legacyReviewInvocations: accounting.legacyReviewInvocations,
+        legacyAutoFixCycles: accounting.legacyAutoFixCycles,
+        reviewInvocationCount: accounting.reviewInvocationCount,
+        autoFixCycleCount: accounting.autoFixCycleCount,
+        generalizedRuleHistory: [...accounting.generalizedRuleHistory],
+        consecutiveRepeatCount: accounting.consecutiveRepeatCount,
+        lastFixChangedRepository: accounting.lastFixChangedRepository,
+        cycleResults: [...accounting.cycleResults],
+        terminationHistory: [...(accounting.terminationHistory ?? [])],
+        terminationReason: accounting.terminationReason,
+        resumedAt,
+        authorizedByHuman: true,
+        authorizationSource: 'explicit-cli',
+      };
+      const next: ReviewAccounting = {
+        ...emptyAccounting(),
+        legacyReviewInvocations: accounting.legacyReviewInvocations,
+        legacyAutoFixCycles: accounting.legacyAutoFixCycles,
+        accountingEpochStart: accounting.accountingEpochStart,
+        reviewEpoch: reviewEpoch + 1,
+        reviewHistory: [...(accounting.reviewHistory ?? []), previousEpoch],
+        resumeAuthorizedAt: resumedAt,
+        resumeAuthorizationSource: 'explicit-cli',
+        resumedFromEpoch: reviewEpoch,
+      };
+      writeAccountingAtPath(statePath, branch, base, next);
+      return next;
+    });
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the human-authorized review resume.';
+  }
+}
+
+export function resumeReviewAfterLimit(cwd: string, base: string): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath) return 'Could not resolve the repository git directory for review state.';
+  return resumeReviewAfterLimitAtPath(statePath, currentBranch(cwd), base);
+}
+
 function resolveReviewStatePath(cwd: string): string | undefined {
   try {
     return resolve(
@@ -2321,6 +2385,11 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'terminationReason',
     'resumeAfterPolicyChange',
     'migrationCompatibility',
+    'reviewEpoch',
+    'reviewHistory',
+    'resumeAuthorizedAt',
+    'resumeAuthorizationSource',
+    'resumedFromEpoch',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -2352,7 +2421,17 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) ||
     (state.resumeAfterPolicyChange !== undefined &&
       typeof state.resumeAfterPolicyChange !== 'string') ||
-    (state.migrationCompatibility !== undefined && typeof state.migrationCompatibility !== 'string')
+    (state.migrationCompatibility !== undefined &&
+      typeof state.migrationCompatibility !== 'string') ||
+    (state.reviewEpoch !== undefined &&
+      (!Number.isInteger(state.reviewEpoch) || (state.reviewEpoch as number) < 1)) ||
+    (state.reviewHistory !== undefined &&
+      (!Array.isArray(state.reviewHistory) || !state.reviewHistory.every(isReviewEpochHistory))) ||
+    (state.resumeAuthorizedAt !== undefined && typeof state.resumeAuthorizedAt !== 'string') ||
+    (state.resumeAuthorizationSource !== undefined &&
+      state.resumeAuthorizationSource !== 'explicit-cli') ||
+    (state.resumedFromEpoch !== undefined &&
+      (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -2440,6 +2519,12 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
           : legacyMigration
             ? issue29LegacyMigration
             : undefined,
+    reviewEpoch: state.reviewEpoch as number | undefined,
+    reviewHistory: state.reviewHistory as ReviewEpochHistory[] | undefined,
+    resumeAuthorizedAt: state.resumeAuthorizedAt as string | undefined,
+    resumeAuthorizationSource:
+      state.resumeAuthorizationSource === 'explicit-cli' ? 'explicit-cli' : undefined,
+    resumedFromEpoch: state.resumedFromEpoch as number | undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -2548,6 +2633,63 @@ function isReviewCycleRecord(value: unknown): value is ReviewCycleRecord {
         record.findingIdentities.length === (record.generalizedRules as unknown[]).length &&
         record.findingIdentities.every((identity) => typeof identity === 'string'))) &&
     (record.repositoryChanged === null || typeof record.repositoryChanged === 'boolean')
+  );
+}
+
+function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const history = value as Record<string, unknown>;
+  const requiredKeys = [
+    'reviewEpoch',
+    'accountingEpochStart',
+    'legacyReviewInvocations',
+    'legacyAutoFixCycles',
+    'reviewInvocationCount',
+    'autoFixCycleCount',
+    'generalizedRuleHistory',
+    'consecutiveRepeatCount',
+    'lastFixChangedRepository',
+    'cycleResults',
+    'terminationHistory',
+    'terminationReason',
+    'resumedAt',
+    'authorizedByHuman',
+    'authorizationSource',
+  ];
+  return (
+    Object.keys(history).every((key) => requiredKeys.includes(key)) &&
+    requiredKeys.every((key) => Object.hasOwn(history, key)) &&
+    Number.isInteger(history.reviewEpoch) &&
+    (history.reviewEpoch as number) >= 1 &&
+    history.accountingEpochStart === currentAccountingEpoch &&
+    Number.isInteger(history.legacyReviewInvocations) &&
+    (history.legacyReviewInvocations as number) >= 0 &&
+    (history.legacyReviewInvocations as number) <= maxReviewInvocations &&
+    Number.isInteger(history.legacyAutoFixCycles) &&
+    (history.legacyAutoFixCycles as number) >= 0 &&
+    (history.legacyAutoFixCycles as number) <= maxAutoFixCycles &&
+    Number.isInteger(history.reviewInvocationCount) &&
+    (history.reviewInvocationCount as number) >= 0 &&
+    (history.reviewInvocationCount as number) <= maxReviewInvocations &&
+    Number.isInteger(history.autoFixCycleCount) &&
+    (history.autoFixCycleCount as number) >= 0 &&
+    (history.autoFixCycleCount as number) <= maxAutoFixCycles &&
+    Array.isArray(history.generalizedRuleHistory) &&
+    history.generalizedRuleHistory.every((rule) => typeof rule === 'string') &&
+    Number.isInteger(history.consecutiveRepeatCount) &&
+    (history.consecutiveRepeatCount as number) >= 0 &&
+    (history.consecutiveRepeatCount as number) <= (history.reviewInvocationCount as number) &&
+    (history.lastFixChangedRepository === null ||
+      typeof history.lastFixChangedRepository === 'boolean') &&
+    Array.isArray(history.cycleResults) &&
+    history.cycleResults.every(isReviewCycleRecord) &&
+    history.cycleResults.length <= (history.reviewInvocationCount as number) &&
+    Array.isArray(history.terminationHistory) &&
+    history.terminationHistory.every(isTerminationReason) &&
+    history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+    typeof history.resumedAt === 'string' &&
+    history.authorizedByHuman === true &&
+    history.authorizationSource === 'explicit-cli'
   );
 }
 

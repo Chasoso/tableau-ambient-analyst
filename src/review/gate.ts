@@ -47,6 +47,24 @@ export type ReviewCycleRecord = {
   repositoryChanged: boolean | null;
 };
 
+export type ReviewEpochHistory = {
+  reviewEpoch: number;
+  accountingEpochStart: string;
+  legacyReviewInvocations: number;
+  legacyAutoFixCycles: number;
+  reviewInvocationCount: number;
+  autoFixCycleCount: number;
+  generalizedRuleHistory: string[];
+  consecutiveRepeatCount: number;
+  lastFixChangedRepository: boolean | null;
+  cycleResults: ReviewCycleRecord[];
+  terminationHistory: TerminationReason[];
+  terminationReason: TerminationReason;
+  resumedAt: string;
+  authorizedByHuman: true;
+  authorizationSource: 'explicit-cli';
+};
+
 export type ReviewAccounting = {
   legacyReviewInvocations: number;
   legacyAutoFixCycles: number;
@@ -61,6 +79,11 @@ export type ReviewAccounting = {
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
   terminationReason?: TerminationReason | undefined;
+  reviewEpoch?: number | undefined;
+  reviewHistory?: ReviewEpochHistory[] | undefined;
+  resumeAuthorizedAt?: string | undefined;
+  resumeAuthorizationSource?: 'explicit-cli' | undefined;
+  resumedFromEpoch?: number | undefined;
 };
 
 export type ReviewGateResult = {

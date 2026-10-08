@@ -3,8 +3,11 @@ import {
   runExistingPullRequestUpdate,
   runIssueToPullRequest,
   runIndependentReview,
+  resumeReviewAfterLimit,
+  currentBranch,
   type IndependentReviewInput,
 } from './runner.js';
+import { canonicalIssueBranch } from './issue-worktree.js';
 
 const argumentsByName = new Map<string, string>();
 const rawArguments = process.argv.slice(2);
@@ -27,19 +30,26 @@ const input: IndependentReviewInput = {
 };
 
 const reviewOnly = rawArguments.includes('--review-only');
+const resumeAfterLimit = rawArguments.includes('--resume-after-limit');
 const existingPullRequest = argumentsByName.get('update-pr');
-const result = reviewOnly
-  ? runIndependentReview(input)
-  : existingPullRequest
-    ? runExistingPullRequestUpdate(input, existingPullRequest)
-    : runIssueToPullRequest(input);
-console.log(JSON.stringify(result, null, 2));
+if (resumeAfterLimit) {
+  const resumeResult = resumeFromLimit(input);
+  console.log(JSON.stringify(resumeResult, null, 2));
+  if (typeof resumeResult === 'string') process.exitCode = 1;
+} else {
+  const result = reviewOnly
+    ? runIndependentReview(input)
+    : existingPullRequest
+      ? runExistingPullRequestUpdate(input, existingPullRequest)
+      : runIssueToPullRequest(input);
+  console.log(JSON.stringify(result, null, 2));
 
-if (
-  result.result !== 'PASS' ||
-  ('completionStatus' in result && result.completionStatus !== 'READY_FOR_HUMAN_REVIEW')
-) {
-  process.exitCode = 1;
+  if (
+    result.result !== 'PASS' ||
+    ('completionStatus' in result && result.completionStatus !== 'READY_FOR_HUMAN_REVIEW')
+  ) {
+    process.exitCode = 1;
+  }
 }
 
 function requiredArgument(name: string): string {
@@ -51,4 +61,19 @@ function requiredArgument(name: string): string {
   }
 
   return value;
+}
+
+function resumeFromLimit(reviewInput: IndependentReviewInput) {
+  const issue = requiredArgument('issue');
+  let expectedBranch: string;
+  try {
+    expectedBranch = canonicalIssueBranch(issue);
+  } catch {
+    console.error('Issue number must be numeric.');
+    process.exit(2);
+  }
+  if (currentBranch(reviewInput.cwd) !== expectedBranch) {
+    return 'Review resume requires the canonical Issue feature branch.';
+  }
+  return resumeReviewAfterLimit(reviewInput.cwd, reviewInput.base);
 }
