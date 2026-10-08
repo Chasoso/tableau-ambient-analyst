@@ -258,10 +258,15 @@ export function assertSafeChildProcess(file: string, args: readonly string[]): v
   ) {
     throw new Error('Destructive hard reset is blocked by the repository Hook.');
   }
+  const branchDeletion =
+    commandArgs.includes('-d') ||
+    commandArgs.includes('--delete') ||
+    commandArgs.some((argument) => childShortOption(argument, 'd'));
   if (
     verb === 'branch' &&
     (commandArgs.some((argument) => argument === '-D' || childShortOption(argument, 'D')) ||
-      commandArgs.some((argument) => argument === '--force' || childForceOption(argument)))
+      (branchDeletion &&
+        commandArgs.some((argument) => argument === '--force' || childForceOption(argument))))
   ) {
     throw new Error('Force deletion of local branches is blocked by the repository Hook.');
   }
