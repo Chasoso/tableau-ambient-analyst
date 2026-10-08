@@ -30,6 +30,10 @@ def tokens_for(command: str) -> list[str] | None:
         return None
 
 
+def executable_name(token: str) -> str:
+    return token.rsplit("/", 1)[-1]
+
+
 def segments(tokens: list[str]) -> list[list[str]]:
     separators = {";", "&&", "||", "|", "&", "\n"}
     result: list[list[str]] = []
@@ -49,7 +53,7 @@ def segments(tokens: list[str]) -> list[list[str]]:
 def git_invocations(segment: list[str]) -> list[tuple[str, list[str]]]:
     invocations: list[tuple[str, list[str]]] = []
     for index, token in enumerate(segment):
-        if token != "git":
+        if executable_name(token) != "git":
             continue
         cursor = index + 1
         while cursor < len(segment) and segment[cursor].startswith("-"):
@@ -78,9 +82,15 @@ def force_option(token: str) -> bool:
 def decision(command: str) -> str | None:
     tokens = tokens_for(command)
     if tokens is None:
-        return None
+        return "Hook could not parse the pending shell command; execution is blocked."
 
     for segment in segments(tokens):
+        for index, token in enumerate(segment[:-2]):
+            if executable_name(token) in {"bash", "sh", "zsh"} and segment[index + 1] == "-c":
+                nested_reason = decision(segment[index + 2])
+                if nested_reason:
+                    return nested_reason
+
         for verb, args in git_invocations(segment):
             if "--no-verify" in args:
                 return "Git verification bypass (--no-verify) is blocked by the repository Hook."
@@ -96,7 +106,8 @@ def decision(command: str) -> str | None:
 
             if verb == "branch":
                 force_delete = "-D" in args or (
-                    ("-d" in args or "--delete" in args) and "--force" in args
+                    ("-d" in args or "--delete" in args)
+                    and any(option in {"-f", "--force"} for option in args)
                 )
                 if force_delete:
                     return "Force deletion of local branches is blocked by the repository Hook."
@@ -109,7 +120,11 @@ def decision(command: str) -> str | None:
                     return "Force removal of worktrees is blocked by the repository Hook."
 
         for index, token in enumerate(segment):
-            if token == "gh" and "pr" in segment[index + 1 :] and "merge" in segment[index + 1 :]:
+            if (
+                executable_name(token) == "gh"
+                and "pr" in segment[index + 1 :]
+                and "merge" in segment[index + 1 :]
+            ):
                 return "Pull request merge operations are blocked by the repository Hook."
 
     return None
@@ -119,14 +134,18 @@ def main() -> int:
     try:
         payload: Any = json.load(sys.stdin)
     except (json.JSONDecodeError, OSError):
+        deny("Hook input was malformed; execution is blocked.")
         return 0
     if not isinstance(payload, dict):
+        deny("Hook input was malformed; execution is blocked.")
         return 0
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
+        deny("Hook tool input was malformed; execution is blocked.")
         return 0
     command = tool_input.get("command")
     if not isinstance(command, str):
+        deny("Hook command input was malformed; execution is blocked.")
         return 0
     reason = decision(command)
     if reason:

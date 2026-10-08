@@ -13,6 +13,10 @@ function runHook(command: string): string {
   });
 }
 
+function runRawHook(input: string): string {
+  return execFileSync('python3', [hook], { input, encoding: 'utf8' });
+}
+
 function denial(command: string): string | undefined {
   const output = runHook(command).trim();
   if (!output) return undefined;
@@ -44,6 +48,7 @@ describe('repository-local Codex safety Hook', () => {
     ['git push --no-verify origin feat/issue-55', 'verification bypass'],
     ['gh pr merge 60', 'merge operations'],
     ['git branch -D feat/issue-60', 'Force deletion'],
+    ['git branch --delete -f feat/issue-60', 'Force deletion'],
     ['git branch --delete --force feat/issue-60', 'Force deletion'],
     ['git worktree remove --force .worktrees/issue-60', 'Force removal'],
   ])('denies %s', (command, reason) => {
@@ -64,5 +69,20 @@ describe('repository-local Codex safety Hook', () => {
 
   it('does not allow a shell-chain bypass of a prohibited command', () => {
     expect(denial('git status && git push --force origin feat/issue-55')).toContain('Force push');
+  });
+
+  it.each([
+    'bash -c "git push --force origin feat/issue-55"',
+    'command git reset --hard HEAD~1',
+    '/usr/bin/git push --force origin feat/issue-55',
+    'command gh pr merge 60',
+  ])('denies obvious wrapper or executable aliases: %s', (command) => {
+    expect(denial(command)).toBeDefined();
+  });
+
+  it('fails closed for malformed Hook input and unparseable commands', () => {
+    expect(JSON.parse(runRawHook('{not-json')).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(JSON.parse(runRawHook('{}')).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(denial("git push --force 'unterminated")).toContain('parse');
   });
 });
