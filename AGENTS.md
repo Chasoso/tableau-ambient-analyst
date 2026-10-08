@@ -38,6 +38,13 @@ Never reset, force-push, discard commits, auto-resolve conflicts, push directly
 to `main`, use `--no-verify`, or merge a PR as Codex. Use Conventional Commits
 and add `Closes #N` only when the Issue is complete.
 
+The repository-local Codex Hook configuration in `.codex/hooks.json` is the
+authoritative mechanical guard for the prohibited command classes it owns:
+force push, hard reset, direct push to `main`, `--no-verify`, PR merge,
+force branch deletion, and force worktree removal. Hooks do not replace this
+policy, the Issue-to-PR Skill, or the canonical workspace resolver. Never
+bypass or retry a Hook denial through an equivalent command.
+
 After a human merges a PR, cleanup is an explicit safe operation: optionally
 remove the remote feature branch, remove the canonical worktree only when it
 is clean and no longer needed, delete the corresponding local branch, and
