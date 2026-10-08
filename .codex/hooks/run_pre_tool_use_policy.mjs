@@ -49,7 +49,10 @@ function tokensFor(command) {
       flush();
       tokens.push(';');
     } else if (/\s/.test(character)) flush();
-    else if (character === ';' || character === '|' || character === '&') {
+    else if (character === '(' || character === ')') {
+      flush();
+      tokens.push(character);
+    } else if (character === ';' || character === '|' || character === '&') {
       flush();
       const next = command[index + 1];
       if (next === character) {

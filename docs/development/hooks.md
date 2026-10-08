@@ -46,6 +46,8 @@ destination. Brace comma and sequence forms in protected arguments, and
 dynamic protected destinations, fail closed. Newline-separated commands are
 treated like other command separators. Unsupported shell control structures
 that contain Git/GitHub operations fail closed, while harmless brace or
-variable text remains allowed outside those protected boundaries. The deterministic
+variable text remains allowed outside those protected boundaries. Adjacent
+subshell and process-substitution forms are covered by the same narrow
+protected-operation check. The deterministic
 `tests/hooks-policy.test.ts` harness invokes the guard directly with
 representative JSON Hook inputs; it does not use network or live services.
