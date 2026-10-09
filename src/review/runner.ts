@@ -29,6 +29,7 @@ import {
   terminationResult,
   terminationReasons,
   reviewRecoveryReasons,
+  reviewRecoveryHumanDecisions,
   validationFailure,
   reviewResults,
   findingClassifications,
@@ -42,6 +43,7 @@ import {
   type TerminationReason,
   type ReviewRecoveryReason,
   type ReviewTerminationEvidence,
+  type ReviewTerminationRecovery,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -2248,7 +2250,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
   branch: string,
   base: string,
   headSha: string,
-  recovery?: ReviewTerminationEvidence,
+  recovery?: ReviewTerminationRecovery,
 ): ReviewResumeApproval | string {
   try {
     return withAccountingLock(statePath, () => {
@@ -2259,6 +2261,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
         accounting.reviewInvocationCount === maxReviewInvocations;
       const isSupportedRecovery =
         recovery !== undefined &&
+        recovery.humanDecision === 'resume' &&
         ((accounting.terminationReason === 'BLOCKED' &&
           recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
           accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
@@ -2303,6 +2306,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
               originalTerminationReason: accounting.terminationReason as 'BLOCKED' | 'NO_PROGRESS',
               recoveryReason: recovery?.recoveryReason,
               recoveryEvidence: recovery?.recoveryEvidence,
+              humanDecision: recovery?.humanDecision,
             }),
       };
       writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
@@ -2320,7 +2324,7 @@ export function resumeReviewAfterLimitAtPath(
   branch: string,
   base: string,
   headSha: string,
-  recovery?: ReviewTerminationEvidence,
+  recovery?: ReviewTerminationRecovery,
 ): ReviewAccounting | string {
   try {
     return withAccountingLock(statePath, () => {
@@ -2328,6 +2332,7 @@ export function resumeReviewAfterLimitAtPath(
       const isLimitRecovery = recovery === undefined;
       const isSupportedRecovery =
         recovery !== undefined &&
+        recovery.humanDecision === 'resume' &&
         ((accounting.terminationReason === 'BLOCKED' &&
           recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
           accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
@@ -2367,7 +2372,8 @@ export function resumeReviewAfterLimitAtPath(
             ? true
             : candidate.originalTerminationReason === accounting.terminationReason &&
               candidate.recoveryReason === recovery?.recoveryReason &&
-              candidate.recoveryEvidence === recovery?.recoveryEvidence),
+              candidate.recoveryEvidence === recovery?.recoveryEvidence &&
+              candidate.humanDecision === recovery?.humanDecision),
       );
       if (!approval) {
         return 'No matching unconsumed human review approval exists for this state.';
@@ -2454,7 +2460,7 @@ export function authorizeReviewTerminationRecoveryAtPath(
   branch: string,
   base: string,
   headSha: string,
-  recovery: ReviewTerminationEvidence,
+  recovery: ReviewTerminationRecovery,
 ): ReviewResumeApproval | string {
   return authorizeReviewResumeAfterLimitAtPath(
     statePath,
@@ -2472,7 +2478,7 @@ export function resumeReviewTerminationRecoveryAtPath(
   branch: string,
   base: string,
   headSha: string,
-  recovery: ReviewTerminationEvidence,
+  recovery: ReviewTerminationRecovery,
 ): ReviewAccounting | string {
   return resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, headSha, recovery);
 }
@@ -2480,7 +2486,7 @@ export function resumeReviewTerminationRecoveryAtPath(
 export function authorizeReviewTerminationRecovery(
   cwd: string,
   base: string,
-  recovery: ReviewTerminationEvidence,
+  recovery: ReviewTerminationRecovery,
 ): ReviewResumeApproval | string {
   const statePath = resolveReviewStatePath(cwd);
   const approvalPath = resolveReviewApprovalPath(cwd);
@@ -2506,7 +2512,7 @@ export function authorizeReviewTerminationRecovery(
 export function resumeReviewTerminationRecovery(
   cwd: string,
   base: string,
-  recovery: ReviewTerminationEvidence,
+  recovery: ReviewTerminationRecovery,
 ): ReviewAccounting | string {
   const statePath = resolveReviewStatePath(cwd);
   const approvalPath = resolveReviewApprovalPath(cwd);
@@ -3185,6 +3191,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'originalTerminationReason',
     'recoveryReason',
     'recoveryEvidence',
+    'humanDecision',
   ]);
   return (
     Object.keys(approval).every((key) => allowedKeys.has(key)) &&
@@ -3210,13 +3217,18 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       ? approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
         approval.originalTerminationReason === undefined &&
         approval.recoveryReason === undefined &&
-        approval.recoveryEvidence === undefined
+        approval.recoveryEvidence === undefined &&
+        approval.humanDecision === undefined
       : (approval.originalTerminationReason === 'BLOCKED' ||
           approval.originalTerminationReason === 'NO_PROGRESS') &&
         typeof approval.recoveryReason === 'string' &&
         reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
         typeof approval.recoveryEvidence === 'string' &&
-        approval.recoveryEvidence.trim().length > 0)
+        approval.recoveryEvidence.trim().length > 0 &&
+        typeof approval.humanDecision === 'string' &&
+        reviewRecoveryHumanDecisions.includes(
+          approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
+        ))
   );
 }
 
@@ -3490,7 +3502,8 @@ function validateResumeTransactionSemantics(
       ? previousEpoch.terminationReason !== 'MAX_REVIEW_INVOCATIONS'
       : approval.originalTerminationReason !== previousEpoch.terminationReason ||
         approval.recoveryReason !== previousEpoch.recoveryReason ||
-        approval.recoveryEvidence !== previousEpoch.recoveryEvidence) ||
+        approval.recoveryEvidence !== previousEpoch.recoveryEvidence ||
+        approval.humanDecision !== 'resume') ||
     previousEpoch.authorizedByHuman !== true ||
     previousEpoch.authorizationSource !== 'human-explicit' ||
     previousEpoch.approvalId !== approval.id ||

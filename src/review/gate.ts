@@ -48,6 +48,12 @@ export type ReviewTerminationEvidence = {
   recoveryEvidence: string;
 };
 
+export const reviewRecoveryHumanDecisions = ['resume'] as const;
+export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[number];
+export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
+  humanDecision: ReviewRecoveryHumanDecision;
+};
+
 export type ReviewCycleRecord = {
   reviewInvocation: number;
   result: ReviewResultName;
@@ -99,6 +105,7 @@ export type ReviewResumeApproval = {
   originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
+  humanDecision?: ReviewRecoveryHumanDecision | undefined;
 };
 
 export type ReviewAccounting = {

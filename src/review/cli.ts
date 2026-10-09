@@ -101,14 +101,16 @@ function authorizeFromLimit(reviewInput: IndependentReviewInput) {
 function recoveryEvidence() {
   const reason = argumentsByName.get('recovery-reason');
   const evidence = argumentsByName.get('recovery-evidence');
+  const humanDecision = argumentsByName.get('human-decision');
   if (
     (reason !== 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
       reason !== 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED') ||
-    !evidence?.trim()
+    !evidence?.trim() ||
+    humanDecision !== 'resume'
   ) {
-    return 'Termination recovery requires --recovery-reason and --recovery-evidence.';
+    return 'Termination recovery requires --recovery-reason, --recovery-evidence, and --human-decision resume.';
   }
-  return { recoveryReason: reason, recoveryEvidence: evidence } as const;
+  return { recoveryReason: reason, recoveryEvidence: evidence, humanDecision } as const;
 }
 
 function authorizeRecovery(reviewInput: IndependentReviewInput) {

@@ -325,18 +325,23 @@ record must identify Issue #64, target Issue #55/PR #61, the decision and cause,
 the preserved state invariants, and the operator's corroborating basis. The
 runner never infers that reason from `NO_PROGRESS` alone. The recovery approval
 is branch/base/epoch/head/reason-bound, single-use, and preserves the original
-terminal epoch. For example:
+terminal epoch. Every termination-recovery approval also records the constrained
+human decision `resume`; `--confirm-human-authorization` remains only an
+explicit operator declaration and is not technical proof of human identity. For
+example:
 
 ```bash
 npm run build
 node dist/review/cli.js \
   --authorize-termination-recovery \
   --confirm-human-authorization \
+  --human-decision resume \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
   --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55
 node dist/review/cli.js \
   --resume-after-recovery \
+  --human-decision resume \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
   --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55

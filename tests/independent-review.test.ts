@@ -1674,6 +1674,7 @@ describe('review cycle state', () => {
     const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
     const recovery = {
       recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' as const,
+      humanDecision: 'resume' as const,
       recoveryEvidence: JSON.stringify({
         source: 'human-decision',
         issue: 64,
@@ -1749,7 +1750,21 @@ describe('review cycle state', () => {
           'main',
           'head',
           {
+            ...recovery,
+            humanDecision: undefined,
+          } as never,
+        ),
+      ).toMatch(/supported terminal state|recovery|evidence/i);
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-55',
+          'main',
+          'head',
+          {
             recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
+            humanDecision: 'resume',
             recoveryEvidence: JSON.stringify({
               source: 'issue-55-accounting-state',
               issue: 55,
@@ -1776,6 +1791,10 @@ describe('review cycle state', () => {
           recovery,
         ),
       ).not.toBeTypeOf('string');
+      const approvals = JSON.parse(readFileSync(approvalPath, 'utf8')) as {
+        approvals: Array<Record<string, unknown>>;
+      };
+      expect(approvals.approvals[0]?.humanDecision).toBe('resume');
       const resumed = resumeReviewTerminationRecoveryAtPath(
         statePath,
         approvalPath,
@@ -1796,6 +1815,13 @@ describe('review cycle state', () => {
         recoveryReason: recovery.recoveryReason,
         recoveryEvidence: recovery.recoveryEvidence,
       });
+      expect(
+        (
+          JSON.parse(readFileSync(approvalPath, 'utf8')) as {
+            approvals: Array<Record<string, unknown>>;
+          }
+        ).approvals[0],
+      ).toMatchObject({ humanDecision: 'resume', consumed: true });
       expect(
         resumeReviewTerminationRecoveryAtPath(
           statePath,
@@ -1844,6 +1870,7 @@ describe('review cycle state', () => {
           'head',
           {
             recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
+            humanDecision: 'resume',
             recoveryEvidence: 'unsupported state',
           },
         ),

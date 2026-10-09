@@ -39,7 +39,7 @@ questions.
 Issue #64's termination recovery is also repository-local: an AUTO_FIX
 implementer self-review block is a structured `BLOCKED` stop, while the known
 legacy `NO_PROGRESS` shape is recoverable only through a separate explicit
-human approval naming the recovery reason and a structured human-confirmed
+human approval naming the recovery reason, the constrained decision `resume`, and a structured human-confirmed
 corroborating basis. When the old blocking report is not persisted, this is a
 Human Decision record, not mechanical proof of causation. Codex must not create
 or self-authorize that approval. After a human creates a
