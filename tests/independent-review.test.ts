@@ -32,11 +32,13 @@ import {
 import {
   autoFixAllowedPaths,
   assertSafeChildProcess,
+  authorizeReviewResumeAfterLimitAtPath,
   buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
+  resumeReviewAfterLimitAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runExistingPullRequestUpdate,
@@ -1472,7 +1474,7 @@ describe('independent review runner control flow', () => {
       legacyAutoFixCycles: 0,
       accountingEpochStart: 'issue-29-accounting-v2',
       reviewInvocationCount: 3,
-      autoFixCycleCount: 2,
+      autoFixCycleCount: 0,
       generalizedRuleHistory: ['same rule'],
       consecutiveRepeatCount: 3,
       lastFixChangedRepository: true,
@@ -1580,6 +1582,647 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
+  it('records invocation-limit termination when an existing exhausted state lacks the marker', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const initialState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: maxReviewInvocations,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: ['existing rule'],
+      consecutiveRepeatCount: 1,
+      lastFixChangedRepository: null,
+      cycleResults: [
+        {
+          reviewInvocation: maxReviewInvocations,
+          result: 'PASS',
+          maintainability: 'NO_DRIFT',
+          classifications: [],
+          generalizedRules: ['existing rule'],
+          repositoryChanged: null,
+        },
+      ],
+      terminationHistory: [],
+    };
+    writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: ['existing rule'],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an exhausted epoch blocked until an explicit human resume', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).toContain('No matching');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'develop', 'head'),
+      ).toContain('exhausted');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a bounded human-authorized epoch and preserves the exhausted history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const resumed = resumeReviewAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      );
+      expect(typeof resumed).not.toBe('string');
+      if (typeof resumed === 'string') return;
+      expect(resumed).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: 0,
+        autoFixCycleCount: 0,
+        resumedFromEpoch: 1,
+        resumeAuthorizationSource: 'human-explicit',
+      });
+      expect(resumed.reviewHistory).toHaveLength(1);
+      expect(resumed.reviewHistory?.[0]).toMatchObject({
+        reviewEpoch: 1,
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+        authorizedByHuman: true,
+        authorizationSource: 'human-explicit',
+        approvalId: expect.any(String),
+        approvedAt: expect.any(String),
+      });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0]).toMatchObject({
+        consumed: true,
+        consumedAt: expect.any(String),
+      });
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      for (let invocation = 1; invocation < maxReviewInvocations; invocation += 1) {
+        expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      }
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: maxReviewInvocations,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a duplicate resume without creating another active epoch', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).toContain('exhausted');
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewHistory: [{ reviewEpoch: 1 }],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a resume transaction before exposing either state file', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const approvals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      const result = resumeReviewAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      );
+      expect(result).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      writeFileSync(approvalPath, JSON.stringify(approvals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: 1,
+      });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a pending transaction before a concurrent reader observes accounting', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    const readerPath = join(directory, 'reader-worker.mjs');
+    const initialState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: maxReviewInvocations,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+      terminationReason: 'MAX_REVIEW_INVOCATIONS',
+    };
+    writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+      writeFileSync(approvalPath, JSON.stringify(originalApprovals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+      writeFileSync(`${statePath}.lock`, 'held\n', 'utf8');
+      writeFileSync(
+        readerPath,
+        `import { existsSync } from 'node:fs';
+import { readReviewAccountingAtPath } from ${JSON.stringify(join(process.cwd(), 'dist/review/runner.js'))};
+const accounting = readReviewAccountingAtPath(process.argv[2], 'feature/review', 'main');
+process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transaction: existsSync(process.argv[2] + '.resume-transaction') }));
+`,
+        'utf8',
+      );
+      execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+
+      const reader = new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, [readerPath, statePath], {
+          cwd: process.cwd(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        child.on('error', reject);
+        child.on('close', (code) =>
+          code === 0 ? resolve(output) : reject(new Error(`reader exited with ${code}`)),
+        );
+      });
+      rmSync(`${statePath}.lock`);
+      expect(JSON.parse(await reader)).toEqual({ epoch: 2, transaction: false });
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: 0,
+      });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it('rejects a resume transaction with a mismatched approval path before writing', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const externalDirectory = mkdtempSync(join(tmpdir(), 'ambient-review-external-'));
+    const statePath = join(directory, 'state.json');
+    const externalApprovalPath = join(externalDirectory, 'approval.json');
+    const state = JSON.stringify({ entries: [] });
+
+    writeFileSync(statePath, state, 'utf8');
+    writeFileSync(
+      `${statePath}.resume-transaction`,
+      JSON.stringify({
+        statePath,
+        approvalPath: externalApprovalPath,
+        accountingState: { entries: [] },
+        approvalState: { approvals: [] },
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+      expect(readFileSync(statePath, 'utf8')).toBe(state);
+      expect(() => readFileSync(externalApprovalPath, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(externalDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a pending transaction has mismatched approval epoch semantics', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    const initialState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: maxReviewInvocations,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+      terminationReason: 'MAX_REVIEW_INVOCATIONS',
+    };
+    writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      recoveredState.entries[0].reviewHistory[0].approvalId = 'wrong-approval';
+      writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+      writeFileSync(approvalPath, JSON.stringify(originalApprovals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('semantics');
+      expect(readFileSync(statePath, 'utf8')).toBe(JSON.stringify(initialState));
+      expect(readFileSync(approvalPath, 'utf8')).toBe(JSON.stringify(originalApprovals));
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).not.toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for inconsistent epoch metadata', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const contents = JSON.stringify({
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewEpoch: 2,
+      reviewInvocationCount: 0,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: [],
+      resumeAuthorizationSource: 'human-explicit',
+      resumedFromEpoch: 1,
+    });
+    writeFileSync(statePath, contents, 'utf8');
+
+    try {
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
+      expect(readFileSync(statePath, 'utf8')).toBe(contents);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['wrong branch', 'feat/issue-62', 'main', 1, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['wrong base', 'feat/issue-61', 'develop', 1, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['wrong epoch', 'feat/issue-61', 'main', 2, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['not exhausted', 'feat/issue-61', 'main', 1, 15, undefined, false],
+    ['already consumed', 'feat/issue-61', 'main', 1, 16, 'MAX_REVIEW_INVOCATIONS', true],
+  ])(
+    'fails closed for a %s approval mismatch',
+    (_name, branch, base, approvalEpoch, invocationCount, terminationReason, consumed) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+      const statePath = join(directory, 'state.json');
+      const approvalPath = join(directory, 'approval.json');
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-61',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: invocationCount,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: null,
+              cycleResults: [],
+              terminationHistory: terminationReason ? [terminationReason] : [],
+              ...(terminationReason ? { terminationReason } : {}),
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        approvalPath,
+        JSON.stringify({
+          approvals: [
+            {
+              id: 'approval-1',
+              approvalType: 'review-limit-resume',
+              targetRepository: 'Chasoso/tableau-ambient-analyst',
+              branch: 'feat/issue-61',
+              base: 'main',
+              reviewEpoch: approvalEpoch,
+              exhaustedReviewInvocationCount: maxReviewInvocations,
+              approvedAt: '2026-10-09T00:00:00.000Z',
+              authorizationSource: 'human-explicit',
+              consumed,
+              headSha: 'head',
+              ...(consumed ? { consumedAt: '2026-10-09T00:01:00.000Z' } : {}),
+            },
+          ],
+        }),
+        'utf8',
+      );
+
+      try {
+        expect(resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, 'head')).toMatch(
+          /Review|approval/,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('serializes concurrent human resumes into one new epoch', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    const workerPath = join(directory, 'resume-worker.mjs');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+    expect(
+      authorizeReviewResumeAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      ),
+    ).not.toBeTypeOf('string');
+    execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+    writeFileSync(
+      workerPath,
+      `import { resumeReviewAfterLimitAtPath } from ${JSON.stringify(
+        join(process.cwd(), 'dist/review/runner.js'),
+      )};
+const result = resumeReviewAfterLimitAtPath(process.argv[2], process.argv[3], 'feature/review', 'main', 'head');
+process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
+`,
+      'utf8',
+    );
+
+    try {
+      const workers = Array.from(
+        { length: 2 },
+        () =>
+          new Promise<string>((resolve, reject) => {
+            const child = spawn(process.execPath, [workerPath, statePath, approvalPath], {
+              cwd: process.cwd(),
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            let output = '';
+            child.stdout.on('data', (chunk: Buffer) => {
+              output += chunk.toString();
+            });
+            child.on('error', reject);
+            child.on('close', (code) => {
+              if (code === 0) resolve(output);
+              else reject(new Error(`resume worker exited with ${code}`));
+            });
+          }),
+      );
+      const results = await Promise.all(workers);
+      expect(results.filter((result) => result === 'resumed')).toHaveLength(1);
+      expect(results.filter((result) => result === 'blocked')).toHaveLength(1);
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewHistory: [{ reviewEpoch: 1 }],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15000);
+
   it('migrates the known Issue #29 legacy state without resetting either bound', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');

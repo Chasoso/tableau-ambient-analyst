@@ -109,6 +109,22 @@ Use this sequence:
 12. Only then create the PR or, when an existing draft is being used for the
     bootstrap exception below, mark it ready for normal review.
 
+If the bounded review invocation limit is exhausted, the gate remains
+`BLOCKED`. A human must first create a separate durable
+`review-limit-resume` approval record. The repository's
+`--resume-after-limit --issue <N>` mode only validates and consumes an existing
+matching approval from the canonical Issue worktree; invoking it is not Human
+authorization. The approval is single-use and head-bound. Resume creates a
+fresh bounded accounting epoch and preserves the old epoch plus approval audit
+reference; it does not produce `PASS`. A fresh Independent Review is required
+after resume, followed by the normal exact-head CI gate. Repeated exhaustion
+requires another explicit Human Decision.
+
+The `--confirm-human-authorization` flag is an auditable operator declaration,
+not technical authentication of human identity. If technical human identity is
+required, the gate is `HUMAN_DECISION_REQUIRED`; no authentication system is
+selected or added autonomously.
+
 A minimal handoff should contain factual metadata such as:
 
 ```text

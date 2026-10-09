@@ -47,6 +47,43 @@ export type ReviewCycleRecord = {
   repositoryChanged: boolean | null;
 };
 
+export type ReviewEpochHistory = {
+  reviewEpoch: number;
+  accountingEpochStart: string;
+  legacyReviewInvocations: number;
+  legacyAutoFixCycles: number;
+  reviewInvocationCount: number;
+  autoFixCycleCount: number;
+  generalizedRuleHistory: string[];
+  consecutiveRepeatCount: number;
+  lastFixChangedRepository: boolean | null;
+  cycleResults: ReviewCycleRecord[];
+  terminationHistory: TerminationReason[];
+  terminationReason: TerminationReason;
+  resumedAt: string;
+  authorizedByHuman: true;
+  authorizationSource: 'human-explicit';
+  approvalId: string;
+  approvedAt: string;
+  resumeAfterPolicyChange?: string | undefined;
+  migrationCompatibility?: string | undefined;
+};
+
+export type ReviewResumeApproval = {
+  id: string;
+  approvalType: 'review-limit-resume';
+  targetRepository: 'Chasoso/tableau-ambient-analyst';
+  branch: string;
+  base: string;
+  reviewEpoch: number;
+  exhaustedReviewInvocationCount: number;
+  approvedAt: string;
+  authorizationSource: 'human-explicit';
+  consumed: boolean;
+  headSha: string;
+  consumedAt?: string | undefined;
+};
+
 export type ReviewAccounting = {
   legacyReviewInvocations: number;
   legacyAutoFixCycles: number;
@@ -61,6 +98,11 @@ export type ReviewAccounting = {
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
   terminationReason?: TerminationReason | undefined;
+  reviewEpoch?: number | undefined;
+  reviewHistory?: ReviewEpochHistory[] | undefined;
+  resumeAuthorizedAt?: string | undefined;
+  resumeAuthorizationSource?: 'human-explicit' | undefined;
+  resumedFromEpoch?: number | undefined;
 };
 
 export type ReviewGateResult = {

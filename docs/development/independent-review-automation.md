@@ -276,6 +276,43 @@ uncertainty.
   meaningful repository progress continue within the bounds;
 - an AUTO_FIX with no repository change: `NO_PROGRESS`.
 
+Review-limit exhaustion is a successful safety stop, not a PASS. Ordinary
+retries, commits, CI success, new sessions, and PR updates do not reset it.
+When a human decides that continuation is justified, first create a durable
+approval record with the human-only authorization command, then run the resume
+command from the canonical Issue worktree:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-resume-after-limit \
+  --confirm-human-authorization \
+  --issue 61 \
+  --base main \
+  --cwd .worktrees/issue-61
+node dist/review/cli.js \
+  --resume-after-limit \
+  --issue 61 \
+  --base main \
+  --cwd .worktrees/issue-61
+```
+
+The authorization command creates a separate durable
+`.git/tableau-ambient-review-approval.json` `review-limit-resume` record with
+the approved head SHA. Codex must not invoke that command. The
+`--confirm-human-authorization` flag records an explicit operator declaration;
+it cannot technically prove that the operator is human. A requirement for
+cryptographic or platform-backed human identity is `HUMAN_DECISION_REQUIRED`
+and must not trigger an agent-selected authentication system. The
+resume command is accepted only for the canonical Issue branch, an exhausted
+`MAX_REVIEW_INVOCATIONS` state, and one matching unconsumed human approval. It
+validates and consumes the approval exactly once, preserves the prior epoch's
+counters, findings, cycle results, termination history, and approval reference,
+and starts a new bounded epoch. Resume itself is never a PASS: a fresh
+Independent Review and the exact-head CI gate remain mandatory. If the new
+epoch reaches its limit, automation stops again and requires a new explicit
+human authorization.
+
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn. A result-capture retry is part of one reviewer
 invocation and never increments the AUTO_FIX count.
