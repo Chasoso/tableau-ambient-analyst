@@ -329,12 +329,12 @@ node dist/review/cli.js \
   --authorize-termination-recovery \
   --confirm-human-authorization \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
-  --recovery-evidence 'Issue #55 epoch 2 was produced by the documented AUTO_FIX self-review classification bug' \
+  --recovery-evidence '{"source":"issue-55-accounting-state","issue":55,"branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55
 node dist/review/cli.js \
   --resume-after-recovery \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
-  --recovery-evidence 'Issue #55 epoch 2 was produced by the documented AUTO_FIX self-review classification bug' \
+  --recovery-evidence '{"source":"issue-55-accounting-state","issue":55,"branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55
 ```
 

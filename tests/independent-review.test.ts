@@ -1674,12 +1674,24 @@ describe('review cycle state', () => {
     const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
     const recovery = {
       recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' as const,
-      recoveryEvidence: 'issue-55 documented classification bug',
+      recoveryEvidence: JSON.stringify({
+        source: 'issue-55-accounting-state',
+        issue: 55,
+        branch: 'feat/issue-55',
+        base: 'main',
+        reviewEpoch: 2,
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        terminationReason: 'NO_PROGRESS',
+        priorEpoch: 1,
+        priorTerminationReason: 'MAX_REVIEW_INVOCATIONS',
+        priorReviewInvocationCount: maxReviewInvocations,
+      }),
     };
     writeFileSync(
       statePath,
       JSON.stringify({
-        branch: 'feature/review',
+        branch: 'feat/issue-55',
         base: 'main',
         legacyReviewInvocations: 0,
         legacyAutoFixCycles: 0,
@@ -1726,7 +1738,7 @@ describe('review cycle state', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-55',
           'main',
           'head',
           recovery,
@@ -1735,7 +1747,7 @@ describe('review cycle state', () => {
       const resumed = resumeReviewTerminationRecoveryAtPath(
         statePath,
         approvalPath,
-        'feature/review',
+        'feat/issue-55',
         'main',
         'head',
         recovery,
@@ -1756,7 +1768,7 @@ describe('review cycle state', () => {
         resumeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-55',
           'main',
           'head',
           recovery,

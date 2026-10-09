@@ -2266,7 +2266,8 @@ export function authorizeReviewResumeAfterLimitAtPath(
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
-            isKnownLegacyAutoFixMisclassification(accounting))) &&
+            isKnownLegacyAutoFixMisclassification(accounting) &&
+            isLegacyRecoveryEvidence(accounting, branch, base, recovery.recoveryEvidence))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (!isLimitRecovery && !isSupportedRecovery) {
         return 'Review approval requires a supported terminal state and explicit recovery evidence.';
@@ -2334,7 +2335,8 @@ export function resumeReviewAfterLimitAtPath(
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
-            isKnownLegacyAutoFixMisclassification(accounting))) &&
+            isKnownLegacyAutoFixMisclassification(accounting) &&
+            isLegacyRecoveryEvidence(accounting, branch, base, recovery.recoveryEvidence))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (
         (isLimitRecovery &&
@@ -3072,6 +3074,54 @@ function isKnownLegacyAutoFixMisclassification(accounting: ReviewAccounting): bo
   );
 }
 
+function isLegacyRecoveryEvidence(
+  accounting: ReviewAccounting,
+  branch: string,
+  base: string,
+  evidence: string,
+): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(evidence) as unknown;
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const value = parsed as Record<string, unknown>;
+  const previousEpoch = accounting.reviewHistory?.at(-1);
+  if (!previousEpoch) return false;
+  return (
+    Object.keys(value).every((key) =>
+      new Set([
+        'source',
+        'issue',
+        'branch',
+        'base',
+        'reviewEpoch',
+        'reviewInvocationCount',
+        'autoFixCycleCount',
+        'terminationReason',
+        'priorEpoch',
+        'priorTerminationReason',
+        'priorReviewInvocationCount',
+      ]).has(key),
+    ) &&
+    value.source === 'issue-55-accounting-state' &&
+    value.issue === 55 &&
+    value.branch === branch &&
+    value.base === base &&
+    value.reviewEpoch === accounting.reviewEpoch &&
+    value.reviewInvocationCount === accounting.reviewInvocationCount &&
+    value.autoFixCycleCount === accounting.autoFixCycleCount &&
+    value.terminationReason === accounting.terminationReason &&
+    value.priorEpoch === previousEpoch?.reviewEpoch &&
+    value.priorTerminationReason === previousEpoch.terminationReason &&
+    value.priorReviewInvocationCount === previousEpoch.reviewInvocationCount &&
+    branch === 'feat/issue-55' &&
+    base === 'main'
+  );
+}
+
 function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const approval = value as Record<string, unknown>;
@@ -3113,7 +3163,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       ? typeof approval.consumedAt === 'string'
       : approval.consumedAt === undefined) &&
     (approval.approvalType === 'review-limit-resume'
-      ? approval.originalTerminationReason === undefined &&
+      ? approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+        approval.originalTerminationReason === undefined &&
         approval.recoveryReason === undefined &&
         approval.recoveryEvidence === undefined
       : (approval.originalTerminationReason === 'BLOCKED' ||
@@ -3378,6 +3429,8 @@ function validateResumeTransactionSemantics(
     approval.base !== transaction.base ||
     approval.reviewEpoch !== transaction.exhaustedEpoch ||
     approval.exhaustedReviewInvocationCount !== exhaustedReviewInvocationCount ||
+    (approval.approvalType === 'review-limit-resume' &&
+      approval.exhaustedReviewInvocationCount !== maxReviewInvocations) ||
     approval.authorizationSource !== 'human-explicit' ||
     accounting.reviewEpoch !== transaction.exhaustedEpoch + 1 ||
     accounting.resumedFromEpoch !== transaction.exhaustedEpoch ||
