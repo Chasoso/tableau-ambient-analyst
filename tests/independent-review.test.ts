@@ -31,6 +31,7 @@ import {
 } from '../src/review/gate.js';
 import {
   autoFixAllowedPaths,
+  authorizeReviewTerminationRecoveryAtPath,
   authorizeReviewResumeAfterLimitAtPath,
   buildAutoFixPrompt,
   buildImplementerPrompt,
@@ -38,6 +39,7 @@ import {
   extractFinalReviewerMessage,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
+  resumeReviewTerminationRecoveryAtPath,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runExistingPullRequestUpdate,
@@ -1352,6 +1354,40 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.autoFixCycleCount).toBe(0);
   });
 
+  it('classifies an AUTO_FIX implementer self-review block as BLOCKED without a cycle', () => {
+    let receivedEvidence: unknown;
+    const result = runBoundedReviewFixLoop(
+      input,
+      dependencies({
+        recordTermination: (_cwd, _base, reason, evidence) => {
+          receivedEvidence = evidence;
+          return {
+            legacyReviewInvocations: 0,
+            legacyAutoFixCycles: 0,
+            accountingEpochStart: 'issue-29-accounting-v2',
+            reviewInvocationCount: 1,
+            autoFixCycleCount: 0,
+            generalizedRuleHistory: [],
+            consecutiveRepeatCount: 0,
+            lastFixChangedRepository: null,
+            cycleResults: [],
+            terminationReason: reason,
+            terminationEvidence: evidence,
+          };
+        },
+        invokeReviewer: () => autoFixReview('implementer is blocked'),
+      }),
+      () => 'BLOCKED: AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED: ["issue"]',
+    );
+
+    expect(result.terminationReason).toBe('BLOCKED');
+    expect(receivedEvidence).toMatchObject({
+      recoveryReason: 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+      recoveryEvidence: '["issue"]',
+    });
+    expect(result.accounting?.autoFixCycleCount).toBe(0);
+  });
+
   it('does not run another review after a persisted terminal state', () => {
     let invoked = 0;
     const accounting: ReviewAccounting = {
@@ -1627,6 +1663,122 @@ describe('review cycle state', () => {
         reviewEpoch: 2,
         reviewHistory: [{ reviewEpoch: 1 }],
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers only an explicitly evidenced legacy AUTO_FIX self-review NO_PROGRESS state', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    const recovery = {
+      recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' as const,
+      recoveryEvidence: 'issue-55 documented classification bug',
+    };
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: false,
+        cycleResults: [],
+        terminationHistory: ['NO_PROGRESS'],
+        terminationReason: 'NO_PROGRESS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+          recovery,
+        ),
+      ).not.toBeTypeOf('string');
+      const resumed = resumeReviewTerminationRecoveryAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+        recovery,
+      );
+      expect(resumed).not.toBeTypeOf('string');
+      if (typeof resumed === 'string') return;
+      expect(resumed).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: 0,
+        resumedFromEpoch: 1,
+      });
+      expect(resumed.reviewHistory?.[0]).toMatchObject({
+        terminationReason: 'NO_PROGRESS',
+        recoveryReason: recovery.recoveryReason,
+        recoveryEvidence: recovery.recoveryEvidence,
+      });
+      expect(
+        resumeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+          recovery,
+        ),
+      ).toMatch(/recovery|approval|terminal/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not make an unsupported terminal reason resumable', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['HUMAN_DECISION_REQUIRED'],
+        terminationReason: 'HUMAN_DECISION_REQUIRED',
+      }),
+      'utf8',
+    );
+    try {
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+          {
+            recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
+            recoveryEvidence: 'unsupported state',
+          },
+        ),
+      ).toMatch(/supported terminal state|recovery/i);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

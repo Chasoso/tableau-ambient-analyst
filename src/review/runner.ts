@@ -28,6 +28,7 @@ import {
   requiresHumanDecision,
   terminationResult,
   terminationReasons,
+  reviewRecoveryReasons,
   validationFailure,
   reviewResults,
   findingClassifications,
@@ -39,6 +40,8 @@ import {
   type ReviewGateResult,
   type MaintainabilityResult,
   type TerminationReason,
+  type ReviewRecoveryReason,
+  type ReviewTerminationEvidence,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -114,7 +117,12 @@ export type ReviewRunnerDependencies = {
   readAccounting: (cwd: string, base: string) => ReviewAccounting | string;
   recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
-  recordTermination: (cwd: string, base: string, reason: TerminationReason) => ReviewAccounting;
+  recordTermination: (
+    cwd: string,
+    base: string,
+    reason: TerminationReason,
+    evidence?: ReviewTerminationEvidence,
+  ) => ReviewAccounting;
   recordResume?: (cwd: string, base: string) => ReviewAccounting;
 };
 
@@ -132,6 +140,8 @@ export type ApplyAutoFixResult = {
   changedFiles?: AutoFixChangedFile[];
 };
 export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult;
+
+const autoFixSelfReviewBlockedPrefix = 'BLOCKED: AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED:';
 
 export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
@@ -862,7 +872,7 @@ function parseImplementerReport(output: string): ImplementerReport | string {
     selfReview.blockingIssues.some((issue) => typeof issue !== 'string') ||
     selfReview.blockingIssues.length > 0
   ) {
-    return 'Issue implementer self-review reported blocking issues.';
+    return `${autoFixSelfReviewBlockedPrefix} ${JSON.stringify(selfReview.blockingIssues)}`;
   }
   if (
     !isRecord(selfReview.checks) ||
@@ -1495,7 +1505,18 @@ function runBoundedReviewFixLoopUnsafe(
     }
     if (typeof fixResult === 'string') {
       const reason = fixResult.startsWith('BLOCKED:') ? 'BLOCKED' : 'NO_PROGRESS';
-      accounting = dependencies.recordTermination(input.cwd, input.base, reason);
+      const evidence = parseAutoFixBlockingEvidence(fixResult);
+      accounting = dependencies.recordTermination(
+        input.cwd,
+        input.base,
+        reason,
+        evidence
+          ? {
+              recoveryReason: 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+              recoveryEvidence: evidence,
+            }
+          : undefined,
+      );
       return terminationResult(reason, accounting, review.blockingFindings, fixResult);
     }
 
@@ -1505,6 +1526,12 @@ function runBoundedReviewFixLoopUnsafe(
       return terminationResult('NO_PROGRESS', terminated, review.blockingFindings);
     }
   }
+}
+
+function parseAutoFixBlockingEvidence(value: string): string | undefined {
+  if (!value.startsWith(autoFixSelfReviewBlockedPrefix)) return undefined;
+  const evidence = value.slice(autoFixSelfReviewBlockedPrefix.length).trim();
+  return evidence.length > 0 ? evidence : undefined;
 }
 
 function applyCodexAutoFix(
@@ -2221,15 +2248,25 @@ export function authorizeReviewResumeAfterLimitAtPath(
   branch: string,
   base: string,
   headSha: string,
+  recovery?: ReviewTerminationEvidence,
 ): ReviewResumeApproval | string {
   try {
     return withAccountingLock(statePath, () => {
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
-      if (
-        accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
-        accounting.reviewInvocationCount !== maxReviewInvocations
-      ) {
-        return 'Review approval requires an exhausted review invocation state.';
+      const isLimitRecovery =
+        accounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+        accounting.reviewInvocationCount === maxReviewInvocations;
+      const isSupportedRecovery =
+        recovery !== undefined &&
+        ((accounting.terminationReason === 'BLOCKED' &&
+          recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+          accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
+          accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
+          (accounting.terminationReason === 'NO_PROGRESS' &&
+            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED')) &&
+        recovery.recoveryEvidence.trim().length > 0;
+      if (!isLimitRecovery && !isSupportedRecovery) {
+        return 'Review approval requires a supported terminal state and explicit recovery evidence.';
       }
       const approvals = readReviewApprovalsAtPath(approvalPath);
       if (
@@ -2245,7 +2282,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
       }
       const approval: ReviewResumeApproval = {
         id: randomUUID(),
-        approvalType: 'review-limit-resume',
+        approvalType: isLimitRecovery ? 'review-limit-resume' : 'review-termination-recovery',
         targetRepository,
         branch,
         base,
@@ -2255,6 +2292,13 @@ export function authorizeReviewResumeAfterLimitAtPath(
         authorizationSource: 'human-explicit',
         consumed: false,
         headSha,
+        ...(isLimitRecovery
+          ? {}
+          : {
+              originalTerminationReason: accounting.terminationReason as 'BLOCKED' | 'NO_PROGRESS',
+              recoveryReason: recovery?.recoveryReason,
+              recoveryEvidence: recovery?.recoveryEvidence,
+            }),
       };
       writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
       return approval;
@@ -2271,21 +2315,37 @@ export function resumeReviewAfterLimitAtPath(
   branch: string,
   base: string,
   headSha: string,
+  recovery?: ReviewTerminationEvidence,
 ): ReviewAccounting | string {
   try {
     return withAccountingLock(statePath, () => {
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const isLimitRecovery = recovery === undefined;
+      const isSupportedRecovery =
+        recovery !== undefined &&
+        ((accounting.terminationReason === 'BLOCKED' &&
+          recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+          accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
+          accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
+          (accounting.terminationReason === 'NO_PROGRESS' &&
+            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED')) &&
+        recovery.recoveryEvidence.trim().length > 0;
       if (
-        accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
-        accounting.reviewInvocationCount !== maxReviewInvocations
+        (isLimitRecovery &&
+          (accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+            accounting.reviewInvocationCount !== maxReviewInvocations)) ||
+        (!isLimitRecovery && !isSupportedRecovery)
       ) {
-        return 'Review limit resume requires an exhausted review invocation state.';
+        return isLimitRecovery
+          ? 'Review limit resume requires an exhausted review invocation state.'
+          : 'Review recovery requires a supported terminal state and explicit recovery evidence.';
       }
 
       const approvals = readReviewApprovalsAtPath(approvalPath);
       const approval = approvals.find(
         (candidate) =>
-          candidate.approvalType === 'review-limit-resume' &&
+          candidate.approvalType ===
+            (isLimitRecovery ? 'review-limit-resume' : 'review-termination-recovery') &&
           candidate.targetRepository === targetRepository &&
           candidate.branch === branch &&
           candidate.base === base &&
@@ -2293,7 +2353,12 @@ export function resumeReviewAfterLimitAtPath(
           candidate.exhaustedReviewInvocationCount === accounting.reviewInvocationCount &&
           candidate.authorizationSource === 'human-explicit' &&
           !candidate.consumed &&
-          candidate.headSha === headSha,
+          candidate.headSha === headSha &&
+          (isLimitRecovery
+            ? true
+            : candidate.originalTerminationReason === accounting.terminationReason &&
+              candidate.recoveryReason === recovery?.recoveryReason &&
+              candidate.recoveryEvidence === recovery?.recoveryEvidence),
       );
       if (!approval) {
         return 'No matching unconsumed human review approval exists for this state.';
@@ -2313,7 +2378,7 @@ export function resumeReviewAfterLimitAtPath(
         lastFixChangedRepository: accounting.lastFixChangedRepository,
         cycleResults: [...accounting.cycleResults],
         terminationHistory: [...(accounting.terminationHistory ?? [])],
-        terminationReason: accounting.terminationReason,
+        terminationReason: accounting.terminationReason as TerminationReason,
         resumedAt,
         authorizedByHuman: true,
         authorizationSource: 'human-explicit',
@@ -2321,6 +2386,9 @@ export function resumeReviewAfterLimitAtPath(
         approvedAt: approval.approvedAt,
         resumeAfterPolicyChange: accounting.resumeAfterPolicyChange,
         migrationCompatibility: accounting.migrationCompatibility,
+        terminationEvidence: accounting.terminationEvidence,
+        recoveryReason: approval.recoveryReason,
+        recoveryEvidence: approval.recoveryEvidence,
       };
       const next: ReviewAccounting = {
         ...emptyAccounting(),
@@ -2369,6 +2437,87 @@ export function resumeReviewAfterLimit(cwd: string, base: string): ReviewAccount
     return 'Could not resolve the current feature branch head.';
   }
   return resumeReviewAfterLimitAtPath(statePath, approvalPath, currentBranch(cwd), base, headSha);
+}
+
+export function authorizeReviewTerminationRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  recovery: ReviewTerminationEvidence,
+): ReviewResumeApproval | string {
+  return authorizeReviewResumeAfterLimitAtPath(
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    headSha,
+    recovery,
+  );
+}
+
+export function resumeReviewTerminationRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  recovery: ReviewTerminationEvidence,
+): ReviewAccounting | string {
+  return resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, headSha, recovery);
+}
+
+export function authorizeReviewTerminationRecovery(
+  cwd: string,
+  base: string,
+  recovery: ReviewTerminationEvidence,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for review approval.';
+  }
+  let headSha: string;
+  try {
+    headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return 'Could not resolve the current feature branch head.';
+  }
+  return authorizeReviewTerminationRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    recovery,
+  );
+}
+
+export function resumeReviewTerminationRecovery(
+  cwd: string,
+  base: string,
+  recovery: ReviewTerminationEvidence,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for review approval.';
+  }
+  let headSha: string;
+  try {
+    headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return 'Could not resolve the current feature branch head.';
+  }
+  return resumeReviewTerminationRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    recovery,
+  );
 }
 
 export function authorizeReviewResumeAfterLimit(
@@ -2523,6 +2672,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'resumeAuthorizedAt',
     'resumeAuthorizationSource',
     'resumedFromEpoch',
+    'terminationEvidence',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -2565,6 +2715,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       state.resumeAuthorizationSource !== 'human-explicit') ||
     (state.resumedFromEpoch !== undefined &&
       (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
+    (state.terminationEvidence !== undefined &&
+      !isReviewTerminationEvidence(state.terminationEvidence)) ||
     !isReviewEpochMetadataConsistent(state)
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -2659,6 +2811,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     resumeAuthorizationSource:
       state.resumeAuthorizationSource === 'human-explicit' ? 'human-explicit' : undefined,
     resumedFromEpoch: state.resumedFromEpoch as number | undefined,
+    terminationEvidence: state.terminationEvidence as ReviewTerminationEvidence | undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -2796,6 +2949,9 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     ...requiredKeys,
     'resumeAfterPolicyChange',
     'migrationCompatibility',
+    'terminationEvidence',
+    'recoveryReason',
+    'recoveryEvidence',
   ]);
   return (
     Object.keys(history).every((key) => allowedKeys.has(key)) &&
@@ -2827,7 +2983,10 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     history.cycleResults.length <= (history.reviewInvocationCount as number) &&
     Array.isArray(history.terminationHistory) &&
     history.terminationHistory.every(isTerminationReason) &&
-    history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+    (history.terminationReason === 'MAX_REVIEW_INVOCATIONS' ||
+      ((history.terminationReason === 'BLOCKED' || history.terminationReason === 'NO_PROGRESS') &&
+        history.recoveryReason !== undefined &&
+        typeof history.recoveryEvidence === 'string')) &&
     typeof history.resumedAt === 'string' &&
     history.authorizedByHuman === true &&
     history.authorizationSource === 'human-explicit' &&
@@ -2836,7 +2995,24 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     (history.resumeAfterPolicyChange === undefined ||
       typeof history.resumeAfterPolicyChange === 'string') &&
     (history.migrationCompatibility === undefined ||
-      typeof history.migrationCompatibility === 'string')
+      typeof history.migrationCompatibility === 'string') &&
+    (history.terminationEvidence === undefined ||
+      isReviewTerminationEvidence(history.terminationEvidence)) &&
+    (history.recoveryReason === undefined ||
+      reviewRecoveryReasons.includes(history.recoveryReason as ReviewRecoveryReason)) &&
+    (history.recoveryEvidence === undefined || typeof history.recoveryEvidence === 'string')
+  );
+}
+
+function isReviewTerminationEvidence(value: unknown): value is ReviewTerminationEvidence {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return (
+    Object.keys(evidence).every((key) => key === 'recoveryReason' || key === 'recoveryEvidence') &&
+    typeof evidence.recoveryEvidence === 'string' &&
+    evidence.recoveryEvidence.trim().length > 0 &&
+    typeof evidence.recoveryReason === 'string' &&
+    reviewRecoveryReasons.includes(evidence.recoveryReason as ReviewRecoveryReason)
   );
 }
 
@@ -2856,24 +3032,40 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'consumed',
     'headSha',
     'consumedAt',
+    'originalTerminationReason',
+    'recoveryReason',
+    'recoveryEvidence',
   ]);
   return (
     Object.keys(approval).every((key) => allowedKeys.has(key)) &&
     typeof approval.id === 'string' &&
-    approval.approvalType === 'review-limit-resume' &&
+    (approval.approvalType === 'review-limit-resume' ||
+      approval.approvalType === 'review-termination-recovery') &&
     approval.targetRepository === targetRepository &&
     typeof approval.branch === 'string' &&
     typeof approval.base === 'string' &&
     Number.isInteger(approval.reviewEpoch) &&
     (approval.reviewEpoch as number) >= 1 &&
-    approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+    Number.isInteger(approval.exhaustedReviewInvocationCount) &&
+    (approval.exhaustedReviewInvocationCount as number) >= 0 &&
+    (approval.exhaustedReviewInvocationCount as number) <= maxReviewInvocations &&
     typeof approval.approvedAt === 'string' &&
     approval.authorizationSource === 'human-explicit' &&
     typeof approval.consumed === 'boolean' &&
     typeof approval.headSha === 'string' &&
     (approval.consumed
       ? typeof approval.consumedAt === 'string'
-      : approval.consumedAt === undefined)
+      : approval.consumedAt === undefined) &&
+    (approval.approvalType === 'review-limit-resume'
+      ? approval.originalTerminationReason === undefined &&
+        approval.recoveryReason === undefined &&
+        approval.recoveryEvidence === undefined
+      : (approval.originalTerminationReason === 'BLOCKED' ||
+          approval.originalTerminationReason === 'NO_PROGRESS') &&
+        typeof approval.recoveryReason === 'string' &&
+        reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
+        typeof approval.recoveryEvidence === 'string' &&
+        approval.recoveryEvidence.trim().length > 0)
   );
 }
 
@@ -2995,6 +3187,7 @@ type ResumeTransaction = {
   branch: string;
   base: string;
   exhaustedEpoch: number;
+  exhaustedReviewInvocationCount?: number;
   accountingState: unknown;
   approvalState: unknown;
 };
@@ -3092,6 +3285,7 @@ function persistResumeTransaction(
     branch,
     base,
     exhaustedEpoch,
+    exhaustedReviewInvocationCount: accounting.reviewHistory?.at(-1)?.reviewInvocationCount ?? 0,
     accountingState,
     approvalState: { approvals },
   } satisfies ResumeTransaction);
@@ -3115,13 +3309,19 @@ function validateResumeTransactionSemantics(
   const accounting = entry.accounting;
   const history = accounting.reviewHistory ?? [];
   const previousEpoch = history.at(-1);
+  const exhaustedReviewInvocationCount =
+    transaction.exhaustedReviewInvocationCount ??
+    (approval.approvalType === 'review-limit-resume'
+      ? maxReviewInvocations
+      : (previousEpoch?.reviewInvocationCount ?? -1));
   if (
-    approval.approvalType !== 'review-limit-resume' ||
+    (approval.approvalType !== 'review-limit-resume' &&
+      approval.approvalType !== 'review-termination-recovery') ||
     approval.targetRepository !== targetRepository ||
     approval.branch !== transaction.branch ||
     approval.base !== transaction.base ||
     approval.reviewEpoch !== transaction.exhaustedEpoch ||
-    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.exhaustedReviewInvocationCount !== exhaustedReviewInvocationCount ||
     approval.authorizationSource !== 'human-explicit' ||
     accounting.reviewEpoch !== transaction.exhaustedEpoch + 1 ||
     accounting.resumedFromEpoch !== transaction.exhaustedEpoch ||
@@ -3132,8 +3332,12 @@ function validateResumeTransactionSemantics(
     accounting.resumeAuthorizedAt !== approval.consumedAt ||
     !previousEpoch ||
     previousEpoch.reviewEpoch !== transaction.exhaustedEpoch ||
-    previousEpoch.reviewInvocationCount !== maxReviewInvocations ||
-    previousEpoch.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    previousEpoch.reviewInvocationCount !== exhaustedReviewInvocationCount ||
+    (approval.approvalType === 'review-limit-resume'
+      ? previousEpoch.terminationReason !== 'MAX_REVIEW_INVOCATIONS'
+      : approval.originalTerminationReason !== previousEpoch.terminationReason ||
+        approval.recoveryReason !== previousEpoch.recoveryReason ||
+        approval.recoveryEvidence !== previousEpoch.recoveryEvidence) ||
     previousEpoch.authorizedByHuman !== true ||
     previousEpoch.authorizationSource !== 'human-explicit' ||
     previousEpoch.approvalId !== approval.id ||
@@ -3293,11 +3497,13 @@ function recordTerminationAccounting(
   cwd: string,
   base: string,
   reason: TerminationReason,
+  evidence?: ReviewTerminationEvidence,
 ): ReviewAccounting {
   return updateAccounting(cwd, base, (accounting) => ({
     ...accounting,
     terminationHistory: [...(accounting.terminationHistory ?? []), reason],
     terminationReason: reason,
+    terminationEvidence: evidence,
   }));
 }
 

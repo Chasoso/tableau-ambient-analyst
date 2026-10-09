@@ -36,6 +36,13 @@ questions.
   repository-local. The Skill only describes when and how to invoke those
   contracts.
 
+Issue #64's termination recovery is also repository-local: an AUTO_FIX
+implementer self-review block is a structured `BLOCKED` stop, while the known
+legacy `NO_PROGRESS` shape is recoverable only through a separate explicit
+human approval naming the recovery reason and corroborating evidence. Codex
+must not create or invoke that approval flow. Recovery preserves the terminal
+epoch and still requires fresh Independent Review and exact-head CI.
+
 ## Authority model
 
 The effective precedence is:

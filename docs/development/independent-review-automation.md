@@ -313,6 +313,35 @@ Independent Review and the exact-head CI gate remain mandatory. If the new
 epoch reaches its limit, automation stops again and requires a new explicit
 human authorization.
 
+An AUTO_FIX implementer self-review that reports blocking issues is a distinct
+`BLOCKED` stop. It does not consume an AUTO_FIX cycle and is never retried
+automatically. A matching `BLOCKED` state is recoverable only when its durable
+termination evidence identifies `AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED`.
+The known older Issue #55 shape may be recovered only through the separate
+human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and explicit
+corroborating evidence; the runner never infers that reason from
+`NO_PROGRESS` alone. The recovery approval is branch/base/epoch/head/reason
+bound, single-use, and preserves the original terminal epoch. For example:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-termination-recovery \
+  --confirm-human-authorization \
+  --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
+  --recovery-evidence 'Issue #55 epoch 2 was produced by the documented AUTO_FIX self-review classification bug' \
+  --issue 55 --base main --cwd .worktrees/issue-55
+node dist/review/cli.js \
+  --resume-after-recovery \
+  --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
+  --recovery-evidence 'Issue #55 epoch 2 was produced by the documented AUTO_FIX self-review classification bug' \
+  --issue 55 --base main --cwd .worktrees/issue-55
+```
+
+Codex must not invoke either recovery command. The confirmation flag is an
+operator declaration, not cryptographic proof of human identity. Recovery is
+never PASS: fresh Independent Review and exact-head CI remain mandatory.
+
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn. A result-capture retry is part of one reviewer
 invocation and never increments the AUTO_FIX count.
