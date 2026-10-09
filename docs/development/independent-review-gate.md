@@ -110,12 +110,15 @@ Use this sequence:
     bootstrap exception below, mark it ready for normal review.
 
 If the bounded review invocation limit is exhausted, the gate remains
-`BLOCKED`. A human may explicitly authorize a continuation with the repository
-CLI's `--resume-after-limit --issue <N>` mode from the canonical Issue
-worktree. This creates a fresh bounded accounting epoch and preserves the old
-epoch as audit history; it does not produce `PASS`. A fresh Independent Review
-is required after resume, followed by the normal exact-head CI gate. Repeated
-exhaustion requires another explicit Human Decision.
+`BLOCKED`. A human must first create a separate durable
+`review-limit-resume` approval record. The repository's
+`--resume-after-limit --issue <N>` mode only validates and consumes an existing
+matching approval from the canonical Issue worktree; invoking it is not Human
+authorization. The approval is single-use and head-bound. Resume creates a
+fresh bounded accounting epoch and preserves the old epoch plus approval audit
+reference; it does not produce `PASS`. A fresh Independent Review is required
+after resume, followed by the normal exact-head CI gate. Repeated exhaustion
+requires another explicit Human Decision.
 
 A minimal handoff should contain factual metadata such as:
 

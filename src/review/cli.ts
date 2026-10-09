@@ -3,6 +3,7 @@ import {
   runExistingPullRequestUpdate,
   runIssueToPullRequest,
   runIndependentReview,
+  authorizeReviewResumeAfterLimit,
   resumeReviewAfterLimit,
   currentBranch,
   type IndependentReviewInput,
@@ -31,8 +32,16 @@ const input: IndependentReviewInput = {
 
 const reviewOnly = rawArguments.includes('--review-only');
 const resumeAfterLimit = rawArguments.includes('--resume-after-limit');
+const authorizeAfterLimit = rawArguments.includes('--authorize-resume-after-limit');
 const existingPullRequest = argumentsByName.get('update-pr');
-if (resumeAfterLimit) {
+if (resumeAfterLimit && authorizeAfterLimit) {
+  console.error('Authorization and resume are separate commands.');
+  process.exitCode = 2;
+} else if (authorizeAfterLimit) {
+  const authorizationResult = authorizeFromLimit(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (resumeAfterLimit) {
   const resumeResult = resumeFromLimit(input);
   console.log(JSON.stringify(resumeResult, null, 2));
   if (typeof resumeResult === 'string') process.exitCode = 1;
@@ -64,6 +73,21 @@ function requiredArgument(name: string): string {
 }
 
 function resumeFromLimit(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  return resumeReviewAfterLimit(reviewInput.cwd, reviewInput.base);
+}
+
+function authorizeFromLimit(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  return authorizeReviewResumeAfterLimit(reviewInput.cwd, reviewInput.base);
+}
+
+function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {
   const issue = requiredArgument('issue');
   let expectedBranch: string;
   try {
@@ -73,7 +97,7 @@ function resumeFromLimit(reviewInput: IndependentReviewInput) {
     process.exit(2);
   }
   if (currentBranch(reviewInput.cwd) !== expectedBranch) {
-    return 'Review resume requires the canonical Issue feature branch.';
+    return 'Review recovery requires the canonical Issue feature branch.';
   }
-  return resumeReviewAfterLimit(reviewInput.cwd, reviewInput.base);
+  return undefined;
 }

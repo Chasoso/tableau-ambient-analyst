@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -34,6 +34,7 @@ import {
   type ReviewAccounting,
   type ReviewCycleRecord,
   type ReviewEpochHistory,
+  type ReviewResumeApproval,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -57,6 +58,7 @@ import {
 
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
+const reviewApprovalFile = 'tableau-ambient-review-approval.json';
 const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
 const legacyIssue29Base = 'main';
 const legacyIssue29ReviewInvocations = 6;
@@ -2211,14 +2213,63 @@ export function reserveReviewCycleAtPath(
   return reserveReviewInvocationAtPath(statePath, branch, base);
 }
 
-/**
- * Explicit human-authorized recovery after the review invocation limit.
- * Normal review/update commands never reset or advance an exhausted epoch.
- */
-export function resumeReviewAfterLimitAtPath(
+/** Create the durable approval record. This is never called by review loops. */
+export function authorizeReviewResumeAfterLimitAtPath(
   statePath: string,
+  approvalPath: string,
   branch: string,
   base: string,
+  headSha: string,
+): ReviewResumeApproval | string {
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      if (
+        accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+        accounting.reviewInvocationCount !== maxReviewInvocations
+      ) {
+        return 'Review approval requires an exhausted review invocation state.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review resume approval already exists for this epoch.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'review-limit-resume',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: accounting.reviewInvocationCount,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist review approval.';
+  }
+}
+
+/** Resume only from a matching, unconsumed durable human approval. */
+export function resumeReviewAfterLimitAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
 ): ReviewAccounting | string {
   try {
     return withAccountingLock(statePath, () => {
@@ -2228,6 +2279,23 @@ export function resumeReviewAfterLimitAtPath(
         accounting.reviewInvocationCount !== maxReviewInvocations
       ) {
         return 'Review limit resume requires an exhausted review invocation state.';
+      }
+
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'review-limit-resume' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === accounting.reviewInvocationCount &&
+          candidate.authorizationSource === 'human-explicit' &&
+          !candidate.consumed &&
+          candidate.headSha === headSha,
+      );
+      if (!approval) {
+        return 'No matching unconsumed human review approval exists for this state.';
       }
 
       const resumedAt = new Date().toISOString();
@@ -2247,7 +2315,9 @@ export function resumeReviewAfterLimitAtPath(
         terminationReason: accounting.terminationReason,
         resumedAt,
         authorizedByHuman: true,
-        authorizationSource: 'explicit-cli',
+        authorizationSource: 'human-explicit',
+        approvalId: approval.id,
+        approvedAt: approval.approvedAt,
         resumeAfterPolicyChange: accounting.resumeAfterPolicyChange,
         migrationCompatibility: accounting.migrationCompatibility,
       };
@@ -2259,10 +2329,18 @@ export function resumeReviewAfterLimitAtPath(
         reviewEpoch: reviewEpoch + 1,
         reviewHistory: [...(accounting.reviewHistory ?? []), previousEpoch],
         resumeAuthorizedAt: resumedAt,
-        resumeAuthorizationSource: 'explicit-cli',
+        resumeAuthorizationSource: 'human-explicit',
         resumedFromEpoch: reviewEpoch,
       };
       writeAccountingAtPath(statePath, branch, base, next);
+      writeReviewApprovalsAtPath(
+        approvalPath,
+        approvals.map((candidate) =>
+          candidate.id === approval.id
+            ? { ...candidate, consumed: true, consumedAt: resumedAt }
+            : candidate,
+        ),
+      );
       return next;
     });
   } catch (error) {
@@ -2275,7 +2353,39 @@ export function resumeReviewAfterLimitAtPath(
 export function resumeReviewAfterLimit(cwd: string, base: string): ReviewAccounting | string {
   const statePath = resolveReviewStatePath(cwd);
   if (!statePath) return 'Could not resolve the repository git directory for review state.';
-  return resumeReviewAfterLimitAtPath(statePath, currentBranch(cwd), base);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!approvalPath) return 'Could not resolve the repository git directory for approval state.';
+  let headSha: string;
+  try {
+    headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return 'Could not resolve the current feature branch head.';
+  }
+  return resumeReviewAfterLimitAtPath(statePath, approvalPath, currentBranch(cwd), base, headSha);
+}
+
+export function authorizeReviewResumeAfterLimit(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for review approval.';
+  }
+  let headSha: string;
+  try {
+    headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return 'Could not resolve the current feature branch head.';
+  }
+  return authorizeReviewResumeAfterLimitAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+  );
 }
 
 function resolveReviewStatePath(cwd: string): string | undefined {
@@ -2283,6 +2393,20 @@ function resolveReviewStatePath(cwd: string): string | undefined {
     return resolve(
       cwd,
       execFileSync('git', ['rev-parse', '--git-path', reviewStateFile], {
+        cwd,
+        encoding: 'utf8',
+      }).trim(),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveReviewApprovalPath(cwd: string): string | undefined {
+  try {
+    return resolve(
+      cwd,
+      execFileSync('git', ['rev-parse', '--git-path', reviewApprovalFile], {
         cwd,
         encoding: 'utf8',
       }).trim(),
@@ -2431,7 +2555,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       (!Array.isArray(state.reviewHistory) || !state.reviewHistory.every(isReviewEpochHistory))) ||
     (state.resumeAuthorizedAt !== undefined && typeof state.resumeAuthorizedAt !== 'string') ||
     (state.resumeAuthorizationSource !== undefined &&
-      state.resumeAuthorizationSource !== 'explicit-cli') ||
+      state.resumeAuthorizationSource !== 'human-explicit') ||
     (state.resumedFromEpoch !== undefined &&
       (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
     !isReviewEpochMetadataConsistent(state)
@@ -2526,7 +2650,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     reviewHistory: state.reviewHistory as ReviewEpochHistory[] | undefined,
     resumeAuthorizedAt: state.resumeAuthorizedAt as string | undefined,
     resumeAuthorizationSource:
-      state.resumeAuthorizationSource === 'explicit-cli' ? 'explicit-cli' : undefined,
+      state.resumeAuthorizationSource === 'human-explicit' ? 'human-explicit' : undefined,
     resumedFromEpoch: state.resumedFromEpoch as number | undefined,
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
@@ -2658,6 +2782,8 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'resumedAt',
     'authorizedByHuman',
     'authorizationSource',
+    'approvalId',
+    'approvedAt',
   ];
   const allowedKeys = new Set([
     ...requiredKeys,
@@ -2697,11 +2823,48 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
     typeof history.resumedAt === 'string' &&
     history.authorizedByHuman === true &&
-    history.authorizationSource === 'explicit-cli' &&
+    history.authorizationSource === 'human-explicit' &&
+    typeof history.approvalId === 'string' &&
+    typeof history.approvedAt === 'string' &&
     (history.resumeAfterPolicyChange === undefined ||
       typeof history.resumeAfterPolicyChange === 'string') &&
     (history.migrationCompatibility === undefined ||
       typeof history.migrationCompatibility === 'string')
+  );
+}
+
+function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const approval = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'id',
+    'approvalType',
+    'targetRepository',
+    'branch',
+    'base',
+    'reviewEpoch',
+    'exhaustedReviewInvocationCount',
+    'approvedAt',
+    'authorizationSource',
+    'consumed',
+    'headSha',
+    'consumedAt',
+  ]);
+  return (
+    Object.keys(approval).every((key) => allowedKeys.has(key)) &&
+    typeof approval.id === 'string' &&
+    approval.approvalType === 'review-limit-resume' &&
+    approval.targetRepository === targetRepository &&
+    typeof approval.branch === 'string' &&
+    typeof approval.base === 'string' &&
+    Number.isInteger(approval.reviewEpoch) &&
+    (approval.reviewEpoch as number) >= 1 &&
+    approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+    typeof approval.approvedAt === 'string' &&
+    approval.authorizationSource === 'human-explicit' &&
+    typeof approval.consumed === 'boolean' &&
+    typeof approval.headSha === 'string' &&
+    (approval.consumedAt === undefined || typeof approval.consumedAt === 'string')
   );
 }
 
@@ -2731,7 +2894,7 @@ function isReviewEpochMetadataConsistent(state: Record<string, unknown>): boolea
     history.at(-1)?.reviewEpoch === (state.resumedFromEpoch as number) &&
     state.resumedFromEpoch === epoch - 1 &&
     typeof state.resumeAuthorizedAt === 'string' &&
-    state.resumeAuthorizationSource === 'explicit-cli'
+    state.resumeAuthorizationSource === 'human-explicit'
   );
 }
 
@@ -2779,6 +2942,35 @@ function writeAccountingAtPath(
   const temporaryPath = `${statePath}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, state, 'utf8');
   renameSync(temporaryPath, statePath);
+}
+
+function readReviewApprovalsAtPath(approvalPath: string): ReviewResumeApproval[] {
+  if (!existsSync(approvalPath)) return [];
+  const value: unknown = JSON.parse(readFileSync(approvalPath, 'utf8'));
+  const approvals =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>).approvals
+      : undefined;
+  if (
+    !Array.isArray(approvals) ||
+    !approvals.every(isReviewResumeApproval) ||
+    new Set(approvals.filter(isReviewResumeApproval).map((approval) => approval.id)).size !==
+      approvals.length
+  ) {
+    throw new Error('Review approval state is invalid; human recovery is required.');
+  }
+  return approvals;
+}
+
+function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResumeApproval[]): void {
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const temporaryPath = `${approvalPath}.tmp-${process.pid}`;
+  writeFileSync(temporaryPath, JSON.stringify({ approvals }), 'utf8');
+  renameSync(temporaryPath, approvalPath);
 }
 
 function withAccountingLock<T>(statePath: string, operation: () => T): T {

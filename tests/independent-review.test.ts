@@ -31,6 +31,7 @@ import {
 } from '../src/review/gate.js';
 import {
   autoFixAllowedPaths,
+  authorizeReviewResumeAfterLimitAtPath,
   buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
@@ -1469,6 +1470,7 @@ describe('review cycle state', () => {
   it('keeps an exhausted epoch blocked until an explicit human resume', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1491,9 +1493,12 @@ describe('review cycle state', () => {
 
     try {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
-      expect(resumeReviewAfterLimitAtPath(statePath, 'feature/review', 'develop')).toContain(
-        'exhausted',
-      );
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).toContain('No matching');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'develop', 'head'),
+      ).toContain('exhausted');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1502,6 +1507,7 @@ describe('review cycle state', () => {
   it('creates a bounded human-authorized epoch and preserves the exhausted history', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1523,7 +1529,22 @@ describe('review cycle state', () => {
     );
 
     try {
-      const resumed = resumeReviewAfterLimitAtPath(statePath, 'feature/review', 'main');
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const resumed = resumeReviewAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      );
       expect(typeof resumed).not.toBe('string');
       if (typeof resumed === 'string') return;
       expect(resumed).toMatchObject({
@@ -1531,7 +1552,7 @@ describe('review cycle state', () => {
         reviewInvocationCount: 0,
         autoFixCycleCount: 0,
         resumedFromEpoch: 1,
-        resumeAuthorizationSource: 'explicit-cli',
+        resumeAuthorizationSource: 'human-explicit',
       });
       expect(resumed.reviewHistory).toHaveLength(1);
       expect(resumed.reviewHistory?.[0]).toMatchObject({
@@ -1540,7 +1561,13 @@ describe('review cycle state', () => {
         autoFixCycleCount: 0,
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
         authorizedByHuman: true,
-        authorizationSource: 'explicit-cli',
+        authorizationSource: 'human-explicit',
+        approvalId: expect.any(String),
+        approvedAt: expect.any(String),
+      });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0]).toMatchObject({
+        consumed: true,
+        consumedAt: expect.any(String),
       });
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
       for (let invocation = 1; invocation < maxReviewInvocations; invocation += 1) {
@@ -1559,6 +1586,7 @@ describe('review cycle state', () => {
   it('rejects a duplicate resume without creating another active epoch', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1580,12 +1608,21 @@ describe('review cycle state', () => {
     );
 
     try {
-      expect(resumeReviewAfterLimitAtPath(statePath, 'feature/review', 'main')).not.toBeTypeOf(
-        'string',
-      );
-      expect(resumeReviewAfterLimitAtPath(statePath, 'feature/review', 'main')).toContain(
-        'exhausted',
-      );
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).toContain('exhausted');
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewEpoch: 2,
         reviewHistory: [{ reviewEpoch: 1 }],
@@ -1612,7 +1649,7 @@ describe('review cycle state', () => {
       lastFixChangedRepository: null,
       cycleResults: [],
       terminationHistory: [],
-      resumeAuthorizationSource: 'explicit-cli',
+      resumeAuthorizationSource: 'human-explicit',
       resumedFromEpoch: 1,
     });
     writeFileSync(statePath, contents, 'utf8');
@@ -1625,9 +1662,78 @@ describe('review cycle state', () => {
     }
   });
 
+  it.each([
+    ['wrong branch', 'feat/issue-62', 'main', 1, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['wrong base', 'feat/issue-61', 'develop', 1, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['wrong epoch', 'feat/issue-61', 'main', 2, 16, 'MAX_REVIEW_INVOCATIONS', false],
+    ['not exhausted', 'feat/issue-61', 'main', 1, 15, undefined, false],
+    ['already consumed', 'feat/issue-61', 'main', 1, 16, 'MAX_REVIEW_INVOCATIONS', true],
+  ])(
+    'fails closed for a %s approval mismatch',
+    (_name, branch, base, approvalEpoch, invocationCount, terminationReason, consumed) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+      const statePath = join(directory, 'state.json');
+      const approvalPath = join(directory, 'approval.json');
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-61',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: invocationCount,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: null,
+              cycleResults: [],
+              terminationHistory: terminationReason ? [terminationReason] : [],
+              ...(terminationReason ? { terminationReason } : {}),
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        approvalPath,
+        JSON.stringify({
+          approvals: [
+            {
+              id: 'approval-1',
+              approvalType: 'review-limit-resume',
+              targetRepository: 'Chasoso/tableau-ambient-analyst',
+              branch: 'feat/issue-61',
+              base: 'main',
+              reviewEpoch: approvalEpoch,
+              exhaustedReviewInvocationCount: maxReviewInvocations,
+              approvedAt: '2026-10-09T00:00:00.000Z',
+              authorizationSource: 'human-explicit',
+              consumed,
+              headSha: 'head',
+              ...(consumed ? { consumedAt: '2026-10-09T00:01:00.000Z' } : {}),
+            },
+          ],
+        }),
+        'utf8',
+      );
+
+      try {
+        expect(resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, 'head')).toMatch(
+          /Review|approval/,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('serializes concurrent human resumes into one new epoch', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
     const workerPath = join(directory, 'resume-worker.mjs');
     writeFileSync(
       statePath,
@@ -1648,13 +1754,22 @@ describe('review cycle state', () => {
       }),
       'utf8',
     );
+    expect(
+      authorizeReviewResumeAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      ),
+    ).not.toBeTypeOf('string');
     execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
     writeFileSync(
       workerPath,
       `import { resumeReviewAfterLimitAtPath } from ${JSON.stringify(
         join(process.cwd(), 'dist/review/runner.js'),
       )};
-const result = resumeReviewAfterLimitAtPath(process.argv[2], 'feature/review', 'main');
+const result = resumeReviewAfterLimitAtPath(process.argv[2], process.argv[3], 'feature/review', 'main', 'head');
 process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
 `,
       'utf8',
@@ -1665,7 +1780,7 @@ process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
         { length: 2 },
         () =>
           new Promise<string>((resolve, reject) => {
-            const child = spawn(process.execPath, [workerPath, statePath], {
+            const child = spawn(process.execPath, [workerPath, statePath, approvalPath], {
               cwd: process.cwd(),
               stdio: ['ignore', 'pipe', 'pipe'],
             });

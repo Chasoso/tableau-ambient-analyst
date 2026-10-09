@@ -62,9 +62,26 @@ export type ReviewEpochHistory = {
   terminationReason: TerminationReason;
   resumedAt: string;
   authorizedByHuman: true;
-  authorizationSource: 'explicit-cli';
+  authorizationSource: 'human-explicit';
+  approvalId: string;
+  approvedAt: string;
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
+};
+
+export type ReviewResumeApproval = {
+  id: string;
+  approvalType: 'review-limit-resume';
+  targetRepository: 'Chasoso/tableau-ambient-analyst';
+  branch: string;
+  base: string;
+  reviewEpoch: number;
+  exhaustedReviewInvocationCount: number;
+  approvedAt: string;
+  authorizationSource: 'human-explicit';
+  consumed: boolean;
+  headSha: string;
+  consumedAt?: string | undefined;
 };
 
 export type ReviewAccounting = {
@@ -84,7 +101,7 @@ export type ReviewAccounting = {
   reviewEpoch?: number | undefined;
   reviewHistory?: ReviewEpochHistory[] | undefined;
   resumeAuthorizedAt?: string | undefined;
-  resumeAuthorizationSource?: 'explicit-cli' | undefined;
+  resumeAuthorizationSource?: 'human-explicit' | undefined;
   resumedFromEpoch?: number | undefined;
 };
 
