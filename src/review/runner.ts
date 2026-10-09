@@ -2224,7 +2224,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
 ): ReviewResumeApproval | string {
   try {
     return withAccountingLock(statePath, () => {
-      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       if (
         accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
         accounting.reviewInvocationCount !== maxReviewInvocations
@@ -2274,7 +2274,7 @@ export function resumeReviewAfterLimitAtPath(
 ): ReviewAccounting | string {
   try {
     return withAccountingLock(statePath, () => {
-      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       if (
         accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
         accounting.reviewInvocationCount !== maxReviewInvocations
@@ -2912,6 +2912,16 @@ export function readReviewAccountingAtPath(
   branch: string,
   base: string,
 ): ReviewAccounting {
+  return withAccountingLock(statePath, () =>
+    readReviewAccountingAtPathUnsafe(statePath, branch, base),
+  );
+}
+
+function readReviewAccountingAtPathUnsafe(
+  statePath: string,
+  branch: string,
+  base: string,
+): ReviewAccounting {
   try {
     return stateForBranch(
       existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
@@ -3180,7 +3190,7 @@ function updateAccounting(
     throw new Error('Could not resolve the repository git directory for review state.');
   return withAccountingLock(statePath, () => {
     const branch = currentBranch(cwd);
-    const next = update(readReviewAccountingAtPath(statePath, branch, base));
+    const next = update(readReviewAccountingAtPathUnsafe(statePath, branch, base));
     writeAccountingAtPath(statePath, branch, base, next);
     return next;
   });
@@ -3306,7 +3316,7 @@ function reserveReviewInvocationAtPath(
 ): string | undefined {
   try {
     return withAccountingLock(statePath, () => {
-      const accounting = readReviewAccountingAtPath(statePath, branch, base);
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       if (accounting.reviewInvocationCount >= maxReviewInvocations) {
         return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
       }

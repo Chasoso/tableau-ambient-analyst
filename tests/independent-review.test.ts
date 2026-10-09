@@ -1705,12 +1705,11 @@ describe('review cycle state', () => {
     }
   });
 
-  it('keeps ordinary reads side-effect-free while locked recovery proceeds', async () => {
+  it('recovers a pending transaction before a concurrent reader observes accounting', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
     const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
     const readerPath = join(directory, 'reader-worker.mjs');
-    const recoveryPath = join(directory, 'recovery-worker.mjs');
     const initialState = {
       branch: 'feature/review',
       base: 'main',
@@ -1770,14 +1769,6 @@ process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transa
 `,
         'utf8',
       );
-      writeFileSync(
-        recoveryPath,
-        `import { reserveReviewCycleAtPath } from ${JSON.stringify(join(process.cwd(), 'dist/review/runner.js'))};
-const result = reserveReviewCycleAtPath(process.argv[2], 'feature/review', 'main');
-process.stdout.write(result === undefined ? 'recovered' : result);
-`,
-        'utf8',
-      );
       execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
 
       const reader = new Promise<string>((resolve, reject) => {
@@ -1794,28 +1785,13 @@ process.stdout.write(result === undefined ? 'recovered' : result);
           code === 0 ? resolve(output) : reject(new Error(`reader exited with ${code}`)),
         );
       });
-      const recovery = new Promise<string>((resolve, reject) => {
-        const child = spawn(process.execPath, [recoveryPath, statePath], {
-          cwd: process.cwd(),
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        let output = '';
-        child.stdout.on('data', (chunk: Buffer) => {
-          output += chunk.toString();
-        });
-        child.on('error', reject);
-        child.on('close', (code) =>
-          code === 0 ? resolve(output) : reject(new Error(`recovery exited with ${code}`)),
-        );
-      });
-
-      expect(JSON.parse(await reader)).toEqual({ epoch: 1, transaction: true });
       rmSync(`${statePath}.lock`);
-      expect(await recovery).toBe('recovered');
+      expect(JSON.parse(await reader)).toEqual({ epoch: 2, transaction: false });
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewEpoch: 2,
-        reviewInvocationCount: 1,
+        reviewInvocationCount: 0,
       });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
       expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
     } finally {
       rmSync(directory, { recursive: true, force: true });
