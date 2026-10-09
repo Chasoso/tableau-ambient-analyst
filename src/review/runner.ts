@@ -2254,6 +2254,7 @@ export function authorizeReviewResumeAfterLimitAtPath(
     return withAccountingLock(statePath, () => {
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       const isLimitRecovery =
+        recovery === undefined &&
         accounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
         accounting.reviewInvocationCount === maxReviewInvocations;
       const isSupportedRecovery =
@@ -2990,6 +2991,7 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     history.cycleResults.length <= (history.reviewInvocationCount as number) &&
     Array.isArray(history.terminationHistory) &&
     history.terminationHistory.every(isTerminationReason) &&
+    history.terminationHistory.at(-1) === history.terminationReason &&
     isReviewEpochRecoveryMetadataConsistent(history) &&
     typeof history.resumedAt === 'string' &&
     history.authorizedByHuman === true &&
