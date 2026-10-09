@@ -492,6 +492,21 @@ describe('independent review gate contract', () => {
         },
       }),
     ],
+    [
+      'incomplete self-review with blocking issues',
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          type: 'agent_message',
+          text: JSON.stringify({
+            selfReview: {
+              completed: false,
+              blockingIssues: ['Scope is incomplete.'],
+            },
+          }),
+        },
+      }),
+    ],
   ])('fails closed for implementer self-review %s', (_label, output) => {
     expect(verifyImplementerSelfReview(output)).toBeDefined();
   });
@@ -1356,6 +1371,19 @@ describe('independent review runner control flow', () => {
 
   it('classifies an AUTO_FIX implementer self-review block as BLOCKED without a cycle', () => {
     let receivedEvidence: unknown;
+    let fixAttempts = 0;
+    const implementerOutput = JSON.stringify({
+      type: 'item.completed',
+      item: {
+        type: 'agent_message',
+        text: JSON.stringify({
+          selfReview: {
+            completed: false,
+            blockingIssues: ['Issue scope remains incomplete.'],
+          },
+        }),
+      },
+    });
     const result = runBoundedReviewFixLoop(
       input,
       dependencies({
@@ -1377,15 +1405,19 @@ describe('independent review runner control flow', () => {
         },
         invokeReviewer: () => autoFixReview('implementer is blocked'),
       }),
-      () => 'BLOCKED: AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED: ["issue"]',
+      () => {
+        fixAttempts += 1;
+        return verifyImplementerSelfReview(implementerOutput) ?? 'unexpected missing self-review';
+      },
     );
 
     expect(result.terminationReason).toBe('BLOCKED');
     expect(receivedEvidence).toMatchObject({
       recoveryReason: 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
-      recoveryEvidence: '["issue"]',
+      recoveryEvidence: '["Issue scope remains incomplete."]',
     });
     expect(result.accounting?.autoFixCycleCount).toBe(0);
+    expect(fixAttempts).toBe(1);
   });
 
   it('does not run another review after a persisted terminal state', () => {

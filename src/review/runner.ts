@@ -866,15 +866,17 @@ function parseImplementerReport(output: string): ImplementerReport | string {
     return 'Issue implementer returned no structured self-review.';
   }
   const selfReview = parsed.selfReview as Partial<ImplementerSelfReview>;
-  if (selfReview.completed !== true) {
-    return 'Issue implementer self-review was not completed.';
-  }
   if (
     !Array.isArray(selfReview.blockingIssues) ||
-    selfReview.blockingIssues.some((issue) => typeof issue !== 'string') ||
-    selfReview.blockingIssues.length > 0
+    selfReview.blockingIssues.some((issue) => typeof issue !== 'string')
   ) {
+    return 'Issue implementer returned malformed self-review blocking issues.';
+  }
+  if (selfReview.blockingIssues.length > 0) {
     return `${autoFixSelfReviewBlockedPrefix} ${JSON.stringify(selfReview.blockingIssues)}`;
+  }
+  if (selfReview.completed !== true) {
+    return 'Issue implementer self-review was not completed.';
   }
   if (
     !isRecord(selfReview.checks) ||
