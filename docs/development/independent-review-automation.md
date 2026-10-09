@@ -338,9 +338,12 @@ node dist/review/cli.js \
   --issue 55 --base main --cwd .worktrees/issue-55
 ```
 
-Codex must not invoke either recovery command. The confirmation flag is an
-operator declaration, not cryptographic proof of human identity. Recovery is
-never PASS: fresh Independent Review and exact-head CI remain mandatory.
+Codex must not create or self-authorize the recovery approval. After a human
+has created a matching durable approval, Codex may invoke only
+`--resume-after-recovery`; the command validates and consumes that approval.
+The confirmation flag is an operator declaration, not cryptographic proof of
+human identity. Recovery is never PASS: fresh Independent Review and
+exact-head CI remain mandatory.
 
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn. A result-capture retry is part of one reviewer

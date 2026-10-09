@@ -40,8 +40,10 @@ Issue #64's termination recovery is also repository-local: an AUTO_FIX
 implementer self-review block is a structured `BLOCKED` stop, while the known
 legacy `NO_PROGRESS` shape is recoverable only through a separate explicit
 human approval naming the recovery reason and corroborating evidence. Codex
-must not create or invoke that approval flow. Recovery preserves the terminal
-epoch and still requires fresh Independent Review and exact-head CI.
+must not create or self-authorize that approval. After a human creates a
+matching durable approval, Codex may invoke the approval-gated resume command.
+Recovery preserves the terminal epoch and still requires fresh Independent
+Review and exact-head CI.
 
 ## Authority model
 

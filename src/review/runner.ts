@@ -2260,10 +2260,12 @@ export function authorizeReviewResumeAfterLimitAtPath(
         recovery !== undefined &&
         ((accounting.terminationReason === 'BLOCKED' &&
           recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+          accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
+            accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
             isKnownLegacyAutoFixMisclassification(accounting))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (!isLimitRecovery && !isSupportedRecovery) {
@@ -2326,10 +2328,12 @@ export function resumeReviewAfterLimitAtPath(
         recovery !== undefined &&
         ((accounting.terminationReason === 'BLOCKED' &&
           recovery.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+          accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
+            accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
             isKnownLegacyAutoFixMisclassification(accounting))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (
