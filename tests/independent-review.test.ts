@@ -1689,8 +1689,10 @@ describe('review cycle state', () => {
         'utf8',
       );
 
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewEpoch: 2,
+        reviewInvocationCount: 1,
       });
       expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
       expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
@@ -1698,6 +1700,119 @@ describe('review cycle state', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it('keeps ordinary reads side-effect-free while locked recovery proceeds', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    const readerPath = join(directory, 'reader-worker.mjs');
+    const recoveryPath = join(directory, 'recovery-worker.mjs');
+    const initialState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: maxReviewInvocations,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+      terminationReason: 'MAX_REVIEW_INVOCATIONS',
+    };
+    writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+      writeFileSync(approvalPath, JSON.stringify(originalApprovals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+      writeFileSync(`${statePath}.lock`, 'held\n', 'utf8');
+      writeFileSync(
+        readerPath,
+        `import { existsSync } from 'node:fs';
+import { readReviewAccountingAtPath } from ${JSON.stringify(join(process.cwd(), 'dist/review/runner.js'))};
+const accounting = readReviewAccountingAtPath(process.argv[2], 'feature/review', 'main');
+process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transaction: existsSync(process.argv[2] + '.resume-transaction') }));
+`,
+        'utf8',
+      );
+      writeFileSync(
+        recoveryPath,
+        `import { reserveReviewCycleAtPath } from ${JSON.stringify(join(process.cwd(), 'dist/review/runner.js'))};
+const result = reserveReviewCycleAtPath(process.argv[2], 'feature/review', 'main');
+process.stdout.write(result === undefined ? 'recovered' : result);
+`,
+        'utf8',
+      );
+      execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
+
+      const reader = new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, [readerPath, statePath], {
+          cwd: process.cwd(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        child.on('error', reject);
+        child.on('close', (code) =>
+          code === 0 ? resolve(output) : reject(new Error(`reader exited with ${code}`)),
+        );
+      });
+      const recovery = new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, [recoveryPath, statePath], {
+          cwd: process.cwd(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        child.on('error', reject);
+        child.on('close', (code) =>
+          code === 0 ? resolve(output) : reject(new Error(`recovery exited with ${code}`)),
+        );
+      });
+
+      expect(JSON.parse(await reader)).toEqual({ epoch: 1, transaction: true });
+      rmSync(`${statePath}.lock`);
+      expect(await recovery).toBe('recovered');
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+        reviewInvocationCount: 1,
+      });
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15000);
 
   it('rejects a resume transaction with a mismatched approval path before writing', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
@@ -1719,9 +1834,7 @@ describe('review cycle state', () => {
     );
 
     try {
-      expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
-        'Review accounting state is invalid; human recovery is required.',
-      );
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('invalid');
       expect(readFileSync(statePath, 'utf8')).toBe(state);
       expect(() => readFileSync(externalApprovalPath, 'utf8')).toThrow();
     } finally {

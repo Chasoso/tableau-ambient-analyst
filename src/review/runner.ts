@@ -2902,7 +2902,6 @@ export function readReviewAccountingAtPath(
   base: string,
 ): ReviewAccounting {
   try {
-    recoverPendingResumeTransaction(statePath);
     return stateForBranch(
       existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
       branch,
