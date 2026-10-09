@@ -3,8 +3,11 @@ import {
   runExistingPullRequestUpdate,
   runIssueToPullRequest,
   runIndependentReview,
+  authorizeReviewResumeAfterLimit,
+  resumeReviewAfterLimit,
   type IndependentReviewInput,
 } from './runner.js';
+import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
 
 const argumentsByName = new Map<string, string>();
 const rawArguments = process.argv.slice(2);
@@ -27,19 +30,34 @@ const input: IndependentReviewInput = {
 };
 
 const reviewOnly = rawArguments.includes('--review-only');
+const resumeAfterLimit = rawArguments.includes('--resume-after-limit');
+const authorizeAfterLimit = rawArguments.includes('--authorize-resume-after-limit');
 const existingPullRequest = argumentsByName.get('update-pr');
-const result = reviewOnly
-  ? runIndependentReview(input)
-  : existingPullRequest
-    ? runExistingPullRequestUpdate(input, existingPullRequest)
-    : runIssueToPullRequest(input);
-console.log(JSON.stringify(result, null, 2));
+if (resumeAfterLimit && authorizeAfterLimit) {
+  console.error('Authorization and resume are separate commands.');
+  process.exitCode = 2;
+} else if (authorizeAfterLimit) {
+  const authorizationResult = authorizeFromLimit(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (resumeAfterLimit) {
+  const resumeResult = resumeFromLimit(input);
+  console.log(JSON.stringify(resumeResult, null, 2));
+  if (typeof resumeResult === 'string') process.exitCode = 1;
+} else {
+  const result = reviewOnly
+    ? runIndependentReview(input)
+    : existingPullRequest
+      ? runExistingPullRequestUpdate(input, existingPullRequest)
+      : runIssueToPullRequest(input);
+  console.log(JSON.stringify(result, null, 2));
 
-if (
-  result.result !== 'PASS' ||
-  ('completionStatus' in result && result.completionStatus !== 'READY_FOR_HUMAN_REVIEW')
-) {
-  process.exitCode = 1;
+  if (
+    result.result !== 'PASS' ||
+    ('completionStatus' in result && result.completionStatus !== 'READY_FOR_HUMAN_REVIEW')
+  ) {
+    process.exitCode = 1;
+  }
 }
 
 function requiredArgument(name: string): string {
@@ -51,4 +69,37 @@ function requiredArgument(name: string): string {
   }
 
   return value;
+}
+
+function resumeFromLimit(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  return resumeReviewAfterLimit(reviewInput.cwd, reviewInput.base);
+}
+
+function authorizeFromLimit(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  return authorizeReviewResumeAfterLimit(reviewInput.cwd, reviewInput.base);
+}
+
+function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {
+  const issue = requiredArgument('issue');
+  let workspace: ReturnType<typeof resolveIssueWorkspace>;
+  try {
+    workspace = resolveIssueWorkspace(reviewInput.cwd, issue, reviewInput.base, {
+      createBranch: false,
+    });
+  } catch {
+    console.error('Issue number must be numeric.');
+    process.exit(2);
+  }
+  if (workspace.status === 'BLOCKED') return workspace.reason;
+  if (resolveWorkingDirectory(reviewInput.cwd) !== workspace.path) {
+    return 'Review recovery requires the canonical Issue worktree.';
+  }
+  return validateIssueWorkspace(workspace.path, workspace.branch);
 }

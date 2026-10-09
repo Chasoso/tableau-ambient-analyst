@@ -72,6 +72,19 @@ prerequisites are `BLOCKED`, not decisions. A human-owned finding must state
 what must be decided, why repository rules cannot decide it, the viable
 options, and a recommendation.
 
+Review-limit resume has an explicit authorization boundary. `--resume-after-limit`
+only executes an already-authorized resume; it is not Human authorization by
+itself. A durable `review-limit-resume` approval record with
+`authorizationSource: human-explicit` must exist before resume. Approval
+creation is a separate human-owned command and is never called by the normal
+Issue-to-PR, Independent Review, or AUTO_FIX workflow. Codex must not
+self-authorize a resume or invoke the approval-creation command on its own.
+`--confirm-human-authorization` records an explicit operator declaration and
+does not technically authenticate that the operator is a human. If a future
+requirement needs cryptographic or platform-backed human identity, stop with
+`HUMAN_DECISION_REQUIRED`; do not add an authentication provider or infer that
+guarantee from the flag.
+
 The PR gate is fail-closed: complete self-review and deterministic validation
 must pass, then a fresh Independent Review must return `PASS` with zero
 blocking findings and no unresolved human escalation. A review result that
