@@ -1675,8 +1675,15 @@ describe('review cycle state', () => {
     const recovery = {
       recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' as const,
       recoveryEvidence: JSON.stringify({
-        source: 'issue-55-accounting-state',
-        issue: 55,
+        source: 'human-decision',
+        issue: 64,
+        targetIssue: 55,
+        targetPr: 61,
+        decision: 'resume',
+        cause: 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+        verification: 'durable-state-and-issue-evidence',
+        humanConfirmation: 'explicit-operator-declaration',
+        causalBasis: 'Issue #64 background and preserved Issue #55 accounting state',
         branch: 'feat/issue-55',
         base: 'main',
         reviewEpoch: 2,
@@ -1734,6 +1741,31 @@ describe('review cycle state', () => {
     );
 
     try {
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-55',
+          'main',
+          'head',
+          {
+            recoveryReason: 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
+            recoveryEvidence: JSON.stringify({
+              source: 'issue-55-accounting-state',
+              issue: 55,
+              branch: 'feat/issue-55',
+              base: 'main',
+              reviewEpoch: 2,
+              reviewInvocationCount: 1,
+              autoFixCycleCount: 0,
+              terminationReason: 'NO_PROGRESS',
+              priorEpoch: 1,
+              priorTerminationReason: 'MAX_REVIEW_INVOCATIONS',
+              priorReviewInvocationCount: maxReviewInvocations,
+            }),
+          },
+        ),
+      ).toMatch(/supported terminal state|recovery|evidence/i);
       expect(
         authorizeReviewTerminationRecoveryAtPath(
           statePath,

@@ -318,10 +318,14 @@ An AUTO_FIX implementer self-review that reports blocking issues is a distinct
 automatically. A matching `BLOCKED` state is recoverable only when its durable
 termination evidence identifies `AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED`.
 The known older Issue #55 shape may be recovered only through the separate
-human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and explicit
-corroborating evidence; the runner never infers that reason from
-`NO_PROGRESS` alone. The recovery approval is branch/base/epoch/head/reason
-bound, single-use, and preserves the original terminal epoch. For example:
+human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
+Human Decision record. The old implementer blocking report is not persisted, so
+the causal claim is human-confirmed rather than mechanically proven. The
+record must identify Issue #64, target Issue #55/PR #61, the decision and cause,
+the preserved state invariants, and the operator's corroborating basis. The
+runner never infers that reason from `NO_PROGRESS` alone. The recovery approval
+is branch/base/epoch/head/reason-bound, single-use, and preserves the original
+terminal epoch. For example:
 
 ```bash
 npm run build
@@ -329,12 +333,12 @@ node dist/review/cli.js \
   --authorize-termination-recovery \
   --confirm-human-authorization \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
-  --recovery-evidence '{"source":"issue-55-accounting-state","issue":55,"branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
+  --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55
 node dist/review/cli.js \
   --resume-after-recovery \
   --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
-  --recovery-evidence '{"source":"issue-55-accounting-state","issue":55,"branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
+  --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
   --issue 55 --base main --cwd .worktrees/issue-55
 ```
 

@@ -3034,7 +3034,34 @@ function isReviewEpochRecoveryMetadataConsistent(history: Record<string, unknown
       evidence.recoveryEvidence === history.recoveryEvidence
     );
   }
-  return history.terminationReason === 'NO_PROGRESS' && history.terminationEvidence === undefined;
+  return (
+    history.terminationReason === 'NO_PROGRESS' &&
+    history.terminationEvidence === undefined &&
+    isHumanDecisionRecoveryEvidence(history.recoveryEvidence as string)
+  );
+}
+
+function isHumanDecisionRecoveryEvidence(evidence: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(evidence) as unknown;
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const value = parsed as Record<string, unknown>;
+  return (
+    value.source === 'human-decision' &&
+    value.issue === 64 &&
+    value.targetIssue === 55 &&
+    value.targetPr === 61 &&
+    value.decision === 'resume' &&
+    value.cause === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+    value.verification === 'durable-state-and-issue-evidence' &&
+    value.humanConfirmation === 'explicit-operator-declaration' &&
+    typeof value.causalBasis === 'string' &&
+    value.causalBasis.trim().length > 0
+  );
 }
 
 function isReviewTerminationEvidence(value: unknown): value is ReviewTerminationEvidence {
@@ -3097,6 +3124,13 @@ function isLegacyRecoveryEvidence(
       new Set([
         'source',
         'issue',
+        'targetIssue',
+        'targetPr',
+        'decision',
+        'cause',
+        'verification',
+        'humanConfirmation',
+        'causalBasis',
         'branch',
         'base',
         'reviewEpoch',
@@ -3108,8 +3142,16 @@ function isLegacyRecoveryEvidence(
         'priorReviewInvocationCount',
       ]).has(key),
     ) &&
-    value.source === 'issue-55-accounting-state' &&
-    value.issue === 55 &&
+    value.source === 'human-decision' &&
+    value.issue === 64 &&
+    value.targetIssue === 55 &&
+    value.targetPr === 61 &&
+    value.decision === 'resume' &&
+    value.cause === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+    value.verification === 'durable-state-and-issue-evidence' &&
+    value.humanConfirmation === 'explicit-operator-declaration' &&
+    typeof value.causalBasis === 'string' &&
+    value.causalBasis.trim().length > 0 &&
     value.branch === branch &&
     value.base === base &&
     value.reviewEpoch === accounting.reviewEpoch &&
