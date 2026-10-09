@@ -59,6 +59,7 @@ import {
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
 const reviewApprovalFile = 'tableau-ambient-review-approval.json';
+const resumeTransactionSuffix = '.resume-transaction';
 const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
 const legacyIssue29Base = 'main';
 const legacyIssue29ReviewInvocations = 6;
@@ -2332,15 +2333,12 @@ export function resumeReviewAfterLimitAtPath(
         resumeAuthorizationSource: 'human-explicit',
         resumedFromEpoch: reviewEpoch,
       };
-      writeAccountingAtPath(statePath, branch, base, next);
-      writeReviewApprovalsAtPath(
-        approvalPath,
-        approvals.map((candidate) =>
-          candidate.id === approval.id
-            ? { ...candidate, consumed: true, consumedAt: resumedAt }
-            : candidate,
-        ),
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: resumedAt }
+          : candidate,
       );
+      persistResumeTransaction(statePath, approvalPath, branch, base, next, nextApprovals);
       return next;
     });
   } catch (error) {
@@ -2904,6 +2902,7 @@ export function readReviewAccountingAtPath(
   base: string,
 ): ReviewAccounting {
   try {
+    recoverPendingResumeTransaction(statePath);
     return stateForBranch(
       existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
       branch,
@@ -2932,16 +2931,14 @@ function writeAccountingAtPath(
     ...entries.filter((entry) => entry.branch !== branch || entry.base !== base),
     nextEntry,
   ];
-  const state = JSON.stringify({
+  const state = {
     entries: nextEntries.map((entry) => ({
       branch: entry.branch,
       base: entry.base,
       ...entry.accounting,
     })),
-  });
-  const temporaryPath = `${statePath}.tmp-${process.pid}`;
-  writeFileSync(temporaryPath, state, 'utf8');
-  renameSync(temporaryPath, statePath);
+  };
+  writeJsonAtomically(statePath, state);
 }
 
 function readReviewApprovalsAtPath(approvalPath: string): ReviewResumeApproval[] {
@@ -2968,9 +2965,91 @@ function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResum
       throw new Error('Review approval state is invalid; human recovery is required.');
     }
   });
-  const temporaryPath = `${approvalPath}.tmp-${process.pid}`;
-  writeFileSync(temporaryPath, JSON.stringify({ approvals }), 'utf8');
-  renameSync(temporaryPath, approvalPath);
+  writeJsonAtomically(approvalPath, { approvals });
+}
+
+type ResumeTransaction = {
+  statePath: string;
+  approvalPath: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
+function writeJsonAtomically(path: string, value: unknown): void {
+  const temporaryPath = `${path}.tmp-${process.pid}`;
+  writeFileSync(temporaryPath, JSON.stringify(value), 'utf8');
+  renameSync(temporaryPath, path);
+}
+
+function resumeTransactionPath(statePath: string): string {
+  return `${statePath}${resumeTransactionSuffix}`;
+}
+
+function recoverPendingResumeTransaction(statePath: string): void {
+  const transactionPath = resumeTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ResumeTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    typeof transaction.approvalPath !== 'string' ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
+  accountingStateEntries(transaction.accountingState);
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
+  writeJsonAtomically(statePath, transaction.accountingState);
+  writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  unlinkSync(transactionPath);
+}
+
+function persistResumeTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+): void {
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const transactionPath = resumeTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    accountingState,
+    approvalState: { approvals },
+  } satisfies ResumeTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, { approvals });
+  unlinkSync(transactionPath);
 }
 
 function withAccountingLock<T>(statePath: string, operation: () => T): T {
@@ -2990,6 +3069,7 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
     if (lockHandle === undefined) {
       throw new Error('Review accounting state is locked; human recovery is required.');
     }
+    recoverPendingResumeTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {

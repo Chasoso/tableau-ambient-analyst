@@ -1632,6 +1632,73 @@ describe('review cycle state', () => {
     }
   });
 
+  it('recovers a resume transaction before exposing either state file', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const approvals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      const result = resumeReviewAfterLimitAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head',
+      );
+      expect(result).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      writeFileSync(approvalPath, JSON.stringify(approvals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewEpoch: 2,
+      });
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed for inconsistent epoch metadata', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');

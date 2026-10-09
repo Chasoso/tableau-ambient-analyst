@@ -5,10 +5,9 @@ import {
   runIndependentReview,
   authorizeReviewResumeAfterLimit,
   resumeReviewAfterLimit,
-  currentBranch,
   type IndependentReviewInput,
 } from './runner.js';
-import { canonicalIssueBranch } from './issue-worktree.js';
+import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
 
 const argumentsByName = new Map<string, string>();
 const rawArguments = process.argv.slice(2);
@@ -89,15 +88,18 @@ function authorizeFromLimit(reviewInput: IndependentReviewInput) {
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {
   const issue = requiredArgument('issue');
-  let expectedBranch: string;
+  let workspace: ReturnType<typeof resolveIssueWorkspace>;
   try {
-    expectedBranch = canonicalIssueBranch(issue);
+    workspace = resolveIssueWorkspace(reviewInput.cwd, issue, reviewInput.base, {
+      createBranch: false,
+    });
   } catch {
     console.error('Issue number must be numeric.');
     process.exit(2);
   }
-  if (currentBranch(reviewInput.cwd) !== expectedBranch) {
-    return 'Review recovery requires the canonical Issue feature branch.';
+  if (workspace.status === 'BLOCKED') return workspace.reason;
+  if (resolveWorkingDirectory(reviewInput.cwd) !== workspace.path) {
+    return 'Review recovery requires the canonical Issue worktree.';
   }
-  return undefined;
+  return validateIssueWorkspace(workspace.path, workspace.branch);
 }
