@@ -300,6 +300,10 @@ node dist/review/cli.js \
 The authorization command creates a separate durable
 `.git/tableau-ambient-review-approval.json` `review-limit-resume` record with
 the approved head SHA. Codex must not invoke that command. The
+`--confirm-human-authorization` flag records an explicit operator declaration;
+it cannot technically prove that the operator is human. A requirement for
+cryptographic or platform-backed human identity is `HUMAN_DECISION_REQUIRED`
+and must not trigger an agent-selected authentication system. The
 resume command is accepted only for the canonical Issue branch, an exhausted
 `MAX_REVIEW_INVOCATIONS` state, and one matching unconsumed human approval. It
 validates and consumes the approval exactly once, preserves the prior epoch's

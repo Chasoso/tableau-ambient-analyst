@@ -1683,6 +1683,10 @@ describe('review cycle state', () => {
         JSON.stringify({
           statePath,
           approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
           accountingState: recoveredState,
           approvalState: recoveredApprovals,
         }),
@@ -1747,6 +1751,10 @@ describe('review cycle state', () => {
         JSON.stringify({
           statePath,
           approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
           accountingState: recoveredState,
           approvalState: recoveredApprovals,
         }),
@@ -1840,6 +1848,70 @@ process.stdout.write(result === undefined ? 'recovered' : result);
     } finally {
       rmSync(directory, { recursive: true, force: true });
       rmSync(externalDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a pending transaction has mismatched approval epoch semantics', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+    const initialState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: maxReviewInvocations,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+      terminationReason: 'MAX_REVIEW_INVOCATIONS',
+    };
+    writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+
+    try {
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head',
+        ),
+      ).not.toBeTypeOf('string');
+      const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      expect(
+        resumeReviewAfterLimitAtPath(statePath, approvalPath, 'feature/review', 'main', 'head'),
+      ).not.toBeTypeOf('string');
+      const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+      const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      recoveredState.entries[0].reviewHistory[0].approvalId = 'wrong-approval';
+      writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+      writeFileSync(approvalPath, JSON.stringify(originalApprovals), 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('semantics');
+      expect(readFileSync(statePath, 'utf8')).toBe(JSON.stringify(initialState));
+      expect(readFileSync(approvalPath, 'utf8')).toBe(JSON.stringify(originalApprovals));
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).not.toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

@@ -68,6 +68,10 @@ creation persists a durable `review-limit-resume` record; the resume command
 validates and consumes that record exactly once. Running the resume command is
 not itself authorization, and an absent or mismatched approval remains
 `BLOCKED`.
+The `--confirm-human-authorization` flag is an explicit operator declaration
+and audit input, not technical proof of human identity. If stronger identity
+authentication is required, classify it as `HUMAN_DECISION_REQUIRED` and do not
+invent or add an authentication system in this workflow.
 
 ## Portability boundary
 

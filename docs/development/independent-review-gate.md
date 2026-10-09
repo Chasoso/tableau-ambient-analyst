@@ -120,6 +120,11 @@ reference; it does not produce `PASS`. A fresh Independent Review is required
 after resume, followed by the normal exact-head CI gate. Repeated exhaustion
 requires another explicit Human Decision.
 
+The `--confirm-human-authorization` flag is an auditable operator declaration,
+not technical authentication of human identity. If technical human identity is
+required, the gate is `HUMAN_DECISION_REQUIRED`; no authentication system is
+selected or added autonomously.
+
 A minimal handoff should contain factual metadata such as:
 
 ```text

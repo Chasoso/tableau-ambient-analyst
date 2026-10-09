@@ -2338,7 +2338,16 @@ export function resumeReviewAfterLimitAtPath(
           ? { ...candidate, consumed: true, consumedAt: resumedAt }
           : candidate,
       );
-      persistResumeTransaction(statePath, approvalPath, branch, base, next, nextApprovals);
+      persistResumeTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+        approval.id,
+        reviewEpoch,
+      );
       return next;
     });
   } catch (error) {
@@ -2862,7 +2871,9 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     approval.authorizationSource === 'human-explicit' &&
     typeof approval.consumed === 'boolean' &&
     typeof approval.headSha === 'string' &&
-    (approval.consumedAt === undefined || typeof approval.consumedAt === 'string')
+    (approval.consumed
+      ? typeof approval.consumedAt === 'string'
+      : approval.consumedAt === undefined)
   );
 }
 
@@ -2970,6 +2981,10 @@ function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResum
 type ResumeTransaction = {
   statePath: string;
   approvalPath: string;
+  approvalId: string;
+  branch: string;
+  base: string;
+  exhaustedEpoch: number;
   accountingState: unknown;
   approvalState: unknown;
 };
@@ -3002,7 +3017,16 @@ function recoverPendingResumeTransaction(statePath: string): void {
   ) {
     throw new Error('Review resume transaction is invalid; human recovery is required.');
   }
-  accountingStateEntries(transaction.accountingState);
+  if (
+    typeof transaction.approvalId !== 'string' ||
+    typeof transaction.branch !== 'string' ||
+    typeof transaction.base !== 'string' ||
+    !Number.isInteger(transaction.exhaustedEpoch) ||
+    (transaction.exhaustedEpoch as number) < 1
+  ) {
+    throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
+  const accountingEntries = accountingStateEntries(transaction.accountingState);
   const approvalState = transaction.approvalState as Record<string, unknown>;
   if (
     !Array.isArray(approvalState.approvals) ||
@@ -3012,6 +3036,11 @@ function recoverPendingResumeTransaction(statePath: string): void {
   ) {
     throw new Error('Review resume transaction is invalid; human recovery is required.');
   }
+  validateResumeTransactionSemantics(
+    transaction as ResumeTransaction,
+    accountingEntries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
   writeJsonAtomically(statePath, transaction.accountingState);
   writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
   unlinkSync(transactionPath);
@@ -3024,6 +3053,8 @@ function persistResumeTransaction(
   base: string,
   accounting: ReviewAccounting,
   approvals: ReviewResumeApproval[],
+  approvalId: string,
+  exhaustedEpoch: number,
 ): void {
   const currentValue = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))
@@ -3047,12 +3078,59 @@ function persistResumeTransaction(
   writeJsonAtomically(transactionPath, {
     statePath,
     approvalPath,
+    approvalId,
+    branch,
+    base,
+    exhaustedEpoch,
     accountingState,
     approvalState: { approvals },
   } satisfies ResumeTransaction);
   writeJsonAtomically(statePath, accountingState);
   writeJsonAtomically(approvalPath, { approvals });
   unlinkSync(transactionPath);
+}
+
+function validateResumeTransactionSemantics(
+  transaction: ResumeTransaction,
+  accountingEntries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  const entry = accountingEntries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  if (!approval || !entry || approval.consumed !== true || !approval.consumedAt) {
+    throw new Error('Review resume transaction semantics are invalid; human recovery is required.');
+  }
+  const accounting = entry.accounting;
+  const history = accounting.reviewHistory ?? [];
+  const previousEpoch = history.at(-1);
+  if (
+    approval.approvalType !== 'review-limit-resume' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== transaction.exhaustedEpoch ||
+    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.authorizationSource !== 'human-explicit' ||
+    accounting.reviewEpoch !== transaction.exhaustedEpoch + 1 ||
+    accounting.resumedFromEpoch !== transaction.exhaustedEpoch ||
+    accounting.reviewInvocationCount !== 0 ||
+    accounting.autoFixCycleCount !== 0 ||
+    accounting.terminationReason !== undefined ||
+    accounting.resumeAuthorizationSource !== 'human-explicit' ||
+    accounting.resumeAuthorizedAt !== approval.consumedAt ||
+    !previousEpoch ||
+    previousEpoch.reviewEpoch !== transaction.exhaustedEpoch ||
+    previousEpoch.reviewInvocationCount !== maxReviewInvocations ||
+    previousEpoch.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    previousEpoch.authorizedByHuman !== true ||
+    previousEpoch.authorizationSource !== 'human-explicit' ||
+    previousEpoch.approvalId !== approval.id ||
+    previousEpoch.approvedAt !== approval.approvedAt
+  ) {
+    throw new Error('Review resume transaction semantics are invalid; human recovery is required.');
+  }
 }
 
 function withAccountingLock<T>(statePath: string, operation: () => T): T {
