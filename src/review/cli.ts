@@ -5,6 +5,8 @@ import {
   runIndependentReview,
   authorizeReviewResumeAfterLimit,
   resumeReviewAfterLimit,
+  authorizeReviewTerminationRecovery,
+  resumeReviewTerminationRecovery,
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
@@ -32,8 +34,10 @@ const input: IndependentReviewInput = {
 const reviewOnly = rawArguments.includes('--review-only');
 const resumeAfterLimit = rawArguments.includes('--resume-after-limit');
 const authorizeAfterLimit = rawArguments.includes('--authorize-resume-after-limit');
+const resumeAfterRecovery = rawArguments.includes('--resume-after-recovery');
+const authorizeAfterRecovery = rawArguments.includes('--authorize-termination-recovery');
 const existingPullRequest = argumentsByName.get('update-pr');
-if (resumeAfterLimit && authorizeAfterLimit) {
+if ((resumeAfterLimit && authorizeAfterLimit) || (resumeAfterRecovery && authorizeAfterRecovery)) {
   console.error('Authorization and resume are separate commands.');
   process.exitCode = 2;
 } else if (authorizeAfterLimit) {
@@ -42,6 +46,14 @@ if (resumeAfterLimit && authorizeAfterLimit) {
   if (typeof authorizationResult === 'string') process.exitCode = 1;
 } else if (resumeAfterLimit) {
   const resumeResult = resumeFromLimit(input);
+  console.log(JSON.stringify(resumeResult, null, 2));
+  if (typeof resumeResult === 'string') process.exitCode = 1;
+} else if (authorizeAfterRecovery) {
+  const authorizationResult = authorizeRecovery(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (resumeAfterRecovery) {
+  const resumeResult = resumeRecovery(input);
   console.log(JSON.stringify(resumeResult, null, 2));
   if (typeof resumeResult === 'string') process.exitCode = 1;
 } else {
@@ -84,6 +96,42 @@ function authorizeFromLimit(reviewInput: IndependentReviewInput) {
     return 'Human authorization requires --confirm-human-authorization.';
   }
   return authorizeReviewResumeAfterLimit(reviewInput.cwd, reviewInput.base);
+}
+
+function recoveryEvidence() {
+  const reason = argumentsByName.get('recovery-reason');
+  const evidence = argumentsByName.get('recovery-evidence');
+  const humanDecision = argumentsByName.get('human-decision');
+  if (
+    (reason !== 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+      reason !== 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED') ||
+    !evidence?.trim() ||
+    humanDecision !== 'resume'
+  ) {
+    return 'Termination recovery requires --recovery-reason, --recovery-evidence, and --human-decision resume.';
+  }
+  return { recoveryReason: reason, recoveryEvidence: evidence, humanDecision } as const;
+}
+
+function authorizeRecovery(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  const evidence = recoveryEvidence();
+  return typeof evidence === 'string'
+    ? evidence
+    : authorizeReviewTerminationRecovery(reviewInput.cwd, reviewInput.base, evidence);
+}
+
+function resumeRecovery(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  const evidence = recoveryEvidence();
+  return typeof evidence === 'string'
+    ? evidence
+    : resumeReviewTerminationRecovery(reviewInput.cwd, reviewInput.base, evidence);
 }
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {

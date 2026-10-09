@@ -313,6 +313,47 @@ Independent Review and the exact-head CI gate remain mandatory. If the new
 epoch reaches its limit, automation stops again and requires a new explicit
 human authorization.
 
+An AUTO_FIX implementer self-review that reports blocking issues is a distinct
+`BLOCKED` stop. It does not consume an AUTO_FIX cycle and is never retried
+automatically. A matching `BLOCKED` state is recoverable only when its durable
+termination evidence identifies `AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED`.
+The known older Issue #55 shape may be recovered only through the separate
+human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
+Human Decision record. The old implementer blocking report is not persisted, so
+the causal claim is human-confirmed rather than mechanically proven. The
+record must identify Issue #64, target Issue #55/PR #61, the decision and cause,
+the preserved state invariants, and the operator's corroborating basis. The
+runner never infers that reason from `NO_PROGRESS` alone. The recovery approval
+is branch/base/epoch/head/reason-bound, single-use, and preserves the original
+terminal epoch. Every termination-recovery approval also records the constrained
+human decision `resume`; `--confirm-human-authorization` remains only an
+explicit operator declaration and is not technical proof of human identity. For
+example:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-termination-recovery \
+  --confirm-human-authorization \
+  --human-decision resume \
+  --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
+  --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
+  --issue 55 --base main --cwd .worktrees/issue-55
+node dist/review/cli.js \
+  --resume-after-recovery \
+  --human-decision resume \
+  --recovery-reason LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED \
+  --recovery-evidence '{"source":"human-decision","issue":64,"targetIssue":55,"targetPr":61,"decision":"resume","cause":"AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED","verification":"durable-state-and-issue-evidence","humanConfirmation":"explicit-operator-declaration","causalBasis":"Issue #64 background and preserved Issue #55 accounting state","branch":"feat/issue-55","base":"main","reviewEpoch":2,"reviewInvocationCount":1,"autoFixCycleCount":0,"terminationReason":"NO_PROGRESS","priorEpoch":1,"priorTerminationReason":"MAX_REVIEW_INVOCATIONS","priorReviewInvocationCount":16}' \
+  --issue 55 --base main --cwd .worktrees/issue-55
+```
+
+Codex must not create or self-authorize the recovery approval. After a human
+has created a matching durable approval, Codex may invoke only
+`--resume-after-recovery`; the command validates and consumes that approval.
+The confirmation flag is an operator declaration, not cryptographic proof of
+human identity. Recovery is never PASS: fresh Independent Review and
+exact-head CI remain mandatory.
+
 Non-blocking findings are returned for recording and do not automatically cause
 implementation churn. A result-capture retry is part of one reviewer
 invocation and never increments the AUTO_FIX count.

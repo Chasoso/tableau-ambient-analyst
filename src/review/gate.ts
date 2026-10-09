@@ -37,6 +37,23 @@ export const terminationReasons = [
 ] as const;
 export type TerminationReason = (typeof terminationReasons)[number];
 
+export const reviewRecoveryReasons = [
+  'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+  'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
+] as const;
+export type ReviewRecoveryReason = (typeof reviewRecoveryReasons)[number];
+
+export type ReviewTerminationEvidence = {
+  recoveryReason: ReviewRecoveryReason;
+  recoveryEvidence: string;
+};
+
+export const reviewRecoveryHumanDecisions = ['resume'] as const;
+export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[number];
+export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
+  humanDecision: ReviewRecoveryHumanDecision;
+};
+
 export type ReviewCycleRecord = {
   reviewInvocation: number;
   result: ReviewResultName;
@@ -67,11 +84,14 @@ export type ReviewEpochHistory = {
   approvedAt: string;
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
+  terminationEvidence?: ReviewTerminationEvidence | undefined;
+  recoveryReason?: ReviewRecoveryReason | undefined;
+  recoveryEvidence?: string | undefined;
 };
 
 export type ReviewResumeApproval = {
   id: string;
-  approvalType: 'review-limit-resume';
+  approvalType: 'review-limit-resume' | 'review-termination-recovery';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
   base: string;
@@ -82,6 +102,10 @@ export type ReviewResumeApproval = {
   consumed: boolean;
   headSha: string;
   consumedAt?: string | undefined;
+  originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | undefined;
+  recoveryReason?: ReviewRecoveryReason | undefined;
+  recoveryEvidence?: string | undefined;
+  humanDecision?: ReviewRecoveryHumanDecision | undefined;
 };
 
 export type ReviewAccounting = {
@@ -103,6 +127,7 @@ export type ReviewAccounting = {
   resumeAuthorizedAt?: string | undefined;
   resumeAuthorizationSource?: 'human-explicit' | undefined;
   resumedFromEpoch?: number | undefined;
+  terminationEvidence?: ReviewTerminationEvidence | undefined;
 };
 
 export type ReviewGateResult = {
