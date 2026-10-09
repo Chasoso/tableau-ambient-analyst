@@ -1692,6 +1692,31 @@ describe('review cycle state', () => {
         cycleResults: [],
         terminationHistory: ['NO_PROGRESS'],
         terminationReason: 'NO_PROGRESS',
+        reviewEpoch: 2,
+        resumeAuthorizedAt: '2026-10-09T00:01:00.000Z',
+        resumeAuthorizationSource: 'human-explicit',
+        resumedFromEpoch: 1,
+        reviewHistory: [
+          {
+            reviewEpoch: 1,
+            accountingEpochStart: 'issue-29-accounting-v2',
+            legacyReviewInvocations: 0,
+            legacyAutoFixCycles: 0,
+            reviewInvocationCount: maxReviewInvocations,
+            autoFixCycleCount: 0,
+            generalizedRuleHistory: [],
+            consecutiveRepeatCount: 0,
+            lastFixChangedRepository: null,
+            cycleResults: [],
+            terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+            terminationReason: 'MAX_REVIEW_INVOCATIONS',
+            resumedAt: '2026-10-09T00:01:00.000Z',
+            authorizedByHuman: true,
+            authorizationSource: 'human-explicit',
+            approvalId: 'prior-approval',
+            approvedAt: '2026-10-09T00:00:00.000Z',
+          },
+        ],
       }),
       'utf8',
     );
@@ -1718,11 +1743,11 @@ describe('review cycle state', () => {
       expect(resumed).not.toBeTypeOf('string');
       if (typeof resumed === 'string') return;
       expect(resumed).toMatchObject({
-        reviewEpoch: 2,
+        reviewEpoch: 3,
         reviewInvocationCount: 0,
-        resumedFromEpoch: 1,
+        resumedFromEpoch: 2,
       });
-      expect(resumed.reviewHistory?.[0]).toMatchObject({
+      expect(resumed.reviewHistory?.[1]).toMatchObject({
         terminationReason: 'NO_PROGRESS',
         recoveryReason: recovery.recoveryReason,
         recoveryEvidence: recovery.recoveryEvidence,
@@ -1742,7 +1767,7 @@ describe('review cycle state', () => {
     }
   });
 
-  it('does not make an unsupported terminal reason resumable', () => {
+  it('does not make an unrelated NO_PROGRESS state resumable', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
     const approvalPath = join(directory, 'approval.json');
@@ -1760,8 +1785,8 @@ describe('review cycle state', () => {
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
         cycleResults: [],
-        terminationHistory: ['HUMAN_DECISION_REQUIRED'],
-        terminationReason: 'HUMAN_DECISION_REQUIRED',
+        terminationHistory: ['NO_PROGRESS'],
+        terminationReason: 'NO_PROGRESS',
       }),
       'utf8',
     );

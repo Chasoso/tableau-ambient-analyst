@@ -2263,7 +2263,8 @@ export function authorizeReviewResumeAfterLimitAtPath(
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
-            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED')) &&
+            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
+            isKnownLegacyAutoFixMisclassification(accounting))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (!isLimitRecovery && !isSupportedRecovery) {
         return 'Review approval requires a supported terminal state and explicit recovery evidence.';
@@ -2328,7 +2329,8 @@ export function resumeReviewAfterLimitAtPath(
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
-            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED')) &&
+            recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
+            isKnownLegacyAutoFixMisclassification(accounting))) &&
         recovery.recoveryEvidence.trim().length > 0;
       if (
         (isLimitRecovery &&
@@ -2715,8 +2717,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       state.resumeAuthorizationSource !== 'human-explicit') ||
     (state.resumedFromEpoch !== undefined &&
       (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
-    (state.terminationEvidence !== undefined &&
-      !isReviewTerminationEvidence(state.terminationEvidence)) ||
+    !isCurrentTerminationEvidenceConsistent(state) ||
     !isReviewEpochMetadataConsistent(state)
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -2983,10 +2984,7 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     history.cycleResults.length <= (history.reviewInvocationCount as number) &&
     Array.isArray(history.terminationHistory) &&
     history.terminationHistory.every(isTerminationReason) &&
-    (history.terminationReason === 'MAX_REVIEW_INVOCATIONS' ||
-      ((history.terminationReason === 'BLOCKED' || history.terminationReason === 'NO_PROGRESS') &&
-        history.recoveryReason !== undefined &&
-        typeof history.recoveryEvidence === 'string')) &&
+    isReviewEpochRecoveryMetadataConsistent(history) &&
     typeof history.resumedAt === 'string' &&
     history.authorizedByHuman === true &&
     history.authorizationSource === 'human-explicit' &&
@@ -2997,11 +2995,38 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     (history.migrationCompatibility === undefined ||
       typeof history.migrationCompatibility === 'string') &&
     (history.terminationEvidence === undefined ||
-      isReviewTerminationEvidence(history.terminationEvidence)) &&
-    (history.recoveryReason === undefined ||
-      reviewRecoveryReasons.includes(history.recoveryReason as ReviewRecoveryReason)) &&
-    (history.recoveryEvidence === undefined || typeof history.recoveryEvidence === 'string')
+      isReviewTerminationEvidence(history.terminationEvidence))
   );
+}
+
+function isReviewEpochRecoveryMetadataConsistent(history: Record<string, unknown>): boolean {
+  const hasRecoveryReason = history.recoveryReason !== undefined;
+  const hasRecoveryEvidence = history.recoveryEvidence !== undefined;
+  if (hasRecoveryReason !== hasRecoveryEvidence) return false;
+  if (!hasRecoveryReason) {
+    return (
+      history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+      history.terminationEvidence === undefined
+    );
+  }
+  if (
+    typeof history.recoveryReason !== 'string' ||
+    !reviewRecoveryReasons.includes(history.recoveryReason as ReviewRecoveryReason) ||
+    typeof history.recoveryEvidence !== 'string' ||
+    history.recoveryEvidence.trim().length === 0
+  ) {
+    return false;
+  }
+  if (history.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED') {
+    const evidence = history.terminationEvidence;
+    return (
+      history.terminationReason === 'BLOCKED' &&
+      isReviewTerminationEvidence(evidence) &&
+      evidence.recoveryReason === history.recoveryReason &&
+      evidence.recoveryEvidence === history.recoveryEvidence
+    );
+  }
+  return history.terminationReason === 'NO_PROGRESS' && history.terminationEvidence === undefined;
 }
 
 function isReviewTerminationEvidence(value: unknown): value is ReviewTerminationEvidence {
@@ -3013,6 +3038,33 @@ function isReviewTerminationEvidence(value: unknown): value is ReviewTermination
     evidence.recoveryEvidence.trim().length > 0 &&
     typeof evidence.recoveryReason === 'string' &&
     reviewRecoveryReasons.includes(evidence.recoveryReason as ReviewRecoveryReason)
+  );
+}
+
+function isCurrentTerminationEvidenceConsistent(state: Record<string, unknown>): boolean {
+  if (state.terminationEvidence === undefined) return true;
+  return (
+    state.terminationReason === 'BLOCKED' &&
+    isReviewTerminationEvidence(state.terminationEvidence) &&
+    state.terminationEvidence.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED'
+  );
+}
+
+function isKnownLegacyAutoFixMisclassification(accounting: ReviewAccounting): boolean {
+  const previousEpoch = accounting.reviewHistory?.at(-1);
+  return (
+    accounting.reviewEpoch === 2 &&
+    accounting.resumedFromEpoch === 1 &&
+    accounting.reviewInvocationCount === 1 &&
+    accounting.autoFixCycleCount === 0 &&
+    accounting.terminationReason === 'NO_PROGRESS' &&
+    accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
+    accounting.reviewHistory?.length === 1 &&
+    previousEpoch?.reviewEpoch === 1 &&
+    previousEpoch.reviewInvocationCount === maxReviewInvocations &&
+    previousEpoch.autoFixCycleCount <= maxAutoFixCycles &&
+    previousEpoch.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+    previousEpoch.terminationHistory.at(-1) === 'MAX_REVIEW_INVOCATIONS'
   );
 }
 
