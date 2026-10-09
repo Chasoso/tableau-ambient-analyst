@@ -11,7 +11,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { isAbsolute, relative, resolve, win32 } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import {
   canOpenPullRequest,
@@ -2985,6 +2985,10 @@ function resumeTransactionPath(statePath: string): string {
   return `${statePath}${resumeTransactionSuffix}`;
 }
 
+function canonicalResumeApprovalPath(statePath: string): string {
+  return resolve(dirname(statePath), reviewApprovalFile);
+}
+
 function recoverPendingResumeTransaction(statePath: string): void {
   const transactionPath = resumeTransactionPath(statePath);
   if (!existsSync(transactionPath)) return;
@@ -2993,7 +2997,7 @@ function recoverPendingResumeTransaction(statePath: string): void {
   ) as Partial<ResumeTransaction>;
   if (
     transaction.statePath !== statePath ||
-    typeof transaction.approvalPath !== 'string' ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
     transaction.accountingState === undefined ||
     transaction.approvalState === undefined
   ) {

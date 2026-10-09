@@ -1635,7 +1635,7 @@ describe('review cycle state', () => {
   it('recovers a resume transaction before exposing either state file', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');
-    const approvalPath = join(directory, 'approval.json');
+    const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1696,6 +1696,37 @@ describe('review cycle state', () => {
       expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a resume transaction with a mismatched approval path before writing', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
+    const externalDirectory = mkdtempSync(join(tmpdir(), 'ambient-review-external-'));
+    const statePath = join(directory, 'state.json');
+    const externalApprovalPath = join(externalDirectory, 'approval.json');
+    const state = JSON.stringify({ entries: [] });
+
+    writeFileSync(statePath, state, 'utf8');
+    writeFileSync(
+      `${statePath}.resume-transaction`,
+      JSON.stringify({
+        statePath,
+        approvalPath: externalApprovalPath,
+        accountingState: { entries: [] },
+        approvalState: { approvals: [] },
+      }),
+      'utf8',
+    );
+
+    try {
+      expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+        'Review accounting state is invalid; human recovery is required.',
+      );
+      expect(readFileSync(statePath, 'utf8')).toBe(state);
+      expect(() => readFileSync(externalApprovalPath, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(externalDirectory, { recursive: true, force: true });
     }
   });
 
