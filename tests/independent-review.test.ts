@@ -51,6 +51,7 @@ import {
   runPostPushCiGate,
   runReadOnlyReview,
   runReviewControlFlow,
+  reviewerNonzeroExitResult,
   authorizeReviewerFailureRecoveryAtPath,
   resumeReviewerFailureRecoveryAtPath,
   resolveActivePullRequest,
@@ -221,6 +222,17 @@ const structuredAutoFix = {
   escalationRequired: false,
   maintainability: 'LOCAL_CLEANUP',
 };
+
+function completedReviewCycles(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    reviewInvocation: index + 1,
+    result: 'PASS' as const,
+    maintainability: 'NO_DRIFT' as const,
+    classifications: [],
+    generalizedRules: [],
+    repositoryChanged: false,
+  }));
+}
 
 describe('independent review gate contract', () => {
   it.each([
@@ -1420,6 +1432,25 @@ describe('independent review runner control flow', () => {
     ]);
   });
 
+  it('keeps nonzero-exit diagnostics numeric and excludes arbitrary stderr', () => {
+    const secretStderr = 'token=do-not-persist prompt=confidential evidence=private';
+    const result = reviewerNonzeroExitResult(17, secretStderr);
+    const serialized = JSON.stringify(result);
+
+    expect(result.executionFailureKind).toBe('NONZERO_EXIT');
+    expect(result.blockingFindings[0]).toMatchObject({
+      classification: 'BLOCKED',
+      finding: 'Reviewer process exited unsuccessfully with exit status 17.',
+    });
+    expect(serialized).not.toContain(secretStderr);
+    expect(serialized).not.toContain('do-not-persist');
+    expect(serialized).not.toContain('confidential');
+    expect(serialized).not.toContain('private');
+    expect(JSON.stringify(reviewerNonzeroExitResult(null, secretStderr))).not.toContain(
+      secretStderr,
+    );
+  });
+
   it('converts reviewer exceptions after reservation into a durable fail-closed failure', () => {
     const result = runReadOnlyReview(
       input,
@@ -2075,6 +2106,37 @@ describe('review cycle state', () => {
     }
   });
 
+  it.each(['blocked', 'no-progress', 'reviewer-failure'] as const)(
+    'fails closed for an orphaned %s invocation with terminal metadata only',
+    (reason) => {
+      const directory = mkdtempSync(join(tmpdir(), `ambient-orphaned-${reason}-`));
+      const statePath = join(directory, 'state.json');
+      const fixture = JSON.parse(
+        readFileSync(
+          join(
+            process.cwd(),
+            `tests/fixtures/review-accounting/orphaned-${reason}-invocation.json`,
+          ),
+          'utf8',
+        ),
+      ) as Record<string, unknown>;
+      const contents = JSON.stringify(fixture);
+      writeFileSync(statePath, contents, 'utf8');
+
+      try {
+        expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+          'Review accounting state is invalid',
+        );
+        expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+          'Review accounting state is invalid',
+        );
+        expect(readFileSync(statePath, 'utf8')).toBe(contents);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
@@ -2588,7 +2650,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
         terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
       }),
@@ -2625,7 +2687,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
         terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
       }),
@@ -2701,7 +2763,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
         terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
       }),
@@ -2774,7 +2836,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: false,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(1),
         terminationHistory: ['NO_PROGRESS'],
         terminationReason: 'NO_PROGRESS',
         reviewEpoch: 2,
@@ -2792,7 +2854,7 @@ describe('review cycle state', () => {
             generalizedRuleHistory: [],
             consecutiveRepeatCount: 0,
             lastFixChangedRepository: null,
-            cycleResults: [],
+            cycleResults: completedReviewCycles(maxReviewInvocations),
             terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
             terminationReason: 'MAX_REVIEW_INVOCATIONS',
             resumedAt: '2026-10-09T00:01:00.000Z',
@@ -2962,7 +3024,7 @@ describe('review cycle state', () => {
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
         terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
       }),
@@ -3034,7 +3096,7 @@ describe('review cycle state', () => {
       generalizedRuleHistory: [],
       consecutiveRepeatCount: 0,
       lastFixChangedRepository: null,
-      cycleResults: [],
+      cycleResults: completedReviewCycles(maxReviewInvocations),
       terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
       terminationReason: 'MAX_REVIEW_INVOCATIONS',
     };
@@ -3155,7 +3217,7 @@ process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transa
       generalizedRuleHistory: [],
       consecutiveRepeatCount: 0,
       lastFixChangedRepository: null,
-      cycleResults: [],
+      cycleResults: completedReviewCycles(maxReviewInvocations),
       terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
       terminationReason: 'MAX_REVIEW_INVOCATIONS',
     };
@@ -3320,7 +3382,7 @@ process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transa
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
         terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
         terminationReason: 'MAX_REVIEW_INVOCATIONS',
       }),
@@ -3632,7 +3694,7 @@ process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
         terminationHistory: [],
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewCycles),
       }),
       'utf8',
     );
@@ -3784,7 +3846,7 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
         consecutiveRepeatCount: 0,
         lastFixChangedRepository: null,
         terminationHistory: [],
-        cycleResults: [],
+        cycleResults: completedReviewCycles(maxReviewInvocations),
       }),
       'utf8',
     );
@@ -4420,7 +4482,7 @@ describe('bounded-reason termination recovery', () => {
         'utf8',
       );
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toMatch(
-        /supported terminal state|evidence/i,
+        /supported terminal state|evidence|invalid/i,
       );
     } finally {
       rmSync(directory, { recursive: true, force: true });

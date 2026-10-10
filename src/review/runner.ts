@@ -2324,14 +2324,7 @@ function invokeCodexReviewer(
     }
 
     if (processResult.status !== 0) {
-      const diagnostic = processResult.stderr
-        ? ` stderr=${sanitizeReviewerDiagnostic(processResult.stderr)}`
-        : '';
-      return reviewerInvocationFailure(
-        `Reviewer process exited unsuccessfully.${diagnostic}`,
-        'REVIEW',
-        'NONZERO_EXIT',
-      );
+      return reviewerNonzeroExitResult(processResult.status);
     }
 
     const output = extractFinalReviewerMessage(processResult.stdout);
@@ -2351,12 +2344,19 @@ function invokeCodexReviewer(
   }
 }
 
-function sanitizeReviewerDiagnostic(value: string): string {
-  return value
-    .replace(/(authorization|api[-_]?key|token|secret)\s*[:=]\s*[^\s]+/gi, '$1=<redacted>')
-    .replace(/Bearer\s+[^\s]+/gi, 'Bearer <redacted>')
-    .trim()
-    .slice(-2000);
+export function reviewerNonzeroExitResult(
+  status: number | null,
+  _stderr?: string,
+): ReviewGateResult {
+  void _stderr;
+  const safeStatus = Number.isInteger(status) ? status : undefined;
+  return reviewerInvocationFailure(
+    safeStatus === undefined
+      ? 'Reviewer process exited unsuccessfully.'
+      : `Reviewer process exited unsuccessfully with exit status ${safeStatus}.`,
+    'REVIEW',
+    'NONZERO_EXIT',
+  );
 }
 
 export function extractFinalReviewerMessage(output: string): string | undefined {
@@ -3474,6 +3474,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     ...parsedFailures.map((failure) => failure.reviewInvocation),
     ...(pendingReview ? [pendingReview.reviewInvocation] : []),
   ]);
+  const explicitIncompleteEvidence =
+    state.terminationEvidence !== undefined && isCurrentTerminationEvidenceConsistent(state);
   const invocationEvidenceIsConsistent =
     legacyMigration ||
     (state.branch === legacyIssue29Branch &&
@@ -3481,8 +3483,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       state.legacyReviewInvocations === legacyIssue29ReviewInvocations &&
       state.legacyAutoFixCycles === legacyIssue29AutoFixCycles &&
       cycleResults.length === (state.reviewInvocationCount as number) - 1) ||
-    state.terminationReason !== undefined ||
-    state.reviewInvocationCount === maxReviewInvocations ||
+    explicitIncompleteEvidence ||
     Array.from({ length: state.reviewInvocationCount as number }, (_, index) => index + 1).every(
       (invocation) => representedInvocations.has(invocation),
     );
