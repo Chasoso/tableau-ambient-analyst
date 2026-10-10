@@ -171,6 +171,17 @@ export type ReviewAccounting = {
     headSha: string;
     schemaFingerprint: string;
   };
+  reviewerFailureRecoveryHistory?: Array<{
+    approvalId: string;
+    authorizedAt: string;
+    archivedAt: string;
+    authorizationSource: 'human-explicit';
+    reviewEpoch: number;
+    failedReviewInvocation: number;
+    failureKind?: ReviewExecutionFailureKind | undefined;
+    headSha: string;
+    schemaFingerprint: string;
+  }>;
 };
 
 export type ReviewGateResult = {
@@ -195,7 +206,16 @@ const isFindingClassification = (value: unknown): value is FindingClassification
 const isReviewFinding = (value: unknown): value is ReviewFinding => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const finding = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'severity',
+    'classification',
+    'finding',
+    'generalized_rule',
+    'affected_locations',
+    'recommended_fix',
+  ]);
   return (
+    Object.keys(finding).every((key) => allowedKeys.has(key)) &&
     (finding.severity === 'blocking' || finding.severity === 'non-blocking') &&
     isFindingClassification(finding.classification) &&
     typeof finding.finding === 'string' &&

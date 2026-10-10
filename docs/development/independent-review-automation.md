@@ -367,6 +367,12 @@ failure kind, review epoch, exact HEAD, and Schema fingerprint. States with
 inferred history are not recoverable; they remain fail-closed for explicit
 human handling. Existing consumed approval and recovery records remain readable
 for audit compatibility but are never reused to authorize another review. The
+active `reviewerFailureRecovery` marker exists only between approval consumption
+and reservation of the next invocation. That reservation atomically moves the
+marker into append-only `reviewerFailureRecoveryHistory` and clears the active
+marker; a later reviewer failure can therefore set a new terminal
+`REVIEWER_FAILURE` without overwriting the consumed approval or making failure
+persistence impossible. Invalid or incomplete history remains fail-closed. The
 commands are:
 
 ```bash

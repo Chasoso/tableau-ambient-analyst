@@ -3353,6 +3353,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'pendingReview',
     'reviewExecutionFailures',
     'reviewerFailureRecovery',
+    'reviewerFailureRecoveryHistory',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -3403,7 +3404,15 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
         !state.reviewExecutionFailures.every(isReviewExecutionFailure))) ||
     (state.reviewerFailureRecovery !== undefined &&
       (!isReviewerFailureRecovery(state.reviewerFailureRecovery) ||
-        !isReviewerFailureRecoveryConsistent(state)))
+        !isReviewerFailureRecoveryConsistent(state))) ||
+    (state.reviewerFailureRecoveryHistory !== undefined &&
+      (!Array.isArray(state.reviewerFailureRecoveryHistory) ||
+        !state.reviewerFailureRecoveryHistory.every(isReviewerFailureRecoveryAudit) ||
+        new Set(
+          state.reviewerFailureRecoveryHistory.map(
+            (record) => (record as Record<string, unknown>).approvalId,
+          ),
+        ).size !== state.reviewerFailureRecoveryHistory.length))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -3538,6 +3547,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       : {
           reviewerFailureRecovery: state.reviewerFailureRecovery as NonNullable<
             ReviewAccounting['reviewerFailureRecovery']
+          >,
+        }),
+    ...(state.reviewerFailureRecoveryHistory === undefined
+      ? {}
+      : {
+          reviewerFailureRecoveryHistory: state.reviewerFailureRecoveryHistory as NonNullable<
+            ReviewAccounting['reviewerFailureRecoveryHistory']
           >,
         }),
   };
@@ -4218,6 +4234,29 @@ function isReviewerFailureRecovery(value: unknown): boolean {
     typeof recovery.headSha === 'string' &&
     typeof recovery.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
+  );
+}
+
+function isReviewerFailureRecoveryAudit(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const audit = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'approvalId',
+    'authorizedAt',
+    'archivedAt',
+    'authorizationSource',
+    'reviewEpoch',
+    'failedReviewInvocation',
+    'failureKind',
+    'headSha',
+    'schemaFingerprint',
+  ]);
+  return (
+    Object.keys(audit).every((key) => allowedKeys.has(key)) &&
+    typeof audit.archivedAt === 'string' &&
+    isReviewerFailureRecovery(
+      Object.fromEntries(Object.entries(audit).filter(([key]) => key !== 'archivedAt')),
+    )
   );
 }
 
@@ -4966,14 +5005,30 @@ function reserveReviewInvocationAtPath(
       if (accounting.reviewInvocationCount >= maxReviewInvocations) {
         return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
       }
-      writeAccountingAtPath(statePath, branch, base, {
-        ...accounting,
+      const nextReviewState = {
         reviewInvocationCount: accounting.reviewInvocationCount + 1,
         pendingReview: {
           reviewInvocation: accounting.reviewInvocationCount + 1,
-          status: 'RESERVED',
+          status: 'RESERVED' as const,
         },
-      });
+      };
+      if (accounting.reviewerFailureRecovery) {
+        const { reviewerFailureRecovery: activeRecovery, ...accountingWithoutActiveRecovery } =
+          accounting;
+        writeAccountingAtPath(statePath, branch, base, {
+          ...accountingWithoutActiveRecovery,
+          reviewerFailureRecoveryHistory: [
+            ...(accounting.reviewerFailureRecoveryHistory ?? []),
+            { ...activeRecovery, archivedAt: new Date().toISOString() },
+          ],
+          ...nextReviewState,
+        });
+      } else {
+        writeAccountingAtPath(statePath, branch, base, {
+          ...accounting,
+          ...nextReviewState,
+        });
+      }
       return undefined;
     });
   } catch (error) {

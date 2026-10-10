@@ -315,6 +315,16 @@ describe('independent review gate contract', () => {
       false,
       'HUMAN_DECISION_REQUIRED',
     ],
+    [
+      'schema-invalid finding with an unknown property (fail closed)',
+      {
+        ...structuredAutoFix,
+        blockingFindings: [{ ...structuredAutoFix.blockingFindings[0], unexpected: 'rejected' }],
+      },
+      false,
+      false,
+      'HUMAN_DECISION_REQUIRED',
+    ],
   ])(
     'enforces the two-stage wire schema and semantic parser contract: %s',
     (_name, value, schemaValid, parserValid, expectedResult) => {
@@ -1439,6 +1449,50 @@ describe('independent review runner control flow', () => {
     expect(result.terminationReason).toBeUndefined();
   });
 
+  it('records a new reviewer failure without discarding archived recovery history', () => {
+    const archivedRecovery = {
+      approvalId: 'approval-1',
+      authorizedAt: '2026-10-11T00:00:00.000Z',
+      archivedAt: '2026-10-11T00:01:00.000Z',
+      authorizationSource: 'human-explicit' as const,
+      reviewEpoch: 1,
+      failedReviewInvocation: 1,
+      failureKind: 'NONZERO_EXIT' as const,
+      headSha: 'a'.repeat(40),
+      schemaFingerprint: 'b'.repeat(64),
+    };
+    const result = runReadOnlyReview(
+      input,
+      dependencies(
+        {
+          invokeReviewer: () =>
+            reviewerInvocationFailure('reviewer failed again', 'REVIEW', 'NONZERO_EXIT'),
+        },
+        {
+          reviewInvocationCount: 2,
+          pendingReview: { reviewInvocation: 2, status: 'STARTED' },
+          reviewerFailureRecoveryHistory: [archivedRecovery],
+        },
+      ),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.terminationReason).toBe('REVIEWER_FAILURE');
+    expect(result.accounting).toMatchObject({
+      reviewInvocationCount: 2,
+      pendingReview: undefined,
+      reviewerFailureRecoveryHistory: [archivedRecovery],
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 2,
+          kind: 'NONZERO_EXIT',
+        },
+      ],
+      terminationHistory: ['REVIEWER_FAILURE'],
+    });
+    expect(result.accounting?.reviewerFailureRecovery).toBeUndefined();
+  });
+
   it('includes the untrusted Issue boundary in the AUTO_FIX implementer prompt', () => {
     const prompt = buildAutoFixPrompt(input, autoFixReview('deterministic finding'));
 
@@ -2093,7 +2147,18 @@ describe('review cycle state', () => {
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewInvocationCount: 2,
+        pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
+        reviewerFailureRecoveryHistory: [
+          {
+            approvalId: approval.id,
+            failedReviewInvocation: 1,
+            archivedAt: expect.any(String),
+          },
+        ],
       });
+      expect(
+        readReviewAccountingAtPath(statePath, 'feature/review', 'main').reviewerFailureRecovery,
+      ).toBeUndefined();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
