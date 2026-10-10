@@ -14,6 +14,7 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm run debug:ui',
+    env: { PORT: '4173' },
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: false,
     timeout: 120_000,
