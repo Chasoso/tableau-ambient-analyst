@@ -164,6 +164,28 @@ pre-PR reviewer is available. Such a draft is a bootstrap exception: it is not
 gate-passed, not ready for merge, and must remain clearly marked as pending
 until a fresh reviewer returns `PASS`.
 
+An AUTO_FIX bounded-reason validation rejection is a distinct `BLOCKED` stop.
+Its durable evidence contains only the bounded rejection reason, safe target
+and dirty paths, terminal state, exact head, and a fingerprint of the dirty
+working-tree bytes. A human-authorized recovery may verify and revalidate that
+same state, but does not approve changes, create a commit, or produce `PASS`.
+If the evidence is missing, malformed, or the paths/bytes changed, the gate
+remains closed and no historical Issue or PR evidence may be reconstructed.
+For the historical PR #74 state checked by Issue #75, the durable accounting
+has `BLOCKED` but no termination evidence, and no approval record exists. This
+is an explicit compatibility blocker: the state cannot be treated as a
+bounded-reason rejection and remains fail-closed until a separately
+authorized process has valid evidence.
+
+For a later authorized recovery of the Issue #73-shaped state, the merged
+runner fix must be brought into the canonical `feat/issue-73` worktree through
+safe repository reconciliation while preserving the dirty bytes. Validation
+must then confirm the evidence and exact snapshot, followed by deterministic
+validation, a fresh Independent Review, the existing-PR update path for PR #74,
+and required CI for the exact latest head. Merge/rebase/conflict resolution or
+replacement of preserved work requires a separate Human Decision; this Issue
+does not perform that recovery or update PR #74.
+
 ## Review checklist
 
 Use the following checklist for every independent review. Mark an item as not

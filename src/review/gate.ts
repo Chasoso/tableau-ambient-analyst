@@ -39,6 +39,7 @@ export type TerminationReason = (typeof terminationReasons)[number];
 
 export const reviewRecoveryReasons = [
   'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+  'AUTO_FIX_BOUNDED_REASON_REJECTED',
   'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
 ] as const;
 export type ReviewRecoveryReason = (typeof reviewRecoveryReasons)[number];
@@ -52,6 +53,7 @@ export const reviewRecoveryHumanDecisions = ['resume'] as const;
 export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
+  issue?: string | undefined;
 };
 
 export type ReviewCycleRecord = {
@@ -106,6 +108,7 @@ export type ReviewResumeApproval = {
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
   humanDecision?: ReviewRecoveryHumanDecision | undefined;
+  issue?: string | undefined;
 };
 
 export type ReviewAccounting = {

@@ -104,13 +104,19 @@ function recoveryEvidence() {
   const humanDecision = argumentsByName.get('human-decision');
   if (
     (reason !== 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+      reason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED' &&
       reason !== 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED') ||
     !evidence?.trim() ||
     humanDecision !== 'resume'
   ) {
     return 'Termination recovery requires --recovery-reason, --recovery-evidence, and --human-decision resume.';
   }
-  return { recoveryReason: reason, recoveryEvidence: evidence, humanDecision } as const;
+  return {
+    recoveryReason: reason,
+    recoveryEvidence: evidence,
+    humanDecision,
+    issue: input.issue,
+  } as const;
 }
 
 function authorizeRecovery(reviewInput: IndependentReviewInput) {

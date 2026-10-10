@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   mkdtempSync,
@@ -31,6 +32,7 @@ import {
 } from '../src/review/gate.js';
 import {
   autoFixAllowedPaths,
+  authorizeReviewTerminationRecovery,
   authorizeReviewTerminationRecoveryAtPath,
   authorizeReviewResumeAfterLimitAtPath,
   buildAutoFixPrompt,
@@ -40,6 +42,7 @@ import {
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
+  resumeReviewTerminationRecovery,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
   runExistingPullRequestUpdate,
@@ -1028,6 +1031,16 @@ describe('independent review runner control flow', () => {
     expect(prompt).toContain('Human Decisions');
     expect(prompt).toContain('live or external');
     expect(prompt).toContain('direct pushes, merges');
+  });
+
+  it('distinguishes the exact affected test from a separate direct test', () => {
+    const prompt = buildAutoFixPrompt(input, autoFixReview('deterministic finding'));
+
+    expect(prompt).toContain('exact reviewer-cited file');
+    expect(prompt).toContain('including a cited');
+    expect(prompt).toContain('"reason": "affected_location"');
+    expect(prompt).toContain('"reason": "direct_test"');
+    expect(prompt).toContain('explicitly references the affected source path');
   });
 
   it('requires the Maintainability Guard in reviewer and implementer prompts', () => {
@@ -2777,9 +2790,22 @@ describe('AUTO_FIX path scope', () => {
     writeFileSync(join(directory, 'src', 'helper.ts'), 'export {};\n');
     writeFileSync(
       join(directory, 'tests', 'related.test.ts'),
+      "import '../src/tracked';\nimport './reviewer-cited.test';\ntest();\n",
+    );
+    writeFileSync(
+      join(directory, 'tests', 'esm-related.test.ts'),
+      "import '../src/tracked.js';\ntest();\n",
+    );
+    writeFileSync(
+      join(directory, 'tests', 'reviewer-cited.test.ts'),
       "import '../src/tracked';\ntest();\n",
     );
     writeFileSync(join(directory, 'tests', 'unrelated.test.ts'), 'test();\n');
+    writeFileSync(join(directory, 'tests', 'basename.test.ts'), "test('tracked');\n");
+    writeFileSync(
+      join(directory, 'tests', 'text-only.test.ts'),
+      "const sourceName = '../src/tracked';\ntest(sourceName);\n",
+    );
     writeFileSync(join(directory, 'docs', 'unrelated.md'), '# unrelated\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
@@ -2848,6 +2874,12 @@ describe('AUTO_FIX path scope', () => {
       ).toBeUndefined();
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+          { path: 'docs/unrelated.md', reason: 'required_doc_update' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'src/base-only.ts', reason: 'affected_location' },
         ]),
       ).toContain('no valid bounded reason');
@@ -2859,7 +2891,33 @@ describe('AUTO_FIX path scope', () => {
       ).toBeUndefined();
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/esm-related.test.ts', reason: 'direct_test' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        validateAutoFixChanges(finding('tests/reviewer-cited.test.ts:12'), directory, 'main', [
+          { path: 'tests/reviewer-cited.test.ts', reason: 'affected_location' },
+          { path: 'tests/related.test.ts', reason: 'direct_test' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        validateAutoFixChanges(finding('tests/reviewer-cited.test.ts:12'), directory, 'main', [
+          { path: 'tests/reviewer-cited.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'tests/unrelated.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/basename.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/text-only.test.ts', reason: 'direct_test' },
         ]),
       ).toContain('no valid bounded reason');
       expect(
@@ -3124,6 +3182,226 @@ exit 1
           { path: 'src/undeclared.ts', reason: 'direct_test' },
         ]),
       ).toBe('Issue implementer reported an invalid repository path.');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('bounded-reason termination recovery', () => {
+  it('requires and preserves the exact dirty diff across authorized revalidation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-review-bounded-recovery-'));
+    const trackedPath = join(directory, 'tests', 'e2e', 'debug-ui.spec.ts');
+    const original = 'export const value = 1;\n';
+    const changed = 'export const value = 2;\n';
+    mkdirSync(join(directory, 'tests', 'e2e'), { recursive: true });
+    writeFileSync(trackedPath, original);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
+    execFileSync('git', ['add', '.'], { cwd: directory });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
+      { cwd: directory },
+    );
+    execFileSync('git', ['checkout', '-qb', 'feat/issue-73'], { cwd: directory });
+    writeFileSync(trackedPath, changed);
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: directory,
+      encoding: 'utf8',
+    }).trim();
+    const hash = createHash('sha256');
+    hash.update(
+      execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+        cwd: directory,
+        encoding: 'utf8',
+      }),
+    );
+    hash.update(
+      execFileSync('git', ['diff', '--cached', '--binary', '--no-ext-diff'], {
+        cwd: directory,
+      }),
+    );
+    hash.update(execFileSync('git', ['diff', '--binary', '--no-ext-diff'], { cwd: directory }));
+    hash.update('tests/e2e/debug-ui.spec.ts\0');
+    hash.update(changed);
+    hash.update('\0');
+    const recovery = {
+      recoveryReason: 'AUTO_FIX_BOUNDED_REASON_REJECTED' as const,
+      humanDecision: 'resume' as const,
+      issue: '73',
+      recoveryEvidence: JSON.stringify({
+        schema: 'auto-fix-bounded-reason-rejection-v1',
+        reason:
+          'AUTO_FIX change tests/e2e/debug-ui.spec.ts has no valid bounded reason: direct_test.',
+        rejectedPath: 'tests/e2e/debug-ui.spec.ts',
+        rejectedReason: 'direct_test',
+        targetPaths: ['tests/e2e/debug-ui.spec.ts'],
+        changedPaths: ['tests/e2e/debug-ui.spec.ts'],
+        terminalState: 'BLOCKED',
+        headSha,
+        workingTreeFingerprint: hash.digest('hex'),
+      }),
+    };
+    const statePath = join(
+      directory,
+      execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
+        cwd: directory,
+        encoding: 'utf8',
+      }).trim(),
+    );
+    const approvalPath = join(
+      directory,
+      execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+        cwd: directory,
+        encoding: 'utf8',
+      }).trim(),
+    );
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        entries: [
+          {
+            branch: 'feat/issue-73',
+            base: 'main',
+            legacyReviewInvocations: 0,
+            legacyAutoFixCycles: 0,
+            accountingEpochStart: 'issue-29-accounting-v2',
+            reviewInvocationCount: 7,
+            autoFixCycleCount: 0,
+            generalizedRuleHistory: [],
+            consecutiveRepeatCount: 0,
+            lastFixChangedRepository: false,
+            cycleResults: [],
+            terminationHistory: ['BLOCKED'],
+            terminationReason: 'BLOCKED',
+            terminationEvidence: {
+              recoveryReason: recovery.recoveryReason,
+              recoveryEvidence: recovery.recoveryEvidence,
+            },
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    try {
+      const before = readFileSync(trackedPath, 'utf8');
+      const mismatchedRecovery = {
+        ...recovery,
+        recoveryEvidence: recovery.recoveryEvidence.replace(
+          '"targetPaths":["tests/e2e/debug-ui.spec.ts"]',
+          '"targetPaths":["tests/reviewer-cited.test.ts"]',
+        ),
+      };
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-73',
+          'main',
+          headSha,
+          mismatchedRecovery,
+          directory,
+        ),
+      ).toContain('malformed');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-73',
+          'main',
+          '0000000000000000000000000000000000000000',
+          recovery,
+          directory,
+        ),
+      ).toContain('workspace HEAD');
+      writeFileSync(trackedPath, 'export const value = 3;\n');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-73',
+          'main',
+          headSha,
+          recovery,
+          directory,
+        ),
+      ).toContain('working-tree');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-73',
+          'main',
+          headSha,
+          recovery,
+        ),
+      ).toContain('workspace verification');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/other',
+          'main',
+          headSha,
+          recovery,
+          directory,
+        ),
+      ).toContain('branch');
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
+        'working-tree',
+      );
+      writeFileSync(trackedPath, before);
+      execFileSync('git', ['add', '--', 'tests/e2e/debug-ui.spec.ts'], { cwd: directory });
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
+        'working-tree',
+      );
+      execFileSync('git', ['reset', '-q', 'HEAD', '--', 'tests/e2e/debug-ui.spec.ts'], {
+        cwd: directory,
+      });
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).not.toBeTypeOf(
+        'string',
+      );
+      const resumed = resumeReviewTerminationRecovery(directory, 'main', recovery);
+      expect(resumed).not.toBeTypeOf('string');
+      expect(readFileSync(trackedPath, 'utf8')).toBe(before);
+      if (typeof resumed !== 'string') {
+        expect(resumed).toMatchObject({ reviewEpoch: 2, reviewInvocationCount: 0 });
+        expect(resumed.terminationReason).toBeUndefined();
+        expect(resumed.reviewHistory?.[0]).toMatchObject({
+          terminationReason: 'BLOCKED',
+          recoveryReason: recovery.recoveryReason,
+        });
+      }
+      expect(resumeReviewTerminationRecovery(directory, 'main', recovery)).toMatch(
+        /approval|recovery/i,
+      );
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-73',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: 7,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: false,
+              cycleResults: [],
+              terminationHistory: ['BLOCKED'],
+              terminationReason: 'BLOCKED',
+            },
+          ],
+        }),
+        'utf8',
+      );
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toMatch(
+        /supported terminal state|evidence/i,
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
