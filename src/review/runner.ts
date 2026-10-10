@@ -2476,6 +2476,16 @@ export function authorizeReviewerFailureRecoveryAtPath(
   schemaFingerprint: string,
   workspaceCwd: string,
 ): ReviewResumeApproval | string {
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Reviewer-failure recovery paths must resolve to the canonical Git state files.';
+  }
   const actualHeadSha = readHeadSha(workspaceCwd);
   if (!actualHeadSha || actualHeadSha !== headSha) {
     return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';
@@ -2538,6 +2548,16 @@ export function resumeReviewerFailureRecoveryAtPath(
   schemaFingerprint: string,
   workspaceCwd: string,
 ): ReviewAccounting | string {
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Reviewer-failure recovery paths must resolve to the canonical Git state files.';
+  }
   const actualHeadSha = readHeadSha(workspaceCwd);
   if (!actualHeadSha || actualHeadSha !== headSha) {
     return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';

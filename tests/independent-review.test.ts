@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -68,7 +68,13 @@ import {
 function createReviewerRecoveryWorkspace(
   directory: string,
   validationScript = 'node -e "process.exit(0)"',
-): { cwd: string; headSha: string; schemaFingerprint: string } {
+): {
+  cwd: string;
+  headSha: string;
+  schemaFingerprint: string;
+  statePath: string;
+  approvalPath: string;
+} {
   mkdirSync(join(directory, 'src/review'), { recursive: true });
   copyFileSync(
     join(process.cwd(), 'src/review/review-result.schema.json'),
@@ -101,7 +107,21 @@ function createReviewerRecoveryWorkspace(
   const schemaFingerprint = createHash('sha256')
     .update(readFileSync(join(directory, 'src/review/review-result.schema.json')))
     .digest('hex');
-  return { cwd: directory, headSha, schemaFingerprint };
+  const statePath = resolve(
+    directory,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
+      cwd: directory,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  const approvalPath = resolve(
+    directory,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+      cwd: directory,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  return { cwd: directory, headSha, schemaFingerprint, statePath, approvalPath };
 }
 
 describe('independent review gate contract', () => {
@@ -1678,10 +1698,8 @@ describe('independent review scope context', () => {
 describe('review cycle state', () => {
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
-    const statePath = join(directory, 'state.json');
-    const approvalPath = join(directory, 'approval.json');
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
-    const { cwd, headSha, schemaFingerprint } = reviewerWorkspace;
+    const { cwd, headSha, schemaFingerprint, statePath, approvalPath } = reviewerWorkspace;
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1770,14 +1788,12 @@ describe('review cycle state', () => {
 
   it('fails closed for missing approval, mismatched state, schema, head, and prerequisites', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
-    const statePath = join(directory, 'state.json');
-    const approvalPath = join(directory, 'approval.json');
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const failingWorkspace = createReviewerRecoveryWorkspace(
       join(directory, 'failing-workspace'),
       'node -e "process.exit(1)"',
     );
-    const { cwd, headSha, schemaFingerprint } = reviewerWorkspace;
+    const { cwd, headSha, schemaFingerprint, statePath, approvalPath } = reviewerWorkspace;
     const state = {
       branch: 'feature/review',
       base: 'main',
@@ -1830,10 +1846,11 @@ describe('review cycle state', () => {
           cwd,
         ),
       ).toContain('fingerprint changed');
+      writeFileSync(failingWorkspace.statePath, JSON.stringify(state), 'utf8');
       expect(
         authorizeReviewerFailureRecoveryAtPath(
-          statePath,
-          approvalPath,
+          failingWorkspace.statePath,
+          failingWorkspace.approvalPath,
           'feature/review',
           'main',
           failingWorkspace.headSha,
@@ -1891,14 +1908,13 @@ describe('review cycle state', () => {
 
   it('recovers only known partial transactions and rejects external or semantic changes', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-transaction-'));
-    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const fingerprint = (raw: string) => createHash('sha256').update(raw).digest('hex');
     const transactionPath = (statePath: string) =>
       `${statePath}.reviewer-failure-recovery-transaction`;
 
     const createTransactionFixture = (name: string) => {
-      const statePath = join(directory, `${name}-state.json`);
-      const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+      const workspace = createReviewerRecoveryWorkspace(join(directory, `${name}-workspace`));
+      const { statePath, approvalPath } = workspace;
       const preState = {
         entries: [
           {
@@ -1981,6 +1997,7 @@ describe('review cycle state', () => {
       return {
         statePath,
         approvalPath,
+        workspace,
         preStateRaw,
         postStateRaw,
         postApprovalRaw,
