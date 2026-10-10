@@ -3186,6 +3186,12 @@ describe('bounded-reason termination recovery', () => {
       encoding: 'utf8',
     }).trim();
     const hash = createHash('sha256');
+    hash.update(
+      execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+        cwd: directory,
+        encoding: 'utf8',
+      }),
+    );
     hash.update('src/tracked.ts\0');
     hash.update(changed);
     hash.update('\0');
@@ -3304,6 +3310,11 @@ describe('bounded-reason termination recovery', () => {
         'working-tree',
       );
       writeFileSync(trackedPath, before);
+      execFileSync('git', ['add', '--', 'src/tracked.ts'], { cwd: directory });
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
+        'working-tree',
+      );
+      execFileSync('git', ['reset', '-q', 'HEAD', '--', 'src/tracked.ts'], { cwd: directory });
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).not.toBeTypeOf(
         'string',
       );

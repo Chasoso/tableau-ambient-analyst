@@ -1560,6 +1560,12 @@ function isSafeEvidencePath(path: string): boolean {
 
 function workingTreeFingerprint(cwd: string, paths: string[]): string {
   const hash = createHash('sha256');
+  hash.update(
+    execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd,
+      encoding: 'utf8',
+    }),
+  );
   for (const path of [...paths].sort()) {
     hash.update(`${path}\0`);
     const absolutePath = resolve(cwd, path);
@@ -2088,13 +2094,17 @@ function workingTreePaths(cwd: string): string[] {
     cwd,
     encoding: 'utf8',
   });
+  const staged = execFileSync('git', ['diff', '--cached', '--name-only'], {
+    cwd,
+    encoding: 'utf8',
+  });
   const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
     cwd,
     encoding: 'utf8',
   });
   return [
     ...new Set(
-      `${tracked}\n${untracked}`
+      `${tracked}\n${staged}\n${untracked}`
         .split('\n')
         .map((path) => path.trim())
         .filter(Boolean),
