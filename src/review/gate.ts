@@ -121,6 +121,7 @@ export type ReviewResumeApproval = {
   recoveryEvidence?: string | undefined;
   schemaFingerprint?: string | undefined;
   failedReviewInvocation?: number | undefined;
+  failedReviewKind?: ReviewExecutionFailureKind | undefined;
   humanDecision?: ReviewRecoveryHumanDecision | ReviewerFailureRecoveryHumanDecision | undefined;
   issue?: string | undefined;
 };
@@ -155,6 +156,10 @@ export type ReviewAccounting = {
     reviewInvocation: number;
     kind: ReviewExecutionFailureKind;
     diagnostic: string;
+    evidenceVersion?: 'reviewer-failure-v1' | undefined;
+    reviewEpoch?: number | undefined;
+    headSha?: string | undefined;
+    schemaFingerprint?: string | undefined;
   }>;
   reviewerFailureRecovery?: {
     approvalId: string;
@@ -162,6 +167,7 @@ export type ReviewAccounting = {
     authorizationSource: 'human-explicit';
     reviewEpoch: number;
     failedReviewInvocation: number;
+    failureKind?: ReviewExecutionFailureKind | undefined;
     headSha: string;
     schemaFingerprint: string;
   };
@@ -200,8 +206,8 @@ const isReviewFinding = (value: unknown): value is ReviewFinding => {
   );
 };
 
-const isFindingArray = (value: unknown): value is ReviewFindingValue[] =>
-  Array.isArray(value) && value.every((item) => typeof item === 'string' || isReviewFinding(item));
+const isFindingArray = (value: unknown): value is ReviewFinding[] =>
+  Array.isArray(value) && value.every((item) => isReviewFinding(item));
 
 const isReviewResultName = (value: unknown): value is ReviewResultName =>
   typeof value === 'string' && reviewResults.includes(value as ReviewResultName);
@@ -245,6 +251,10 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('PASS cannot include blocking findings or escalation.');
   }
 
+  if (result === 'CHANGES_REQUIRED' && blockingFindings.length === 0) {
+    return malformedResult('CHANGES_REQUIRED must include at least one blocking finding.');
+  }
+
   if (
     blockingFindings.some(
       (finding) => typeof finding !== 'string' && finding.severity !== 'blocking',
@@ -270,6 +280,10 @@ export function parseReviewResult(raw: string): ReviewGateResult {
 
   if (hasHumanFinding && !escalationRequired) {
     return malformedResult('Human decision and blocked findings must require escalation.');
+  }
+
+  if (escalationRequired && !hasHumanFinding && result !== 'HUMAN_DECISION_REQUIRED') {
+    return malformedResult('Escalation requires a human or blocked finding.');
   }
 
   return {

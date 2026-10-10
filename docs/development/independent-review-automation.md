@@ -359,7 +359,14 @@ and the SHA-256 fingerprint of the reviewer Schema. The dedicated recovery
 command consumes that approval once, clears only the terminal stop, preserves
 the failure history and invocation count, and leaves the next review to reserve
 the next invocation number. It never refunds or resets accounting, and a fresh
-Independent Review remains mandatory. The commands are:
+Independent Review remains mandatory. The recovery target is limited to a new
+durable `reviewer-failure-v1` evidence record containing the failed invocation,
+failure kind, review epoch, exact HEAD, and Schema fingerprint. States with
+`pendingReview`, incomplete failure evidence, legacy accounting shapes, or
+inferred history are not recoverable; they remain fail-closed for explicit
+human handling. Existing consumed approval and recovery records remain readable
+for audit compatibility but are never reused to authorize another review. The
+commands are:
 
 ```bash
 npm run build

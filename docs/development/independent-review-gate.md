@@ -302,9 +302,10 @@ current Issue.
 
 The reviewer must return JSON matching
 `src/review/review-result.schema.json`. The independent reviewer wire format
-is structured-only. The TypeScript parser also accepts legacy string findings
-when called directly by older local callers, but those strings are not valid
-output for the reviewer CLI schema. New reviewer findings must use this shape:
+is structured-only, and the semantic parser rejects legacy string findings at
+the reviewer boundary. Any historical compatibility reader must remain a
+separate read-only path and must not be used to accept new reviewer output.
+New reviewer findings must use this shape:
 
 ```json
 {

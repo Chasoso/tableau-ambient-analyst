@@ -12,6 +12,7 @@ import {
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
+import { hasAuthorizationResumeConflict } from './cli-policy.js';
 
 const argumentsByName = new Map<string, string>();
 const rawArguments = process.argv.slice(2);
@@ -43,15 +44,7 @@ const authorizeAfterReviewerFailure = rawArguments.includes(
   '--authorize-reviewer-failure-recovery',
 );
 const existingPullRequest = argumentsByName.get('update-pr');
-if (
-  (resumeAfterLimit && authorizeAfterLimit) ||
-  (resumeAfterRecovery && authorizeAfterRecovery) ||
-  (resumeAfterReviewerFailure && authorizeAfterReviewerFailure) ||
-  (authorizeAfterReviewerFailure &&
-    (resumeAfterLimit || authorizeAfterLimit || resumeAfterRecovery || authorizeAfterRecovery)) ||
-  (resumeAfterReviewerFailure &&
-    (resumeAfterLimit || authorizeAfterLimit || resumeAfterRecovery || authorizeAfterRecovery))
-) {
+if (hasAuthorizationResumeConflict(rawArguments)) {
   console.error('Authorization and resume are separate commands.');
   process.exitCode = 2;
 } else if (authorizeAfterLimit) {

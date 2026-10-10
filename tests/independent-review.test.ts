@@ -64,6 +64,7 @@ import {
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
 } from '../src/review/runner.js';
+import { hasAuthorizationResumeConflict } from '../src/review/cli-policy.js';
 
 function createReviewerRecoveryWorkspace(
   directory: string,
@@ -189,6 +190,21 @@ const structuredPass = {
   maintainability: 'NO_DRIFT',
 };
 
+function wireFinding(
+  severity: 'blocking' | 'non-blocking',
+  classification: 'AUTO_FIX' | 'HUMAN_DECISION_REQUIRED' | 'BLOCKED',
+  finding: string,
+) {
+  return {
+    severity,
+    classification,
+    finding,
+    generalized_rule: 'test reviewer contract',
+    affected_locations: ['tests/independent-review.test.ts'],
+    recommended_fix: 'Apply the deterministic contract correction.',
+  };
+}
+
 const structuredAutoFix = {
   result: 'CHANGES_REQUIRED',
   blockingFindings: [
@@ -207,6 +223,24 @@ const structuredAutoFix = {
 };
 
 describe('independent review gate contract', () => {
+  it.each([
+    [
+      'same reviewer-failure modes',
+      ['--authorize-reviewer-failure-recovery', '--resume-reviewer-failure-recovery'],
+      true,
+    ],
+    [
+      'cross-family authorization and resume modes',
+      ['--authorize-reviewer-failure-recovery', '--resume-after-limit'],
+      true,
+    ],
+    ['authorization only', ['--authorize-reviewer-failure-recovery'], false],
+    ['resume only', ['--resume-reviewer-failure-recovery'], false],
+    ['unrelated flags', ['--review-only', '--issue', '76'], false],
+  ])('rejects conflicting CLI modes: %s', (_label, args, expected) => {
+    expect(hasAuthorizationResumeConflict(args)).toBe(expected);
+  });
+
   it('keeps the reviewer schema within the offline Structured Outputs subset', () => {
     const schema = JSON.parse(
       readFileSync(join(process.cwd(), 'src/review/review-result.schema.json'), 'utf8'),
@@ -473,7 +507,7 @@ describe('independent review gate contract', () => {
       JSON.stringify({
         result: 'PASS',
         blockingFindings: [],
-        nonBlockingFindings: ['Optional cleanup'],
+        nonBlockingFindings: [wireFinding('non-blocking', 'AUTO_FIX', 'Optional cleanup')],
         escalationRequired: false,
         maintainability: 'NO_DRIFT',
       }),
@@ -503,7 +537,7 @@ describe('independent review gate contract', () => {
     const result = parseReviewResult(
       JSON.stringify({
         result: 'CHANGES_REQUIRED',
-        blockingFindings: ['Acceptance criterion is missing'],
+        blockingFindings: [wireFinding('blocking', 'AUTO_FIX', 'Acceptance criterion is missing')],
         nonBlockingFindings: [],
         escalationRequired: false,
         maintainability: 'NO_DRIFT',
@@ -515,11 +549,52 @@ describe('independent review gate contract', () => {
     expect(canOpenPullRequest(true, result)).toBe(false);
   });
 
+  it.each([
+    [
+      'legacy string finding',
+      {
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: ['legacy finding'],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+    [
+      'empty CHANGES_REQUIRED',
+      {
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+    [
+      'escalation without human finding',
+      {
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [wireFinding('blocking', 'AUTO_FIX', 'deterministic finding')],
+        nonBlockingFindings: [],
+        escalationRequired: true,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+  ])('fails closed for reviewer semantic contract violation: %s', (_label, value) => {
+    expect(parseReviewResult(JSON.stringify(value)).executionStatus).toBe('FAILED');
+  });
+
   it('stops on human escalation, invocation failure, and malformed output', () => {
     const escalation = parseReviewResult(
       JSON.stringify({
         result: 'HUMAN_DECISION_REQUIRED',
-        blockingFindings: ['Architecture choice needs human confirmation'],
+        blockingFindings: [
+          wireFinding(
+            'blocking',
+            'HUMAN_DECISION_REQUIRED',
+            'Architecture choice needs human confirmation',
+          ),
+        ],
         nonBlockingFindings: [],
         escalationRequired: true,
         maintainability: 'NO_DRIFT',
@@ -542,7 +617,7 @@ describe('independent review gate contract', () => {
     const result = parseReviewResult(
       JSON.stringify({
         result: 'CHANGES_REQUIRED',
-        blockingFindings: ['Finding'],
+        blockingFindings: [wireFinding('blocking', 'AUTO_FIX', 'Finding')],
         nonBlockingFindings: [],
         escalationRequired: false,
         maintainability: 'NO_DRIFT',
@@ -583,7 +658,7 @@ describe('independent review gate contract', () => {
     const result = parseReviewResult(
       JSON.stringify({
         result: 'PASS',
-        blockingFindings: ['Unexpected finding'],
+        blockingFindings: [wireFinding('blocking', 'AUTO_FIX', 'Unexpected finding')],
         nonBlockingFindings: [],
         escalationRequired: false,
         maintainability: 'NO_DRIFT',
@@ -1163,7 +1238,9 @@ describe('independent review runner control flow', () => {
           parseReviewResult(
             JSON.stringify({
               result: 'CHANGES_REQUIRED',
-              blockingFindings: ['Missing required acceptance criterion'],
+              blockingFindings: [
+                wireFinding('blocking', 'AUTO_FIX', 'Missing required acceptance criterion'),
+              ],
               nonBlockingFindings: [],
               escalationRequired: false,
               maintainability: 'NO_DRIFT',
@@ -1940,7 +2017,15 @@ describe('review cycle state', () => {
         cycleResults: [],
         terminationHistory: ['REVIEWER_FAILURE'],
         reviewExecutionFailures: [
-          { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+          {
+            reviewInvocation: 1,
+            kind: 'NONZERO_EXIT',
+            diagnostic: 'redacted',
+            evidenceVersion: 'reviewer-failure-v1',
+            reviewEpoch: 1,
+            headSha,
+            schemaFingerprint,
+          },
         ],
         terminationReason: 'REVIEWER_FAILURE',
       }),
@@ -1995,7 +2080,15 @@ describe('review cycle state', () => {
         },
       });
       expect(recovered.reviewExecutionFailures).toEqual([
-        { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'redacted',
+          evidenceVersion: 'reviewer-failure-v1',
+          reviewEpoch: 1,
+          headSha,
+          schemaFingerprint,
+        },
       ]);
       expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0]).toMatchObject({
         consumed: true,
@@ -2005,6 +2098,46 @@ describe('review cycle state', () => {
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewInvocationCount: 2,
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not recover a terminal failure without durable reviewer evidence', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-legacy-reviewer-failure-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const legacyState = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      reviewExecutionFailures: [
+        { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'legacy evidence' },
+      ],
+      terminationReason: 'REVIEWER_FAILURE',
+    };
+    writeFileSync(workspace.statePath, JSON.stringify(legacyState), 'utf8');
+
+    try {
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feature/review',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          workspace.cwd,
+        ),
+      ).toContain('matching terminal failure state');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -2032,7 +2165,15 @@ describe('review cycle state', () => {
       cycleResults: [],
       terminationHistory: ['REVIEWER_FAILURE'],
       reviewExecutionFailures: [
-        { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'redacted',
+          evidenceVersion: 'reviewer-failure-v1',
+          reviewEpoch: 1,
+          headSha,
+          schemaFingerprint,
+        },
       ],
       terminationReason: 'REVIEWER_FAILURE',
     };
@@ -2188,7 +2329,15 @@ describe('review cycle state', () => {
             cycleResults: [],
             terminationHistory: ['REVIEWER_FAILURE'],
             reviewExecutionFailures: [
-              { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+              {
+                reviewInvocation: 1,
+                kind: 'NONZERO_EXIT',
+                diagnostic: 'redacted',
+                evidenceVersion: 'reviewer-failure-v1',
+                reviewEpoch: 1,
+                headSha: workspace.headSha,
+                schemaFingerprint: workspace.schemaFingerprint,
+              },
             ],
             terminationReason: 'REVIEWER_FAILURE',
           },
@@ -2211,6 +2360,7 @@ describe('review cycle state', () => {
         originalTerminationReason: 'REVIEWER_FAILURE',
         schemaFingerprint: workspace.schemaFingerprint,
         failedReviewInvocation: 1,
+        failedReviewKind: 'NONZERO_EXIT',
         humanDecision: 'retry-review',
       };
       const postState = {
@@ -2224,6 +2374,7 @@ describe('review cycle state', () => {
               authorizationSource: 'human-explicit',
               reviewEpoch: 1,
               failedReviewInvocation: 1,
+              failureKind: 'NONZERO_EXIT',
               headSha: workspace.headSha,
               schemaFingerprint: workspace.schemaFingerprint,
             },

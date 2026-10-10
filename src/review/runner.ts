@@ -92,6 +92,7 @@ const reviewerSchemaUnsupportedKeywords = new Set([
   'const',
 ]);
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
+const reviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -2447,22 +2448,36 @@ export function reserveReviewCycleAtPath(
 
 type ReviewerFailureRecoveryPrerequisiteCheck = (cwd: string) => string | undefined;
 
-function reviewerFailureState(
-  accounting: ReviewAccounting,
-): { failedReviewInvocation: number; failureKind: ReviewExecutionFailureKind } | string {
+function reviewerFailureState(accounting: ReviewAccounting):
+  | {
+      failedReviewInvocation: number;
+      failureKind: ReviewExecutionFailureKind;
+      headSha: string;
+      schemaFingerprint: string;
+      reviewEpoch: number;
+    }
+  | string {
   const failure = accounting.reviewExecutionFailures?.at(-1);
+  const reviewEpoch = accounting.reviewEpoch ?? 1;
   if (
     accounting.terminationReason !== 'REVIEWER_FAILURE' ||
     accounting.terminationHistory?.at(-1) !== 'REVIEWER_FAILURE' ||
     accounting.pendingReview !== undefined ||
     !failure ||
-    failure.reviewInvocation !== accounting.reviewInvocationCount
+    failure.reviewInvocation !== accounting.reviewInvocationCount ||
+    failure.evidenceVersion !== reviewerFailureEvidenceVersion ||
+    failure.reviewEpoch !== reviewEpoch ||
+    typeof failure.headSha !== 'string' ||
+    typeof failure.schemaFingerprint !== 'string'
   ) {
     return 'Reviewer-failure recovery requires a matching terminal failure state.';
   }
   return {
     failedReviewInvocation: failure.reviewInvocation,
     failureKind: failure.kind,
+    headSha: failure.headSha,
+    schemaFingerprint: failure.schemaFingerprint,
+    reviewEpoch,
   };
 }
 
@@ -2517,6 +2532,13 @@ export function authorizeReviewerFailureRecoveryAtPath(
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       const failureState = reviewerFailureState(accounting);
       if (typeof failureState === 'string') return failureState;
+      if (
+        failureState.headSha !== headSha ||
+        failureState.schemaFingerprint !== schemaFingerprint ||
+        failureState.reviewEpoch !== (accounting.reviewEpoch ?? 1)
+      ) {
+        return 'Reviewer-failure evidence does not match the requested recovery scope.';
+      }
       const approvals = readReviewApprovalsAtPath(approvalPath);
       if (
         approvals.some(
@@ -2544,6 +2566,7 @@ export function authorizeReviewerFailureRecoveryAtPath(
         originalTerminationReason: 'REVIEWER_FAILURE',
         schemaFingerprint,
         failedReviewInvocation: failureState.failedReviewInvocation,
+        failedReviewKind: failureState.failureKind,
         humanDecision: 'retry-review',
       };
       writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
@@ -2591,6 +2614,13 @@ export function resumeReviewerFailureRecoveryAtPath(
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       const failureState = reviewerFailureState(accounting);
       if (typeof failureState === 'string') return failureState;
+      if (
+        failureState.headSha !== headSha ||
+        failureState.schemaFingerprint !== schemaFingerprint ||
+        failureState.reviewEpoch !== (accounting.reviewEpoch ?? 1)
+      ) {
+        return 'Reviewer-failure evidence does not match the requested recovery scope.';
+      }
       const approvals = readReviewApprovalsAtPath(approvalPath);
       const approval = approvals.find(
         (candidate) =>
@@ -2601,6 +2631,7 @@ export function resumeReviewerFailureRecoveryAtPath(
           candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
           candidate.exhaustedReviewInvocationCount === accounting.reviewInvocationCount &&
           candidate.failedReviewInvocation === failureState.failedReviewInvocation &&
+          candidate.failedReviewKind === failureState.failureKind &&
           candidate.originalTerminationReason === 'REVIEWER_FAILURE' &&
           candidate.schemaFingerprint === schemaFingerprint &&
           candidate.authorizationSource === 'human-explicit' &&
@@ -2621,6 +2652,7 @@ export function resumeReviewerFailureRecoveryAtPath(
           authorizationSource: 'human-explicit',
           reviewEpoch: accounting.reviewEpoch ?? 1,
           failedReviewInvocation: failureState.failedReviewInvocation,
+          failureKind: failureState.failureKind,
           headSha,
           schemaFingerprint,
         },
@@ -3510,7 +3542,14 @@ function isReviewExecutionFailure(
   const failure = value as Record<string, unknown>;
   return (
     Object.keys(failure).every(
-      (key) => key === 'reviewInvocation' || key === 'kind' || key === 'diagnostic',
+      (key) =>
+        key === 'reviewInvocation' ||
+        key === 'kind' ||
+        key === 'diagnostic' ||
+        key === 'evidenceVersion' ||
+        key === 'reviewEpoch' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
     ) &&
     Number.isInteger(failure.reviewInvocation) &&
     (failure.reviewInvocation as number) >= 1 &&
@@ -3519,7 +3558,18 @@ function isReviewExecutionFailure(
     reviewExecutionFailureKinds.includes(failure.kind as ReviewExecutionFailureKind) &&
     typeof failure.diagnostic === 'string' &&
     failure.diagnostic.length > 0 &&
-    failure.diagnostic.length <= 500
+    failure.diagnostic.length <= 500 &&
+    ((failure.evidenceVersion === undefined &&
+      failure.reviewEpoch === undefined &&
+      failure.headSha === undefined &&
+      failure.schemaFingerprint === undefined) ||
+      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+        Number.isInteger(failure.reviewEpoch) &&
+        (failure.reviewEpoch as number) >= 1 &&
+        typeof failure.headSha === 'string' &&
+        /^[a-f0-9]{40}$/.test(failure.headSha) &&
+        typeof failure.schemaFingerprint === 'string' &&
+        /^[a-f0-9]{64}$/.test(failure.schemaFingerprint)))
   );
 }
 
@@ -4028,6 +4078,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'recoveryEvidence',
     'schemaFingerprint',
     'failedReviewInvocation',
+    'failedReviewKind',
     'humanDecision',
     'issue',
   ]);
@@ -4065,6 +4116,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.recoveryEvidence === undefined &&
       approval.schemaFingerprint === undefined &&
       approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
       approval.humanDecision === undefined
     );
   }
@@ -4078,6 +4130,11 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       Number.isInteger(approval.failedReviewInvocation) &&
       (approval.failedReviewInvocation as number) >= 1 &&
       (approval.failedReviewInvocation as number) <= maxReviewInvocations &&
+      (approval.failedReviewKind === undefined ||
+        (typeof approval.failedReviewKind === 'string' &&
+          reviewExecutionFailureKinds.includes(
+            approval.failedReviewKind as ReviewExecutionFailureKind,
+          ))) &&
       typeof approval.humanDecision === 'string' &&
       reviewerFailureRecoveryHumanDecisions.includes(
         approval.humanDecision as (typeof reviewerFailureRecoveryHumanDecisions)[number],
@@ -4117,6 +4174,7 @@ function isReviewerFailureRecovery(value: unknown): boolean {
         key === 'authorizationSource' ||
         key === 'reviewEpoch' ||
         key === 'failedReviewInvocation' ||
+        key === 'failureKind' ||
         key === 'headSha' ||
         key === 'schemaFingerprint',
     ) &&
@@ -4128,6 +4186,8 @@ function isReviewerFailureRecovery(value: unknown): boolean {
     Number.isInteger(recovery.failedReviewInvocation) &&
     (recovery.failedReviewInvocation as number) >= 1 &&
     (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
+    (recovery.failureKind === undefined ||
+      reviewExecutionFailureKinds.includes(recovery.failureKind as ReviewExecutionFailureKind)) &&
     typeof recovery.headSha === 'string' &&
     typeof recovery.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
@@ -4145,7 +4205,13 @@ function isReviewerFailureRecoveryConsistent(state: Record<string, unknown>): bo
     failures.some(
       (failure) =>
         isReviewExecutionFailure(failure) &&
-        failure.reviewInvocation === recovery.failedReviewInvocation,
+        failure.reviewInvocation === recovery.failedReviewInvocation &&
+        (recovery.failureKind === undefined || failure.kind === recovery.failureKind) &&
+        (recovery.failureKind === undefined ||
+          (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+            failure.reviewEpoch === recovery.reviewEpoch &&
+            failure.headSha === recovery.headSha &&
+            failure.schemaFingerprint === recovery.schemaFingerprint)),
     ) &&
     recovery.reviewEpoch === (state.reviewEpoch ?? 1) &&
     (recovery.failedReviewInvocation as number) <= (state.reviewInvocationCount as number)
@@ -4551,7 +4617,10 @@ function validateReviewerFailureRecoveryTransactionSemantics(
   );
   const recovery = entry?.accounting.reviewerFailureRecovery;
   const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
-  if (!entry || !recovery || !approval) {
+  const failure = entry?.accounting.reviewExecutionFailures?.find(
+    (candidate) => candidate.reviewInvocation === recovery?.failedReviewInvocation,
+  );
+  if (!entry || !recovery || !approval || !failure) {
     throw new Error(
       'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
     );
@@ -4566,6 +4635,7 @@ function validateReviewerFailureRecoveryTransactionSemantics(
     approval.reviewEpoch !== recovery.reviewEpoch ||
     approval.exhaustedReviewInvocationCount !== entry.accounting.reviewInvocationCount ||
     approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+    approval.failedReviewKind !== recovery.failureKind ||
     approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
     approval.headSha !== recovery.headSha ||
     approval.schemaFingerprint !== recovery.schemaFingerprint ||
@@ -4577,7 +4647,12 @@ function validateReviewerFailureRecoveryTransactionSemantics(
     (entry.accounting.reviewEpoch ?? 1) !== recovery.reviewEpoch ||
     entry.accounting.reviewExecutionFailures?.every(
       (failure) => failure.reviewInvocation !== recovery.failedReviewInvocation,
-    )
+    ) ||
+    failure.evidenceVersion !== reviewerFailureEvidenceVersion ||
+    failure.reviewEpoch !== recovery.reviewEpoch ||
+    failure.kind !== recovery.failureKind ||
+    failure.headSha !== recovery.headSha ||
+    failure.schemaFingerprint !== recovery.schemaFingerprint
   ) {
     throw new Error(
       'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
@@ -4759,10 +4834,19 @@ function recordReviewFailureAccounting(
       throw new Error('Review accounting reservation is missing; human recovery is required.');
     }
     const kind: ReviewExecutionFailureKind = review.executionFailureKind ?? 'UNCERTAIN';
+    const headSha = readHeadSha(cwd);
+    const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+    if (!headSha || !schemaFingerprint) {
+      throw new Error('Reviewer failure evidence is incomplete; human recovery is required.');
+    }
     const failure = {
       reviewInvocation,
       kind,
       diagnostic: `Reviewer execution failed: ${kind}.`,
+      evidenceVersion: reviewerFailureEvidenceVersion,
+      reviewEpoch: accounting.reviewEpoch ?? 1,
+      headSha,
+      schemaFingerprint,
     };
     return {
       ...accounting,
