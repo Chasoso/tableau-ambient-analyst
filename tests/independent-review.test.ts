@@ -62,6 +62,41 @@ import {
 } from '../src/review/runner.js';
 
 describe('independent review gate contract', () => {
+  it('keeps the reviewer schema within the offline Structured Outputs subset', () => {
+    const schema = JSON.parse(
+      readFileSync(join(process.cwd(), 'src/review/review-result.schema.json'), 'utf8'),
+    ) as unknown;
+    const unsupportedKeywords = new Set(['allOf', 'if', 'then', 'contains', 'const']);
+    const foundKeywords = new Set<string>();
+
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (typeof value !== 'object' || value === null) return;
+      for (const [key, child] of Object.entries(value)) {
+        if (unsupportedKeywords.has(key)) foundKeywords.add(key);
+        visit(child);
+      }
+    };
+
+    visit(schema);
+
+    expect(foundKeywords).toEqual(new Set());
+    expect(schema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'result',
+        'blockingFindings',
+        'nonBlockingFindings',
+        'escalationRequired',
+        'maintainability',
+      ],
+    });
+  });
+
   it('resolves only an open pull request with an exact head', () => {
     expect(
       resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
