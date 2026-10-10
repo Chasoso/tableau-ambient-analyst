@@ -132,8 +132,25 @@ npm test
 npm run build
 ```
 
-There is not yet an `npm start` application or live integration command. The
-baseline is the runtime/toolchain foundation and deterministic validation.
+The standalone deterministic debug console can be started on macOS or Windows
+with Node.js 24:
+
+```bash
+npm ci
+npm run debug:ui
+```
+
+Open the printed `http://127.0.0.1:4173` URL. Select a fixture scenario and
+choose `Replay` to inspect transcript, trigger, Analysis Contract questions,
+progress, evidence/provenance, verifier state, intervention, errors, and the
+audit timeline. The console uses a fixture-driven mock client only: it does
+not require Tableau, credentials, an LLM, or a live network service. Set
+`PORT=4300` (or `$env:PORT = 4300` in PowerShell) to use another local port.
+
+The browser-facing model is host-independent and keeps the future Tableau
+adapter behind the small `AnalysisClient` boundary. The `INTERVENE` fixture
+shows a deterministic `!` badge; it records a mock debug event only and never
+invokes Tableau APIs or mutates a dashboard.
 
 ## Validation and CI
 

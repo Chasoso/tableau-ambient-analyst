@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ambient Analyst · Debug Console</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #10151c; color: #e8edf2; }
+      body { margin: 0; } main { max-width: 1100px; margin: auto; padding: 24px; }
+      header { display: flex; gap: 16px; align-items: end; justify-content: space-between; flex-wrap: wrap; }
+      h1 { margin: 0 0 6px; font-size: clamp(1.5rem, 4vw, 2.2rem); } h2 { font-size: 1rem; margin-top: 0; color: #9ed8ff; }
+      .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } select, button { border: 1px solid #49657a; border-radius: 6px; background: #182431; color: inherit; padding: 9px 12px; }
+      button { cursor: pointer; } button:hover { border-color: #8dd2ff; } button:disabled { opacity: .6; cursor: wait; }
+      #status { font-weight: 700; letter-spacing: .08em; } #status[data-status="completed"] { color: #70e1a1; } #status[data-status="failed"] { color: #ff8c8c; } #status[data-status="intervene"] { color: #ffd166; }
+      #content { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 20px; }
+      .panel { background: #18212b; border: 1px solid #2b3e4e; border-radius: 10px; padding: 16px; min-width: 0; } .panel p { line-height: 1.5; }
+      ul, ol { margin: 0; padding-left: 20px; } li { margin: 7px 0; } small { display: block; color: #9aaabd; margin-top: 3px; }
+      .stages li { border-left: 3px solid #506273; padding: 5px 0 5px 10px; } .stages li[data-status="complete"] { border-color: #70e1a1; } .stages li[data-status="failed"] { border-color: #ff8c8c; }
+      .intervention-badge { margin-top: 12px; border-color: #e9b949; color: #ffd166; font-weight: 700; } .error { grid-column: 1 / -1; color: #ffaaaa; border: 1px solid #a64d4d; padding: 12px; border-radius: 6px; }
+      @media (max-width: 600px) { main { padding: 14px; } header { align-items: start; flex-direction: column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><h1>Ambient Analyst Debug Console</h1><div>Deterministic local replay · no Tableau APIs or live network calls</div></div>
+        <div class="controls"><label for="scenario">Scenario</label><select id="scenario"></select><button id="run" type="button">Replay</button><span id="status" data-status="idle">IDLE</span></div>
+      </header>
+      <div id="content" aria-live="polite"></div>
+    </main>
+    <script type="module" src="/debug-ui/browser.js"></script>
+  </body>
+</html>
