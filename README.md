@@ -121,6 +121,26 @@ Run the default local validation path:
 npm run validate
 ```
 
+Run the standalone UI browser E2E gate separately after installing the pinned
+Playwright Chromium binary:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+The E2E command starts the built-in localhost server through Playwright's
+`webServer` configuration and covers real Chromium rendering, replay, the
+mock intervention badge, negative/error fixtures, and repeated scenario
+runs. It uses no Tableau, credentials, LLM, MCP service, or remote API. On a
+failure, Playwright keeps traces/screenshots and the HTML report under
+`test-results/` and `playwright-report/`; do not commit those directories.
+
+The normal `npm run validate` remains local/no-network and does not download
+browser binaries. CI provisions Chromium in a separate `e2e` job and runs this
+same command as an additional required verification alongside `validation`
+and `secret-scan`.
+
 This covers formatting, linting, type checking, deterministic tests, and the
 build. Individual checks are also available:
 
