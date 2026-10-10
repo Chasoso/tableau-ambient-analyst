@@ -142,6 +142,12 @@ browser binaries. CI provisions Chromium in the existing mandatory
 failure fails that required job. `secret-scan` remains a separate required
 check.
 
+Validation reports must identify the browser and OS actually exercised. The
+repository gate covers Ubuntu + Chromium in CI; macOS and Windows are local
+setup targets but are unverified unless explicitly run and reported. Firefox,
+Safari, Tableau Desktop, and real Tableau Extension APIs are not covered by
+this Playwright suite.
+
 This covers formatting, linting, type checking, deterministic tests, and the
 build. Individual checks are also available:
 
@@ -175,10 +181,11 @@ invokes Tableau APIs or mutates a dashboard.
 
 ## Validation and CI
 
-GitHub Actions installs with `npm ci`, runs `npm run validate`, and runs
-Gitleaks. The `validation` and `secret-scan` jobs are required for `main`.
-Baseline CI does not call live LLM, MCP, Tableau, cloud, database, tunnel, or
-paid services, and it requires no application credentials.
+GitHub Actions installs with `npm ci`, runs `npm run validate`, provisions
+Chromium, runs `npm run test:e2e`, and runs Gitleaks. The `validation` and
+`secret-scan` jobs are required for `main`. CI does not call live LLM, MCP,
+Tableau, cloud, database, tunnel, or paid services, and it requires no
+application credentials.
 
 See the [validation policy](docs/development/validation-policy.md) for the
 validation layers and evidence rules.

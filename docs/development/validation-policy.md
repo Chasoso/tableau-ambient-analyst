@@ -38,14 +38,14 @@ availability. The eventual runtime may map them to commands such as:
 No coverage threshold or CI job is selected here. The runtime bootstrap maps the
 currently available checks as follows:
 
-| Category | Local command |
-| --- | --- |
-| formatter check | `npm run format:check` |
-| lint | `npm run lint` |
-| typecheck | `npm run typecheck` |
-| deterministic unit tests | `npm test` |
-| deterministic local build | `npm run build` |
-| complete Layer 1 validation | `npm run validate` |
+| Category                    | Local command          |
+| --------------------------- | ---------------------- |
+| formatter check             | `npm run format:check` |
+| lint                        | `npm run lint`         |
+| typecheck                   | `npm run typecheck`    |
+| deterministic unit tests    | `npm test`             |
+| deterministic local build   | `npm run build`        |
+| complete Layer 1 validation | `npm run validate`     |
 
 `git diff --check` remains a repository review check. Secret scanning is not
 mapped here because its intended primary scanner is deferred to Issue #13.
@@ -98,9 +98,20 @@ low-cost. Future CI should center on this same path so that local evidence and
 CI evidence have the same meaning.
 
 The current baseline maps Layer 1 local validation to `npm run validate`. The
-baseline CI runs `npm ci` followed by the same `npm run validate`, and runs
-Gitleaks as the repository's primary secret-scan gate. Neither path performs
-live LLM, MCP, Tableau, cloud, database, tunnel, or paid integration calls.
+required CI `validation` job runs `npm ci`, `npm run validate`, then provisions
+Playwright Chromium and runs `npm run test:e2e`; Gitleaks remains the separate
+`secret-scan` gate. Playwright browser provisioning may access its package/CDN
+resources in CI, but the E2E test itself uses only the local fixture server and
+does not call live LLM, MCP, Tableau, cloud, database, tunnel, or paid
+integration services. Local `npm run validate` remains no-network and does not
+download browser binaries.
+
+Browser E2E evidence must name the environment that actually ran it. The
+current project scope covers Chromium only: Ubuntu Chromium is the CI gate,
+while macOS and Windows are supported local setup targets but remain
+unverified unless a run is recorded for that OS. Firefox, Safari, Tableau
+Desktop, and real Tableau Extension APIs are outside this E2E gate and must be
+reported as unverified when not separately tested.
 
 ## Main branch enforcement
 
