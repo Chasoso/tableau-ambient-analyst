@@ -3195,8 +3195,9 @@ describe('bounded-reason termination recovery', () => {
       issue: '75',
       recoveryEvidence: JSON.stringify({
         schema: 'auto-fix-bounded-reason-rejection-v1',
-        reason:
-          'AUTO_FIX change tests/reviewer-cited.test.ts has no valid bounded reason: direct_test.',
+        reason: 'AUTO_FIX change src/tracked.ts has no valid bounded reason: direct_test.',
+        rejectedPath: 'src/tracked.ts',
+        rejectedReason: 'direct_test',
         targetPaths: ['src/tracked.ts'],
         changedPaths: ['src/tracked.ts'],
         terminalState: 'BLOCKED',

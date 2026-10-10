@@ -1582,13 +1582,15 @@ function workingTreeFingerprint(cwd: string, paths: string[]): string {
 
 function boundedReasonRejectionEvidence(
   cwd: string,
-  rejectionReason: string,
+  rejectedChange: AutoFixChangedFile,
   changes: AutoFixChangedFile[],
   changedPaths: string[],
 ): Record<string, unknown> {
   return {
     schema: 'auto-fix-bounded-reason-rejection-v1',
-    reason: rejectionReason,
+    reason: `AUTO_FIX change ${rejectedChange.path} has no valid bounded reason: ${rejectedChange.reason}.`,
+    rejectedPath: rejectedChange.path,
+    rejectedReason: rejectedChange.reason,
     targetPaths: changes
       .map((change) => change.path)
       .filter(isSafeEvidencePath)
@@ -1675,8 +1677,14 @@ function applyCodexAutoFix(
     if (!scopeError.includes('has no valid bounded reason:')) {
       return `BLOCKED: ${scopeError}`;
     }
+    const rejectedChange = report.changes.find(
+      (change) =>
+        scopeError ===
+        `AUTO_FIX change ${change.path} has no valid bounded reason: ${change.reason}.`,
+    );
+    if (!rejectedChange) return `BLOCKED: ${scopeError}`;
     return `${autoFixBoundedReasonRejectedPrefix} ${JSON.stringify(
-      boundedReasonRejectionEvidence(input.cwd, scopeError, report.changes, changedPaths),
+      boundedReasonRejectionEvidence(input.cwd, rejectedChange, report.changes, changedPaths),
     )}`;
   }
   const declaredPaths = report.changes.map((change) => change.path);
@@ -3263,6 +3271,8 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
       new Set([
         'schema',
         'reason',
+        'rejectedPath',
+        'rejectedReason',
         'targetPaths',
         'changedPaths',
         'terminalState',
@@ -3272,11 +3282,15 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     ) &&
     evidence.schema === 'auto-fix-bounded-reason-rejection-v1' &&
     typeof evidence.reason === 'string' &&
-    /^AUTO_FIX change .+ has no valid bounded reason: (affected_location|direct_test|generalized_rule_sibling|required_supporting_change|required_doc_update)\.$/.test(
-      evidence.reason,
-    ) &&
+    typeof evidence.rejectedPath === 'string' &&
+    isSafeEvidencePath(evidence.rejectedPath) &&
+    typeof evidence.rejectedReason === 'string' &&
+    autoFixChangeReasons.includes(evidence.rejectedReason as AutoFixChangeReason) &&
+    evidence.reason ===
+      `AUTO_FIX change ${evidence.rejectedPath} has no valid bounded reason: ${evidence.rejectedReason}.` &&
     pathList(targetPaths) &&
     pathList(changedPaths) &&
+    (targetPaths as string[]).includes(evidence.rejectedPath as string) &&
     (targetPaths as string[]).every((path) => (changedPaths as string[]).includes(path)) &&
     evidence.terminalState === 'BLOCKED' &&
     typeof evidence.headSha === 'string' &&
