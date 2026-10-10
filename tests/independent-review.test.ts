@@ -2874,6 +2874,12 @@ describe('AUTO_FIX path scope', () => {
       ).toBeUndefined();
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'src/tracked.ts', reason: 'affected_location' },
+          { path: 'docs/unrelated.md', reason: 'required_doc_update' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'src/base-only.ts', reason: 'affected_location' },
         ]),
       ).toContain('no valid bounded reason');

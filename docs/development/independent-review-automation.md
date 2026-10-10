@@ -332,6 +332,19 @@ concrete blocker is missing durable evidence; no evidence is reconstructed
 from the dirty worktree, Issue text, or PR history. A separately authorized
 later operation may proceed only if the actual state contains the new schema
 and its branch/base/head/path/fingerprint checks pass.
+
+If a future human-authorized recovery is applicable to the Issue #73 shape, the
+merged runner fix must first be made available in the canonical
+`.worktrees/issue-73` checkout through safe branch/base reconciliation. The
+checkout must remain on `feat/issue-73`; its dirty bytes must not be reset,
+stashed, discarded, or silently merged. Any merge, rebase, conflict resolution,
+or decision to replace preserved work is a separate `HUMAN_DECISION_REQUIRED`
+boundary. After safe reconciliation, verify the bounded evidence and exact
+dirty snapshot, run deterministic validation, obtain a fresh Independent
+Review, and only then use the existing-PR update path for PR #74. Required CI
+for the exact latest head must pass before the update is ready. This sequence
+does not authorize recovery by itself, and Issue #75 performs none of these
+PR #74 operations.
 The known older Issue #55 shape may be recovered only through the separate
 human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
 Human Decision record. The old implementer blocking report is not persisted, so

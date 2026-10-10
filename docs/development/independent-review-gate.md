@@ -177,6 +177,15 @@ is an explicit compatibility blocker: the state cannot be treated as a
 bounded-reason rejection and remains fail-closed until a separately
 authorized process has valid evidence.
 
+For a later authorized recovery of the Issue #73-shaped state, the merged
+runner fix must be brought into the canonical `feat/issue-73` worktree through
+safe repository reconciliation while preserving the dirty bytes. Validation
+must then confirm the evidence and exact snapshot, followed by deterministic
+validation, a fresh Independent Review, the existing-PR update path for PR #74,
+and required CI for the exact latest head. Merge/rebase/conflict resolution or
+replacement of preserved work requires a separate Human Decision; this Issue
+does not perform that recovery or update PR #74.
+
 ## Review checklist
 
 Use the following checklist for every independent review. Mark an item as not
