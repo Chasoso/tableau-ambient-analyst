@@ -3244,7 +3244,10 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
   const pathList = (candidate: unknown): candidate is string[] =>
     Array.isArray(candidate) &&
     candidate.length > 0 &&
+    new Set(candidate).size === candidate.length &&
     candidate.every((path) => typeof path === 'string' && isSafeEvidencePath(path));
+  const targetPaths = evidence.targetPaths;
+  const changedPaths = evidence.changedPaths;
   return (
     Object.keys(evidence).every((key) =>
       new Set([
@@ -3260,8 +3263,9 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     evidence.schema === 'auto-fix-bounded-reason-rejection-v1' &&
     typeof evidence.reason === 'string' &&
     evidence.reason.trim().length > 0 &&
-    pathList(evidence.targetPaths) &&
-    pathList(evidence.changedPaths) &&
+    pathList(targetPaths) &&
+    pathList(changedPaths) &&
+    (targetPaths as string[]).every((path) => (changedPaths as string[]).includes(path)) &&
     evidence.terminalState === 'BLOCKED' &&
     typeof evidence.headSha === 'string' &&
     /^[0-9a-f]{40}$/.test(evidence.headSha) &&

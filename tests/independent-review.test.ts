@@ -3196,7 +3196,7 @@ describe('bounded-reason termination recovery', () => {
         schema: 'auto-fix-bounded-reason-rejection-v1',
         reason:
           'AUTO_FIX change tests/reviewer-cited.test.ts has no valid bounded reason: direct_test',
-        targetPaths: ['tests/reviewer-cited.test.ts'],
+        targetPaths: ['src/tracked.ts'],
         changedPaths: ['src/tracked.ts'],
         terminalState: 'BLOCKED',
         headSha,
@@ -3247,6 +3247,24 @@ describe('bounded-reason termination recovery', () => {
 
     try {
       const before = readFileSync(trackedPath, 'utf8');
+      const mismatchedRecovery = {
+        ...recovery,
+        recoveryEvidence: recovery.recoveryEvidence.replace(
+          '"targetPaths":["src/tracked.ts"]',
+          '"targetPaths":["tests/reviewer-cited.test.ts"]',
+        ),
+      };
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          headSha,
+          mismatchedRecovery,
+          directory,
+        ),
+      ).toContain('malformed');
       writeFileSync(trackedPath, 'export const value = 3;\n');
       expect(
         authorizeReviewTerminationRecoveryAtPath(
