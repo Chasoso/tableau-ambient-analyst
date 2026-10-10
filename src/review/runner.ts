@@ -2008,6 +2008,7 @@ function isDirectDeterministicTest(
   } catch {
     return false;
   }
+  const source = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   return affectedPaths.some((affectedPathWithLocation) => {
     const affectedPath = affectedPathWithLocation.split(':', 1)[0]?.replaceAll('\\', '/');
     if (!affectedPath || path === affectedPath) return false;
@@ -2015,7 +2016,12 @@ function isDirectDeterministicTest(
     const testDirectory = dirname(path);
     const relativeModule = relative(testDirectory, withoutExtension).replaceAll('\\', '/');
     const moduleReference = relativeModule.startsWith('.') ? relativeModule : `./${relativeModule}`;
-    return content.includes(affectedPath) || content.includes(moduleReference);
+    return [affectedPath, withoutExtension, moduleReference].some((reference) => {
+      const escaped = reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(
+        `(?:\\bfrom\\s+|\\bimport\\s*|\\brequire\\s*\\(|\\bimport\\s*\\()["']${escaped}["']`,
+      ).test(source);
+    });
   });
 }
 
@@ -2586,6 +2592,8 @@ export function authorizeReviewTerminationRecoveryAtPath(
       base,
       headSha,
       recovery,
+      statePath,
+      approvalPath,
     );
     if (workspaceError) return workspaceError;
   }
@@ -2616,6 +2624,8 @@ export function resumeReviewTerminationRecoveryAtPath(
       base,
       headSha,
       recovery,
+      statePath,
+      approvalPath,
     );
     if (workspaceError) return workspaceError;
   }
@@ -3320,6 +3330,8 @@ function validateBoundedReasonRejectionWorkspace(
   base: string,
   headSha: string,
   recovery: ReviewTerminationRecovery,
+  statePath?: string,
+  approvalPath?: string,
 ): string | undefined {
   if (recovery.recoveryReason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED') return undefined;
   if (!isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) {
@@ -3329,12 +3341,42 @@ function validateBoundedReasonRejectionWorkspace(
     return 'Bounded-reason recovery workspace branch does not match the approval branch.';
   }
   try {
+    const actualHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    if (actualHead !== headSha) {
+      return 'Bounded-reason recovery head does not match the workspace HEAD.';
+    }
     execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
       cwd,
       encoding: 'utf8',
     });
   } catch {
     return 'Bounded-reason recovery workspace cannot verify the approval base.';
+  }
+  if (statePath || approvalPath) {
+    try {
+      const expectedStatePath = resolve(
+        cwd,
+        execFileSync('git', ['rev-parse', '--git-path', reviewStateFile], {
+          cwd,
+          encoding: 'utf8',
+        }).trim(),
+      );
+      const expectedApprovalPath = resolve(
+        cwd,
+        execFileSync('git', ['rev-parse', '--git-path', reviewApprovalFile], {
+          cwd,
+          encoding: 'utf8',
+        }).trim(),
+      );
+      if (
+        (statePath && resolve(statePath) !== expectedStatePath) ||
+        (approvalPath && resolve(approvalPath) !== expectedApprovalPath)
+      ) {
+        return 'Bounded-reason recovery state is not owned by the inspected workspace.';
+      }
+    } catch {
+      return 'Bounded-reason recovery could not verify workspace state ownership.';
+    }
   }
   const evidence = JSON.parse(recovery.recoveryEvidence) as Record<string, unknown>;
   if (evidence.headSha !== headSha) {

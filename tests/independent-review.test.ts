@@ -2798,6 +2798,10 @@ describe('AUTO_FIX path scope', () => {
     );
     writeFileSync(join(directory, 'tests', 'unrelated.test.ts'), 'test();\n');
     writeFileSync(join(directory, 'tests', 'basename.test.ts'), "test('tracked');\n");
+    writeFileSync(
+      join(directory, 'tests', 'text-only.test.ts'),
+      "const sourceName = '../src/tracked';\ntest(sourceName);\n",
+    );
     writeFileSync(join(directory, 'docs', 'unrelated.md'), '# unrelated\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
@@ -2894,6 +2898,11 @@ describe('AUTO_FIX path scope', () => {
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'tests/basename.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/text-only.test.ts', reason: 'direct_test' },
         ]),
       ).toContain('no valid bounded reason');
       expect(
@@ -3273,6 +3282,17 @@ describe('bounded-reason termination recovery', () => {
           directory,
         ),
       ).toContain('malformed');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feat/issue-75',
+          'main',
+          '0000000000000000000000000000000000000000',
+          recovery,
+          directory,
+        ),
+      ).toContain('workspace HEAD');
       writeFileSync(trackedPath, 'export const value = 3;\n');
       expect(
         authorizeReviewTerminationRecoveryAtPath(
