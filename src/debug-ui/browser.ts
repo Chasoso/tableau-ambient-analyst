@@ -104,6 +104,7 @@ function render(state: ReplayState): void {
     if (scenario.intervention.decision === 'INTERVENE') {
       const badge = document.createElement('button');
       badge.className = 'intervention-badge';
+      badge.dataset.testid = 'intervention-badge';
       badge.type = 'button';
       badge.textContent = '! INTERVENE';
       badge.title = 'Mock details only; Tableau APIs are not invoked.';
