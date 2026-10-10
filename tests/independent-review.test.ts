@@ -339,6 +339,34 @@ describe('independent review gate contract', () => {
     },
   );
 
+  it.each([
+    ['no human or blocked finding, no escalation', false, false, false],
+    ['no human or blocked finding, escalation', false, true, false],
+    ['human or blocked finding, no escalation', true, false, false],
+    ['human or blocked finding, escalation', true, true, true],
+  ])(
+    'requires escalation to match Human/Blocked findings and result: %s',
+    (_name, hasHumanFinding, escalationRequired, parserValid) => {
+      const value = {
+        ...structuredAutoFix,
+        result: 'HUMAN_DECISION_REQUIRED',
+        blockingFindings: hasHumanFinding
+          ? [
+              {
+                ...structuredAutoFix.blockingFindings[0],
+                classification: 'HUMAN_DECISION_REQUIRED',
+              },
+            ]
+          : [],
+        escalationRequired,
+      };
+      expect(validateReviewerSchema(value)).toBe(true);
+      expect(parseReviewResult(JSON.stringify(value)).executionStatus === 'COMPLETED').toBe(
+        parserValid,
+      );
+    },
+  );
+
   it('resolves only an open pull request with an exact head', () => {
     expect(
       resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>

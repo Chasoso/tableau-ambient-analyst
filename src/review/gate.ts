@@ -302,7 +302,7 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('Human decision and blocked findings must require escalation.');
   }
 
-  if (escalationRequired && !hasHumanFinding && result !== 'HUMAN_DECISION_REQUIRED') {
+  if (escalationRequired && !hasHumanFinding) {
     return malformedResult('Escalation requires a human or blocked finding.');
   }
 
