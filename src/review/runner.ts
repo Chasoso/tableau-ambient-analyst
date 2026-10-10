@@ -1566,6 +1566,8 @@ function workingTreeFingerprint(cwd: string, paths: string[]): string {
       encoding: 'utf8',
     }),
   );
+  hash.update(execFileSync('git', ['diff', '--cached', '--binary', '--no-ext-diff'], { cwd }));
+  hash.update(execFileSync('git', ['diff', '--binary', '--no-ext-diff'], { cwd }));
   for (const path of [...paths].sort()) {
     hash.update(`${path}\0`);
     const absolutePath = resolve(cwd, path);
@@ -2016,7 +2018,14 @@ function isDirectDeterministicTest(
     const testDirectory = dirname(path);
     const relativeModule = relative(testDirectory, withoutExtension).replaceAll('\\', '/');
     const moduleReference = relativeModule.startsWith('.') ? relativeModule : `./${relativeModule}`;
-    return [affectedPath, withoutExtension, moduleReference].some((reference) => {
+    const references = [
+      affectedPath,
+      withoutExtension,
+      moduleReference,
+      `${affectedPath.replace(/\.[^/.]+$/, '')}.js`,
+      `${moduleReference}.js`,
+    ];
+    return references.some((reference) => {
       const escaped = reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(
         `(?:\\bfrom\\s+|\\bimport\\s*|\\brequire\\s*\\(|\\bimport\\s*\\()["']${escaped}["']`,

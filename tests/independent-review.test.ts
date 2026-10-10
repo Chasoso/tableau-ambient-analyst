@@ -2793,6 +2793,10 @@ describe('AUTO_FIX path scope', () => {
       "import '../src/tracked';\nimport './reviewer-cited.test';\ntest();\n",
     );
     writeFileSync(
+      join(directory, 'tests', 'esm-related.test.ts'),
+      "import '../src/tracked.js';\ntest();\n",
+    );
+    writeFileSync(
       join(directory, 'tests', 'reviewer-cited.test.ts'),
       "import '../src/tracked';\ntest();\n",
     );
@@ -2877,6 +2881,11 @@ describe('AUTO_FIX path scope', () => {
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'tests/related.test.ts', reason: 'direct_test' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/esm-related.test.ts', reason: 'direct_test' },
         ]),
       ).toBeUndefined();
       expect(
@@ -3201,6 +3210,12 @@ describe('bounded-reason termination recovery', () => {
         encoding: 'utf8',
       }),
     );
+    hash.update(
+      execFileSync('git', ['diff', '--cached', '--binary', '--no-ext-diff'], {
+        cwd: directory,
+      }),
+    );
+    hash.update(execFileSync('git', ['diff', '--binary', '--no-ext-diff'], { cwd: directory }));
     hash.update('src/tracked.ts\0');
     hash.update(changed);
     hash.update('\0');
