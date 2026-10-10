@@ -297,14 +297,14 @@ describe('independent review gate contract', () => {
       'HUMAN_DECISION_REQUIRED',
     ],
     [
-      'schema-valid but parser-inconsistent PASS',
+      'structurally valid but semantically invalid PASS (fail closed)',
       { ...structuredPass, blockingFindings: [structuredAutoFix.blockingFindings[0]] },
       true,
       false,
       'HUMAN_DECISION_REQUIRED',
     ],
     [
-      'schema-valid but hidden human escalation',
+      'structurally valid but semantically invalid escalation (fail closed)',
       {
         ...structuredAutoFix,
         blockingFindings: [
@@ -316,7 +316,7 @@ describe('independent review gate contract', () => {
       'HUMAN_DECISION_REQUIRED',
     ],
   ])(
-    'cross-validates %s against the real reviewer schema and parser',
+    'enforces the two-stage wire schema and semantic parser contract: %s',
     (_name, value, schemaValid, parserValid, expectedResult) => {
       expect(validateReviewerSchema(value)).toBe(schemaValid);
       const parsed = parseReviewResult(JSON.stringify(value));
@@ -1965,7 +1965,7 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
-  it('preserves compatible accounting history and fails closed on an incomplete reservation fixture', () => {
+  it('preserves compatible history and fails closed on an orphaned invocation fixture', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-incomplete-review-reservation-'));
     const statePath = join(directory, 'state.json');
     const fixture = JSON.parse(
@@ -1977,20 +1977,16 @@ describe('review cycle state', () => {
     writeFileSync(statePath, JSON.stringify(fixture), 'utf8');
 
     try {
-      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
-        legacyReviewInvocations: 6,
-        legacyAutoFixCycles: 1,
-        reviewInvocationCount: 1,
-        pendingReview: { reviewInvocation: 1, status: 'STARTED' },
-      });
+      expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+        'Review accounting state is invalid',
+      );
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
-        'incomplete reviewer execution',
+        'Review accounting state is invalid',
       );
       expect(JSON.parse(readFileSync(statePath, 'utf8'))).toMatchObject({
         legacyReviewInvocations: 6,
         legacyAutoFixCycles: 1,
         reviewInvocationCount: 1,
-        pendingReview: { reviewInvocation: 1, status: 'STARTED' },
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });

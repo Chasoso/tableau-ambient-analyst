@@ -241,6 +241,15 @@ not edit files. Do not rerun
 validation commands that require filesystem writes in your read-only sandbox;
 inspect the reported validation evidence instead.
 
+The supplied JSON Schema is the Structured Outputs wire contract: it checks
+object shape, closed properties, types, enums, arrays, and finding fields.
+It intentionally does not encode cross-field semantics with unsupported
+keywords. Treat Schema validation and semantic parsing as two required gates:
+Schema-valid output is still rejected if it violates the parser contract,
+including empty CHANGES_REQUIRED, PASS with blocking findings or escalation,
+or escalation without a human/blocked finding. Return only structured finding
+objects; legacy string findings are not valid reviewer output.
+
 For every finding, classify it as exactly one of AUTO_FIX,
 HUMAN_DECISION_REQUIRED, or BLOCKED. For each finding, record severity,
 classification, finding, generalized_rule, affected_locations, and
@@ -3451,6 +3460,23 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       failure.reviewInvocation <= (state.reviewInvocationCount as number) &&
       (index === 0 || failure.reviewInvocation > parsedFailures[index - 1]!.reviewInvocation),
   );
+  const representedInvocations = new Set<number>([
+    ...cycleResults.map((record) => record.reviewInvocation),
+    ...parsedFailures.map((failure) => failure.reviewInvocation),
+    ...(pendingReview ? [pendingReview.reviewInvocation] : []),
+  ]);
+  const invocationEvidenceIsConsistent =
+    legacyMigration ||
+    (state.branch === legacyIssue29Branch &&
+      state.base === legacyIssue29Base &&
+      state.legacyReviewInvocations === legacyIssue29ReviewInvocations &&
+      state.legacyAutoFixCycles === legacyIssue29AutoFixCycles &&
+      cycleResults.length === (state.reviewInvocationCount as number) - 1) ||
+    state.terminationReason !== undefined ||
+    state.reviewInvocationCount === maxReviewInvocations ||
+    Array.from({ length: state.reviewInvocationCount as number }, (_, index) => index + 1).every(
+      (invocation) => representedInvocations.has(invocation),
+    );
   if (
     cycleResults.length > (state.reviewInvocationCount as number) ||
     !cycleInvocationsAreConsistent ||
@@ -3460,6 +3486,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
     expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
     !failureInvocationsAreConsistent ||
+    !invocationEvidenceIsConsistent ||
     (state.pendingReview !== undefined &&
       (state.pendingReview as { reviewInvocation: number }).reviewInvocation !==
         (state.reviewInvocationCount as number)) ||

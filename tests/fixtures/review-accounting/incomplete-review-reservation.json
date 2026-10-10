@@ -10,9 +10,5 @@
   "consecutiveRepeatCount": 0,
   "lastFixChangedRepository": null,
   "cycleResults": [],
-  "terminationHistory": [],
-  "pendingReview": {
-    "reviewInvocation": 1,
-    "status": "STARTED"
-  }
+  "terminationHistory": []
 }

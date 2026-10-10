@@ -192,10 +192,11 @@ subsequent reservation is rejected while `pendingReview` remains present.
 The regression fixture
 `tests/fixtures/review-accounting/incomplete-review-reservation.json` preserves
 legacy counters alongside the current accounting epoch and an incomplete
-`STARTED` reservation. Tests verify both that compatible history is read
-without resetting counters and that a new reservation is rejected until the
-incomplete state is explicitly recovered. Recovery must not delete, rewrite,
-or refund prior failure history.
+orphaned invocation. It has no cycle result, termination record, failure
+evidence, or pending marker. Accounting reads and new reservations reject this
+state without mutation or refund. A separate pending reservation is also
+rejected by the normal reservation guard. Recovery must not delete, rewrite,
+or refund prior failure history, and no missing historical reason is inferred.
 
 The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
 known prior state of 6 invocations and 1 completed AUTO_FIX is retained as

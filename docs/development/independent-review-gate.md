@@ -307,6 +307,15 @@ the reviewer boundary. Any historical compatibility reader must remain a
 separate read-only path and must not be used to accept new reviewer output.
 New reviewer findings must use this shape:
 
+The contract is intentionally two-stage. The Schema is limited to the
+Structured Outputs-compatible structural subset (closed objects, types,
+enums, arrays, and finding fields); it does not use unsupported cross-field
+keywords. The semantic parser is the required second gate and rejects
+Schema-valid contradictions such as empty `CHANGES_REQUIRED`, `PASS` with
+blocking findings or escalation, and escalation without a human/blocked
+finding. A Schema-valid but parser-invalid response is therefore a deliberate
+fail-closed outcome, not a successful reviewer result.
+
 ```json
 {
   "result": "CHANGES_REQUIRED",
