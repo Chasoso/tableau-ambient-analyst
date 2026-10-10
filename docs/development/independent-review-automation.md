@@ -324,6 +324,14 @@ head, and a working-tree byte fingerprint. Authorization and resume verify
 that the canonical worktree still has the same paths and bytes, preserving the
 uncommitted AUTO_FIX exactly. They only permit deterministic revalidation and
 never commit, approve, or turn the prior review into `PASS`.
+The read-only compatibility check for PR #74 found a `BLOCKED` terminal state
+with no `terminationEvidence` and no approval record. That historical state
+therefore does not prove the new bounded-reason rejection, path snapshot, or
+byte fingerprint and is intentionally not recoverable by this Issue. The
+concrete blocker is missing durable evidence; no evidence is reconstructed
+from the dirty worktree, Issue text, or PR history. A separately authorized
+later operation may proceed only if the actual state contains the new schema
+and its branch/base/head/path/fingerprint checks pass.
 The known older Issue #55 shape may be recovered only through the separate
 human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
 Human Decision record. The old implementer blocking report is not persisted, so

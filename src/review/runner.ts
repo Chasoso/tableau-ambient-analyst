@@ -2552,7 +2552,13 @@ export function authorizeReviewTerminationRecoveryAtPath(
 ): ReviewResumeApproval | string {
   if (recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED') {
     if (!workspaceCwd) return 'Bounded-reason recovery requires workspace verification.';
-    const workspaceError = validateBoundedReasonRejectionWorkspace(workspaceCwd, headSha, recovery);
+    const workspaceError = validateBoundedReasonRejectionWorkspace(
+      workspaceCwd,
+      branch,
+      base,
+      headSha,
+      recovery,
+    );
     if (workspaceError) return workspaceError;
   }
   return authorizeReviewResumeAfterLimitAtPath(
@@ -2576,7 +2582,13 @@ export function resumeReviewTerminationRecoveryAtPath(
 ): ReviewAccounting | string {
   if (recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED') {
     if (!workspaceCwd) return 'Bounded-reason recovery requires workspace verification.';
-    const workspaceError = validateBoundedReasonRejectionWorkspace(workspaceCwd, headSha, recovery);
+    const workspaceError = validateBoundedReasonRejectionWorkspace(
+      workspaceCwd,
+      branch,
+      base,
+      headSha,
+      recovery,
+    );
     if (workspaceError) return workspaceError;
   }
   return resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, headSha, recovery);
@@ -2598,7 +2610,13 @@ export function authorizeReviewTerminationRecovery(
   } catch {
     return 'Could not resolve the current feature branch head.';
   }
-  const workspaceError = validateBoundedReasonRejectionWorkspace(cwd, headSha, recovery);
+  const workspaceError = validateBoundedReasonRejectionWorkspace(
+    cwd,
+    currentBranch(cwd),
+    base,
+    headSha,
+    recovery,
+  );
   if (workspaceError) return workspaceError;
   return authorizeReviewTerminationRecoveryAtPath(
     statePath,
@@ -2627,7 +2645,13 @@ export function resumeReviewTerminationRecovery(
   } catch {
     return 'Could not resolve the current feature branch head.';
   }
-  const workspaceError = validateBoundedReasonRejectionWorkspace(cwd, headSha, recovery);
+  const workspaceError = validateBoundedReasonRejectionWorkspace(
+    cwd,
+    currentBranch(cwd),
+    base,
+    headSha,
+    recovery,
+  );
   if (workspaceError) return workspaceError;
   return resumeReviewTerminationRecoveryAtPath(
     statePath,
@@ -3248,12 +3272,25 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
 
 function validateBoundedReasonRejectionWorkspace(
   cwd: string,
+  branch: string,
+  base: string,
   headSha: string,
   recovery: ReviewTerminationRecovery,
 ): string | undefined {
   if (recovery.recoveryReason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED') return undefined;
   if (!isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) {
     return 'Bounded-reason recovery evidence is malformed.';
+  }
+  if (currentBranch(cwd) !== branch) {
+    return 'Bounded-reason recovery workspace branch does not match the approval branch.';
+  }
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'Bounded-reason recovery workspace cannot verify the approval base.';
   }
   const evidence = JSON.parse(recovery.recoveryEvidence) as Record<string, unknown>;
   if (evidence.headSha !== headSha) {

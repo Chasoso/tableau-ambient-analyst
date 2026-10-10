@@ -3269,6 +3269,17 @@ describe('bounded-reason termination recovery', () => {
           recovery,
         ),
       ).toContain('workspace verification');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/other',
+          'main',
+          headSha,
+          recovery,
+          directory,
+        ),
+      ).toContain('branch');
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
         'working-tree',
       );
@@ -3289,6 +3300,32 @@ describe('bounded-reason termination recovery', () => {
       }
       expect(resumeReviewTerminationRecovery(directory, 'main', recovery)).toMatch(
         /approval|recovery/i,
+      );
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feature/review',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: 1,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: false,
+              cycleResults: [],
+              terminationHistory: ['BLOCKED'],
+              terminationReason: 'BLOCKED',
+            },
+          ],
+        }),
+        'utf8',
+      );
+      expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toMatch(
+        /supported terminal state|evidence/i,
       );
     } finally {
       rmSync(directory, { recursive: true, force: true });

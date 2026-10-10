@@ -171,6 +171,11 @@ working-tree bytes. A human-authorized recovery may verify and revalidate that
 same state, but does not approve changes, create a commit, or produce `PASS`.
 If the evidence is missing, malformed, or the paths/bytes changed, the gate
 remains closed and no historical Issue or PR evidence may be reconstructed.
+For the historical PR #74 state checked by Issue #75, the durable accounting
+has `BLOCKED` but no termination evidence, and no approval record exists. This
+is an explicit compatibility blocker: the state cannot be treated as a
+bounded-reason rejection and remains fail-closed until a separately
+authorized process has valid evidence.
 
 ## Review checklist
 
