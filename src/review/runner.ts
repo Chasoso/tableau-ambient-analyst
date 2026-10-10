@@ -1672,6 +1672,9 @@ function applyCodexAutoFix(
   if (!changedPaths.length) return 'AUTO_FIX implementer made no repository changes.';
   const scopeError = validateAutoFixChanges(review, input.cwd, input.base, report.changes);
   if (scopeError) {
+    if (!scopeError.includes('has no valid bounded reason:')) {
+      return `BLOCKED: ${scopeError}`;
+    }
     return `${autoFixBoundedReasonRejectedPrefix} ${JSON.stringify(
       boundedReasonRejectionEvidence(input.cwd, scopeError, report.changes, changedPaths),
     )}`;
@@ -2347,7 +2350,8 @@ export function authorizeReviewResumeAfterLimitAtPath(
             accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
             accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
             accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence &&
-            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) ||
+            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence) &&
+            isBoundedRecoveryIssue(recovery.issue, branch)) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
@@ -2388,6 +2392,9 @@ export function authorizeReviewResumeAfterLimitAtPath(
               recoveryReason: recovery?.recoveryReason,
               recoveryEvidence: recovery?.recoveryEvidence,
               humanDecision: recovery?.humanDecision,
+              ...(recovery?.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
+                ? { issue: recovery.issue }
+                : {}),
             }),
       };
       writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
@@ -2424,7 +2431,8 @@ export function resumeReviewAfterLimitAtPath(
             accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
             accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
             accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence &&
-            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) ||
+            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence) &&
+            isBoundedRecoveryIssue(recovery.issue, branch)) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
@@ -2460,7 +2468,9 @@ export function resumeReviewAfterLimitAtPath(
             : candidate.originalTerminationReason === accounting.terminationReason &&
               candidate.recoveryReason === recovery?.recoveryReason &&
               candidate.recoveryEvidence === recovery?.recoveryEvidence &&
-              candidate.humanDecision === recovery?.humanDecision),
+              candidate.humanDecision === recovery?.humanDecision &&
+              (recovery?.recoveryReason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED' ||
+                candidate.issue === recovery.issue)),
       );
       if (!approval) {
         return 'No matching unconsumed human review approval exists for this state.';
@@ -3262,7 +3272,9 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     ) &&
     evidence.schema === 'auto-fix-bounded-reason-rejection-v1' &&
     typeof evidence.reason === 'string' &&
-    evidence.reason.trim().length > 0 &&
+    /^AUTO_FIX change .+ has no valid bounded reason: (affected_location|direct_test|generalized_rule_sibling|required_supporting_change|required_doc_update)\.$/.test(
+      evidence.reason,
+    ) &&
     pathList(targetPaths) &&
     pathList(changedPaths) &&
     (targetPaths as string[]).every((path) => (changedPaths as string[]).includes(path)) &&
@@ -3272,6 +3284,10 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     typeof evidence.workingTreeFingerprint === 'string' &&
     /^[0-9a-f]{64}$/.test(evidence.workingTreeFingerprint)
   );
+}
+
+function isBoundedRecoveryIssue(issue: string | undefined, branch: string): boolean {
+  return typeof issue === 'string' && /^\d+$/.test(issue) && branch === `feat/issue-${issue}`;
 }
 
 function validateBoundedReasonRejectionWorkspace(
@@ -3425,6 +3441,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'recoveryReason',
     'recoveryEvidence',
     'humanDecision',
+    'issue',
   ]);
   return (
     Object.keys(approval).every((key) => allowedKeys.has(key)) &&
@@ -3461,7 +3478,12 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
         typeof approval.humanDecision === 'string' &&
         reviewRecoveryHumanDecisions.includes(
           approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
-        ))
+        ) &&
+        (approval.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
+          ? typeof approval.issue === 'string' &&
+            /^\d+$/.test(approval.issue) &&
+            approval.branch === `feat/issue-${approval.issue}`
+          : approval.issue === undefined))
   );
 }
 

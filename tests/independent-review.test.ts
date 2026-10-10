@@ -3179,7 +3179,7 @@ describe('bounded-reason termination recovery', () => {
       ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
       { cwd: directory },
     );
-    execFileSync('git', ['checkout', '-qb', 'feature/review'], { cwd: directory });
+    execFileSync('git', ['checkout', '-qb', 'feat/issue-75'], { cwd: directory });
     writeFileSync(trackedPath, changed);
     const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: directory,
@@ -3192,10 +3192,11 @@ describe('bounded-reason termination recovery', () => {
     const recovery = {
       recoveryReason: 'AUTO_FIX_BOUNDED_REASON_REJECTED' as const,
       humanDecision: 'resume' as const,
+      issue: '75',
       recoveryEvidence: JSON.stringify({
         schema: 'auto-fix-bounded-reason-rejection-v1',
         reason:
-          'AUTO_FIX change tests/reviewer-cited.test.ts has no valid bounded reason: direct_test',
+          'AUTO_FIX change tests/reviewer-cited.test.ts has no valid bounded reason: direct_test.',
         targetPaths: ['src/tracked.ts'],
         changedPaths: ['src/tracked.ts'],
         terminalState: 'BLOCKED',
@@ -3222,7 +3223,7 @@ describe('bounded-reason termination recovery', () => {
       JSON.stringify({
         entries: [
           {
-            branch: 'feature/review',
+            branch: 'feat/issue-75',
             base: 'main',
             legacyReviewInvocations: 0,
             legacyAutoFixCycles: 0,
@@ -3258,7 +3259,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-75',
           'main',
           headSha,
           mismatchedRecovery,
@@ -3270,7 +3271,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-75',
           'main',
           headSha,
           recovery,
@@ -3281,7 +3282,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-75',
           'main',
           headSha,
           recovery,
@@ -3291,7 +3292,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/other',
+          'feat/other',
           'main',
           headSha,
           recovery,
@@ -3324,7 +3325,7 @@ describe('bounded-reason termination recovery', () => {
         JSON.stringify({
           entries: [
             {
-              branch: 'feature/review',
+              branch: 'feat/issue-75',
               base: 'main',
               legacyReviewInvocations: 0,
               legacyAutoFixCycles: 0,

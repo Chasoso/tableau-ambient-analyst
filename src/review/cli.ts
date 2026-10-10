@@ -111,7 +111,12 @@ function recoveryEvidence() {
   ) {
     return 'Termination recovery requires --recovery-reason, --recovery-evidence, and --human-decision resume.';
   }
-  return { recoveryReason: reason, recoveryEvidence: evidence, humanDecision } as const;
+  return {
+    recoveryReason: reason,
+    recoveryEvidence: evidence,
+    humanDecision,
+    issue: input.issue,
+  } as const;
 }
 
 function authorizeRecovery(reviewInput: IndependentReviewInput) {
