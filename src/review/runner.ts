@@ -758,8 +758,8 @@ Your final response must contain only this JSON object:
     }
   },
   "changes": [
-      { "path": "src/example.ts", "reason": "affected_location" },
-      { "path": "tests/example.test.ts", "reason": "direct_test" }
+      { "path": "tests/reviewer-cited.test.ts", "reason": "affected_location" },
+      { "path": "tests/related.test.ts", "reason": "direct_test" }
   ]
 }
 Set completed to false or list every remaining blocking issue when the
@@ -1680,6 +1680,13 @@ function applyCodexAutoFix(
     return 'AUTO_FIX post-fix repository snapshot could not be captured.';
   }
   if (!changedPaths.length) return 'AUTO_FIX implementer made no repository changes.';
+  const declaredPaths = report.changes.map((change) => change.path);
+  if (
+    changedPaths.some((path) => !declaredPaths.includes(path)) ||
+    declaredPaths.some((path) => !changedPaths.includes(path))
+  ) {
+    return 'AUTO_FIX implementer changed files without matching bounded reasons.';
+  }
   const scopeError = validateAutoFixChanges(review, input.cwd, input.base, report.changes);
   if (scopeError) {
     if (!scopeError.includes('has no valid bounded reason:')) {
@@ -1695,14 +1702,6 @@ function applyCodexAutoFix(
       boundedReasonRejectionEvidence(input.cwd, rejectedChange, report.changes, changedPaths),
     )}`;
   }
-  const declaredPaths = report.changes.map((change) => change.path);
-  if (
-    changedPaths.some((path) => !declaredPaths.includes(path)) ||
-    declaredPaths.some((path) => !changedPaths.includes(path))
-  ) {
-    return 'AUTO_FIX implementer changed files without matching bounded reasons.';
-  }
-
   try {
     if (currentBranch(input.cwd) !== intendedBranch) {
       return 'AUTO_FIX implementer changed the current branch.';
@@ -1786,8 +1785,8 @@ findings and follow-up candidates.
     }
   },
   "changes": [
-    { "path": "src/example.ts", "reason": "affected_location" },
-    { "path": "tests/example.test.ts", "reason": "direct_test" }
+    { "path": "tests/reviewer-cited.test.ts", "reason": "affected_location" },
+    { "path": "tests/related.test.ts", "reason": "direct_test" }
   ]
 }
 Use affected_location for the exact reviewer-cited file, including a cited
