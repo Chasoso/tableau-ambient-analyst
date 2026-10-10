@@ -67,6 +67,7 @@ import {
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
 const reviewApprovalFile = 'tableau-ambient-review-approval.json';
+const canonicalRecoveryBase = 'main';
 const resumeTransactionSuffix = '.resume-transaction';
 const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
 const legacyIssue29Base = 'main';
@@ -2476,6 +2477,8 @@ export function authorizeReviewerFailureRecoveryAtPath(
   schemaFingerprint: string,
   workspaceCwd: string,
 ): ReviewResumeApproval | string {
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
   const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
   const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
   if (
@@ -2548,6 +2551,8 @@ export function resumeReviewerFailureRecoveryAtPath(
   schemaFingerprint: string,
   workspaceCwd: string,
 ): ReviewAccounting | string {
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
   const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
   const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
   if (
@@ -2683,6 +2688,29 @@ function readHeadSha(cwd: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function validateReviewerFailureRecoveryScope(
+  cwd: string,
+  branch: string,
+  base: string,
+): string | undefined {
+  const actualBranch = currentBranch(cwd);
+  if (!actualBranch || actualBranch === 'unknown-branch' || actualBranch !== branch) {
+    return 'Reviewer-failure recovery branch does not match the current Git branch.';
+  }
+  if (base !== canonicalRecoveryBase) {
+    return 'HUMAN_DECISION_REQUIRED: reviewer-failure recovery base is not the configured canonical base.';
+  }
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${canonicalRecoveryBase}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'HUMAN_DECISION_REQUIRED: configured canonical recovery base could not be verified.';
+  }
+  return undefined;
 }
 
 /** Create the durable approval record. This is never called by review loops. */
@@ -4516,6 +4544,7 @@ function validateReviewerFailureRecoveryTransactionSemantics(
     );
   }
   if (
+    recovery.approvalId !== transaction.approvalId ||
     approval.approvalType !== 'reviewer-failure-recovery' ||
     !approval.consumed ||
     approval.targetRepository !== targetRepository ||

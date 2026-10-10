@@ -100,6 +100,8 @@ function createReviewerRecoveryWorkspace(
     ],
     { cwd: directory, stdio: 'ignore' },
   );
+  execFileSync('git', ['branch', 'main'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['branch', '-M', 'feature/review'], { cwd: directory, stdio: 'ignore' });
   const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: directory,
     encoding: 'utf8',
@@ -1827,6 +1829,39 @@ describe('review cycle state', () => {
         ),
       ).toContain('No matching unconsumed');
       expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          join(directory, 'non-canonical-state.json'),
+          join(directory, 'non-canonical-approval.json'),
+          'feature/review',
+          'main',
+          headSha,
+          schemaFingerprint,
+          cwd,
+        ),
+      ).toContain('canonical Git state files');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'different-branch',
+          'main',
+          headSha,
+          schemaFingerprint,
+          cwd,
+        ),
+      ).toContain('branch does not match');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'develop',
+          headSha,
+          schemaFingerprint,
+          cwd,
+        ),
+      ).toContain('HUMAN_DECISION_REQUIRED');
+      expect(
         authorizeReviewResumeAfterLimitAtPath(
           statePath,
           approvalPath,
@@ -2033,6 +2068,20 @@ describe('review cycle state', () => {
         pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
       });
 
+      const complete = createTransactionFixture('complete');
+      writeFileSync(complete.statePath, complete.postStateRaw, 'utf8');
+      writeFileSync(complete.approvalPath, complete.postApprovalRaw, 'utf8');
+      expect(
+        reserveReviewCycleAtPath(complete.statePath, 'feature/review', 'main'),
+      ).toBeUndefined();
+      expect(existsSync(transactionPath(complete.statePath))).toBe(false);
+      expect(
+        readReviewAccountingAtPath(complete.statePath, 'feature/review', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 2,
+        pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
+      });
+
       const external = createTransactionFixture('external');
       writeFileSync(external.statePath, JSON.stringify({ unexpected: true }), 'utf8');
       expect(reserveReviewCycleAtPath(external.statePath, 'feature/review', 'main')).toContain(
@@ -2043,9 +2092,13 @@ describe('review cycle state', () => {
 
       const semantic = createTransactionFixture('semantic');
       const transaction = JSON.parse(readFileSync(transactionPath(semantic.statePath), 'utf8')) as {
+        accountingState: {
+          entries: Array<{ reviewerFailureRecovery: { approvalId: string } }>;
+        };
         approvalState: { approvals: Array<Record<string, unknown>> };
       };
-      transaction.approvalState.approvals[0]!.id = 'different-approval';
+      transaction.accountingState.entries[0]!.reviewerFailureRecovery.approvalId =
+        'different-approval';
       writeFileSync(transactionPath(semantic.statePath), JSON.stringify(transaction), 'utf8');
       expect(reserveReviewCycleAtPath(semantic.statePath, 'feature/review', 'main')).toContain(
         'semantics are invalid',
