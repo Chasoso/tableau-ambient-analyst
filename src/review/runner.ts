@@ -1442,7 +1442,20 @@ export function runReviewControlFlow(
   const branch = dependencies.currentBranch(input.cwd);
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
 
-  return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+  try {
+    return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+  } catch {
+    // Keep every post-reservation reviewer failure on the durable accounting
+    // path. The caller records this structured failure and clears the
+    // reservation; if that persistence fails, the caller returns an
+    // uncertain fail-closed result instead of pretending the invocation is
+    // recoverable or retrying it.
+    return reviewerInvocationFailure(
+      'Reviewer execution failed unexpectedly; durable failure recording is required.',
+      'REVIEW',
+      'UNCERTAIN',
+    );
+  }
 }
 
 /**

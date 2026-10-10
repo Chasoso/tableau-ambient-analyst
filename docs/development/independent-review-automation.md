@@ -180,6 +180,23 @@ use their actual git directory. It is created with a temporary file and
 rename, and an existing malformed or invalid state fails closed with
 `HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
 
+If the reviewer callback or subprocess boundary raises after a reservation has
+been marked `STARTED`, the runner converts that exception into an `UNCERTAIN`
+review execution failure and uses the same durable failure-recording path as a
+normal non-zero exit. The failure record clears `pendingReview` without
+refunding the invocation. If failure recording cannot be persisted, the runner
+returns a fail-closed human escalation and does not claim that the reservation
+was recovered; the incomplete state remains for explicit human recovery. A
+subsequent reservation is rejected while `pendingReview` remains present.
+
+The regression fixture
+`tests/fixtures/review-accounting/incomplete-review-reservation.json` preserves
+legacy counters alongside the current accounting epoch and an incomplete
+`STARTED` reservation. Tests verify both that compatible history is read
+without resetting counters and that a new reservation is rejected until the
+incomplete state is explicitly recovered. Recovery must not delete, rewrite,
+or refund prior failure history.
+
 The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
 known prior state of 6 invocations and 1 completed AUTO_FIX is retained as
 legacy counter audit history. That legacy shape did not contain termination

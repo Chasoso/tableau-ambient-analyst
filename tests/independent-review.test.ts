@@ -126,6 +126,86 @@ function createReviewerRecoveryWorkspace(
   return { cwd: directory, headSha, schemaFingerprint, statePath, approvalPath };
 }
 
+type JsonSchemaNode = {
+  $ref?: string;
+  type?: string;
+  enum?: unknown[];
+  required?: string[];
+  additionalProperties?: boolean;
+  properties?: Record<string, JsonSchemaNode>;
+  items?: JsonSchemaNode;
+  $defs?: Record<string, JsonSchemaNode>;
+};
+
+function validateReviewerSchema(value: unknown): boolean {
+  const schema = JSON.parse(
+    readFileSync(join(process.cwd(), 'src/review/review-result.schema.json'), 'utf8'),
+  ) as JsonSchemaNode;
+
+  const validate = (candidate: unknown, node: JsonSchemaNode): boolean => {
+    if (node.$ref) {
+      const definition = node.$ref.startsWith('#/$defs/')
+        ? node.$ref.slice('#/$defs/'.length)
+        : undefined;
+      return definition ? validate(candidate, schema.$defs?.[definition] ?? {}) : false;
+    }
+    if (node.enum && !node.enum.some((entry) => Object.is(entry, candidate))) return false;
+    if (node.type === 'object') {
+      if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+        return false;
+      }
+      const object = candidate as Record<string, unknown>;
+      if (node.required?.some((key) => !(key in object))) return false;
+      if (
+        node.additionalProperties === false &&
+        Object.keys(object).some((key) => !(key in (node.properties ?? {})))
+      ) {
+        return false;
+      }
+      return Object.entries(object).every((entry) => {
+        const propertySchema = node.properties?.[entry[0]];
+        return propertySchema ? validate(entry[1], propertySchema) : true;
+      });
+    }
+    if (node.type === 'array') {
+      return (
+        Array.isArray(candidate) &&
+        (!node.items || candidate.every((item) => validate(item, node.items!)))
+      );
+    }
+    if (node.type === 'string') return typeof candidate === 'string';
+    if (node.type === 'boolean') return typeof candidate === 'boolean';
+    return false;
+  };
+
+  return validate(value, schema);
+}
+
+const structuredPass = {
+  result: 'PASS',
+  blockingFindings: [],
+  nonBlockingFindings: [],
+  escalationRequired: false,
+  maintainability: 'NO_DRIFT',
+};
+
+const structuredAutoFix = {
+  result: 'CHANGES_REQUIRED',
+  blockingFindings: [
+    {
+      severity: 'blocking',
+      classification: 'AUTO_FIX',
+      finding: 'The deterministic contract is incomplete.',
+      generalized_rule: 'deterministic contract enforcement',
+      affected_locations: ['src/review/runner.ts'],
+      recommended_fix: 'Apply the bounded repository correction.',
+    },
+  ],
+  nonBlockingFindings: [],
+  escalationRequired: false,
+  maintainability: 'LOCAL_CLEANUP',
+};
+
 describe('independent review gate contract', () => {
   it('keeps the reviewer schema within the offline Structured Outputs subset', () => {
     const schema = JSON.parse(
@@ -161,6 +241,59 @@ describe('independent review gate contract', () => {
       ],
     });
   });
+
+  it.each([
+    ['valid PASS', structuredPass, true, true, 'PASS'],
+    ['valid structured AUTO_FIX finding', structuredAutoFix, true, true, 'CHANGES_REQUIRED'],
+    [
+      'missing required maintainability',
+      { ...structuredPass, maintainability: undefined },
+      false,
+      false,
+      'HUMAN_DECISION_REQUIRED',
+    ],
+    [
+      'wrong finding severity',
+      {
+        ...structuredAutoFix,
+        blockingFindings: [{ ...structuredAutoFix.blockingFindings[0], severity: 'non-blocking' }],
+      },
+      false,
+      false,
+      'HUMAN_DECISION_REQUIRED',
+    ],
+    [
+      'schema-valid but parser-inconsistent PASS',
+      { ...structuredPass, blockingFindings: [structuredAutoFix.blockingFindings[0]] },
+      true,
+      false,
+      'HUMAN_DECISION_REQUIRED',
+    ],
+    [
+      'schema-valid but hidden human escalation',
+      {
+        ...structuredAutoFix,
+        blockingFindings: [
+          { ...structuredAutoFix.blockingFindings[0], classification: 'HUMAN_DECISION_REQUIRED' },
+        ],
+      },
+      true,
+      false,
+      'HUMAN_DECISION_REQUIRED',
+    ],
+  ])(
+    'cross-validates %s against the real reviewer schema and parser',
+    (_name, value, schemaValid, parserValid, expectedResult) => {
+      expect(validateReviewerSchema(value)).toBe(schemaValid);
+      const parsed = parseReviewResult(JSON.stringify(value));
+      if (!parserValid) {
+        expect(parsed.executionStatus).toBe('FAILED');
+      } else {
+        expect(parsed.result).toBe(expectedResult);
+        expect(parsed.executionStatus).toBe('COMPLETED');
+      }
+    },
+  );
 
   it('resolves only an open pull request with an exact head', () => {
     expect(
@@ -1172,6 +1305,63 @@ describe('independent review runner control flow', () => {
     ]);
   });
 
+  it('converts reviewer exceptions after reservation into a durable fail-closed failure', () => {
+    const result = runReadOnlyReview(
+      input,
+      dependencies(
+        {
+          invokeReviewer: () => {
+            throw new Error('simulated reviewer subprocess exception');
+          },
+        },
+        {
+          reviewInvocationCount: 1,
+          pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+        },
+      ),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.terminationReason).toBe('REVIEWER_FAILURE');
+    expect(result.accounting).toMatchObject({
+      reviewInvocationCount: 1,
+      pendingReview: undefined,
+      terminationHistory: ['REVIEWER_FAILURE'],
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'UNCERTAIN',
+          diagnostic: 'Reviewer execution failed: UNCERTAIN.',
+        },
+      ],
+    });
+  });
+
+  it('fails closed when durable failure recording itself is unavailable', () => {
+    const result = runReadOnlyReview(
+      input,
+      dependencies(
+        {
+          invokeReviewer: () => {
+            throw new Error('simulated reviewer subprocess exception');
+          },
+          recordReviewFailure: () => {
+            throw new Error('simulated accounting outage');
+          },
+        },
+        {
+          reviewInvocationCount: 1,
+          pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+        },
+      ),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.executionStatus).toBe('FAILED');
+    expect(result.executionFailureKind).toBe('UNCERTAIN');
+    expect(result.terminationReason).toBeUndefined();
+  });
+
   it('includes the untrusted Issue boundary in the AUTO_FIX implementer prompt', () => {
     const prompt = buildAutoFixPrompt(input, autoFixReview('deterministic finding'));
 
@@ -1698,6 +1888,38 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
+  it('preserves compatible accounting history and fails closed on an incomplete reservation fixture', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-incomplete-review-reservation-'));
+    const statePath = join(directory, 'state.json');
+    const fixture = JSON.parse(
+      readFileSync(
+        join(process.cwd(), 'tests/fixtures/review-accounting/incomplete-review-reservation.json'),
+        'utf8',
+      ),
+    ) as Record<string, unknown>;
+    writeFileSync(statePath, JSON.stringify(fixture), 'utf8');
+
+    try {
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        legacyReviewInvocations: 6,
+        legacyAutoFixCycles: 1,
+        reviewInvocationCount: 1,
+        pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+      });
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+        'incomplete reviewer execution',
+      );
+      expect(JSON.parse(readFileSync(statePath, 'utf8'))).toMatchObject({
+        legacyReviewInvocations: 6,
+        legacyAutoFixCycles: 1,
+        reviewInvocationCount: 1,
+        pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
