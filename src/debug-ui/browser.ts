@@ -1,5 +1,6 @@
 import {
   FixtureAnalysisClient,
+  recordMockInterventionEvent,
   scenarioById,
   scenarios,
   type DebugScenario,
@@ -106,7 +107,10 @@ function render(state: ReplayState): void {
       badge.type = 'button';
       badge.textContent = '! INTERVENE';
       badge.title = 'Mock details only; Tableau APIs are not invoked.';
-      badge.addEventListener('click', () => state.audit.push('mock.intervention.details-opened'));
+      badge.addEventListener('click', () => {
+        recordMockInterventionEvent(state);
+        render(state);
+      });
       intervention.append(badge);
     }
   } else intervention.append(text('No intervention decision.'));

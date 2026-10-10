@@ -162,6 +162,10 @@ export class FixtureAnalysisClient implements AnalysisClient {
   }
 }
 
+export function recordMockInterventionEvent(state: ReplayState): void {
+  state.audit.push('mock.intervention.details-opened');
+}
+
 export function scenarioById(id: string): DebugScenario {
   return scenarios.find((scenario) => scenario.id === id) ?? scenarios[0]!;
 }
