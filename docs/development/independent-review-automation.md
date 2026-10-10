@@ -317,6 +317,13 @@ An AUTO_FIX implementer self-review that reports blocking issues is a distinct
 `BLOCKED` stop. It does not consume an AUTO_FIX cycle and is never retried
 automatically. A matching `BLOCKED` state is recoverable only when its durable
 termination evidence identifies `AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED`.
+Bounded change-reason validation rejection is a separate, narrower recovery
+reason: `AUTO_FIX_BOUNDED_REASON_REJECTED`. Its durable evidence contains only
+the bounded rejection reason, safe target/dirty paths, terminal state, exact
+head, and a working-tree byte fingerprint. Authorization and resume verify
+that the canonical worktree still has the same paths and bytes, preserving the
+uncommitted AUTO_FIX exactly. They only permit deterministic revalidation and
+never commit, approve, or turn the prior review into `PASS`.
 The known older Issue #55 shape may be recovered only through the separate
 human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
 Human Decision record. The old implementer blocking report is not persisted, so

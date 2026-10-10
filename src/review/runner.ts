@@ -144,6 +144,7 @@ export type ApplyAutoFixResult = {
 export type ApplyAutoFix = (review: ReviewGateResult) => string | ApplyAutoFixResult;
 
 const autoFixSelfReviewBlockedPrefix = 'BLOCKED: AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED:';
+const autoFixBoundedReasonRejectedPrefix = 'BLOCKED: AUTO_FIX_BOUNDED_REASON_REJECTED:';
 
 export type IssueToPullRequestResult = ReviewGateResult & {
   pullRequestUrl?: string;
@@ -725,9 +726,11 @@ the changes array; do not include files that you did not change:
   affected_location | direct_test | generalized_rule_sibling |
   required_supporting_change | required_doc_update
 
-affected_location is for a reviewer-reported location. direct_test is for
-a deterministic test of the changed behavior. generalized_rule_sibling is
-for a sibling explicitly covered by the reviewer's generalized rule.
+affected_location is only for the exact reviewer-reported location, including
+when that location is a test file. direct_test is only for a separate,
+deterministic test of the changed behavior that explicitly references the
+affected source path. generalized_rule_sibling is for a sibling explicitly
+covered by the reviewer's generalized rule.
 required_supporting_change and required_doc_update are only for a
 mechanically necessary helper/configuration or documentation update.
 
@@ -1516,8 +1519,8 @@ function runBoundedReviewFixLoopUnsafe(
         reason,
         evidence
           ? {
-              recoveryReason: 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
-              recoveryEvidence: evidence,
+              recoveryReason: evidence.recoveryReason,
+              recoveryEvidence: evidence.recoveryEvidence,
             }
           : undefined,
       );
@@ -1532,10 +1535,69 @@ function runBoundedReviewFixLoopUnsafe(
   }
 }
 
-function parseAutoFixBlockingEvidence(value: string): string | undefined {
-  if (!value.startsWith(autoFixSelfReviewBlockedPrefix)) return undefined;
-  const evidence = value.slice(autoFixSelfReviewBlockedPrefix.length).trim();
-  return evidence.length > 0 ? evidence : undefined;
+function parseAutoFixBlockingEvidence(value: string): ReviewTerminationEvidence | undefined {
+  const prefixes = [
+    [autoFixSelfReviewBlockedPrefix, 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED'],
+    [autoFixBoundedReasonRejectedPrefix, 'AUTO_FIX_BOUNDED_REASON_REJECTED'],
+  ] as const;
+  const match = prefixes.find(([prefix]) => value.startsWith(prefix));
+  if (!match) return undefined;
+  const evidence = value.slice(match[0].length).trim();
+  return evidence.length > 0 ? { recoveryReason: match[1], recoveryEvidence: evidence } : undefined;
+}
+
+function isSafeEvidencePath(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/');
+  return (
+    normalized === path &&
+    normalized.length > 0 &&
+    !isAbsolute(normalized) &&
+    !win32.isAbsolute(normalized) &&
+    normalized.split('/').every((part) => part && part !== '.' && part !== '..') &&
+    !normalized.split('/').includes('.git')
+  );
+}
+
+function workingTreeFingerprint(cwd: string, paths: string[]): string {
+  const hash = createHash('sha256');
+  for (const path of [...paths].sort()) {
+    hash.update(`${path}\0`);
+    const absolutePath = resolve(cwd, path);
+    try {
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink()) {
+        hash.update(`symlink:${readFileSync(absolutePath, 'utf8')}\0`);
+      } else if (stat.isFile()) {
+        hash.update(readFileSync(absolutePath));
+        hash.update('\0');
+      } else {
+        hash.update(`special:${stat.mode}\0`);
+      }
+    } catch {
+      hash.update('missing\0');
+    }
+  }
+  return hash.digest('hex');
+}
+
+function boundedReasonRejectionEvidence(
+  cwd: string,
+  rejectionReason: string,
+  changes: AutoFixChangedFile[],
+  changedPaths: string[],
+): Record<string, unknown> {
+  return {
+    schema: 'auto-fix-bounded-reason-rejection-v1',
+    reason: rejectionReason,
+    targetPaths: changes
+      .map((change) => change.path)
+      .filter(isSafeEvidencePath)
+      .sort(),
+    changedPaths: [...changedPaths].sort(),
+    terminalState: 'BLOCKED',
+    headSha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim(),
+    workingTreeFingerprint: workingTreeFingerprint(cwd, changedPaths),
+  };
 }
 
 function applyCodexAutoFix(
@@ -1609,7 +1671,11 @@ function applyCodexAutoFix(
   }
   if (!changedPaths.length) return 'AUTO_FIX implementer made no repository changes.';
   const scopeError = validateAutoFixChanges(review, input.cwd, input.base, report.changes);
-  if (scopeError) return `BLOCKED: ${scopeError}`;
+  if (scopeError) {
+    return `${autoFixBoundedReasonRejectedPrefix} ${JSON.stringify(
+      boundedReasonRejectionEvidence(input.cwd, scopeError, report.changes, changedPaths),
+    )}`;
+  }
   const declaredPaths = report.changes.map((change) => change.path);
   if (
     changedPaths.some((path) => !declaredPaths.includes(path)) ||
@@ -1705,6 +1771,11 @@ findings and follow-up candidates.
     { "path": "tests/example.test.ts", "reason": "direct_test" }
   ]
 }
+Use affected_location for the exact reviewer-cited file, including a cited
+test file. Use direct_test only for a separate deterministic test that
+explicitly references the affected source path. For example:
+  { "path": "tests/reviewer-cited.test.ts", "reason": "affected_location" },
+  { "path": "tests/related.test.ts", "reason": "direct_test" }
 The allowed reasons are affected_location, direct_test,
 generalized_rule_sibling, required_supporting_change, and required_doc_update.
 `;
@@ -2269,6 +2340,12 @@ export function authorizeReviewResumeAfterLimitAtPath(
           accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
+          (accounting.terminationReason === 'BLOCKED' &&
+            recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED' &&
+            accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
+            accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
+            accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence &&
+            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
@@ -2340,6 +2417,12 @@ export function resumeReviewAfterLimitAtPath(
           accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
           accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
           accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence) ||
+          (accounting.terminationReason === 'BLOCKED' &&
+            recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED' &&
+            accounting.terminationHistory?.at(-1) === 'BLOCKED' &&
+            accounting.terminationEvidence?.recoveryReason === recovery.recoveryReason &&
+            accounting.terminationEvidence.recoveryEvidence === recovery.recoveryEvidence &&
+            isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) ||
           (accounting.terminationReason === 'NO_PROGRESS' &&
             recovery.recoveryReason === 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED' &&
             accounting.terminationHistory?.at(-1) === 'NO_PROGRESS' &&
@@ -2501,6 +2584,8 @@ export function authorizeReviewTerminationRecovery(
   } catch {
     return 'Could not resolve the current feature branch head.';
   }
+  const workspaceError = validateBoundedReasonRejectionWorkspace(cwd, headSha, recovery);
+  if (workspaceError) return workspaceError;
   return authorizeReviewTerminationRecoveryAtPath(
     statePath,
     approvalPath,
@@ -2527,6 +2612,8 @@ export function resumeReviewTerminationRecovery(
   } catch {
     return 'Could not resolve the current feature branch head.';
   }
+  const workspaceError = validateBoundedReasonRejectionWorkspace(cwd, headSha, recovery);
+  if (workspaceError) return workspaceError;
   return resumeReviewTerminationRecoveryAtPath(
     statePath,
     approvalPath,
@@ -3042,6 +3129,16 @@ function isReviewEpochRecoveryMetadataConsistent(history: Record<string, unknown
       evidence.recoveryEvidence === history.recoveryEvidence
     );
   }
+  if (history.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED') {
+    const evidence = history.terminationEvidence;
+    return (
+      history.terminationReason === 'BLOCKED' &&
+      isReviewTerminationEvidence(evidence) &&
+      evidence.recoveryReason === history.recoveryReason &&
+      evidence.recoveryEvidence === history.recoveryEvidence &&
+      isBoundedReasonRejectionEvidence(history.recoveryEvidence)
+    );
+  }
   return (
     history.terminationReason === 'NO_PROGRESS' &&
     history.terminationEvidence === undefined &&
@@ -3089,8 +3186,85 @@ function isCurrentTerminationEvidenceConsistent(state: Record<string, unknown>):
   return (
     state.terminationReason === 'BLOCKED' &&
     isReviewTerminationEvidence(state.terminationEvidence) &&
-    state.terminationEvidence.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED'
+    (state.terminationEvidence.recoveryReason === 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' ||
+      (state.terminationEvidence.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED' &&
+        isBoundedReasonRejectionEvidence(state.terminationEvidence.recoveryEvidence)))
   );
+}
+
+function isBoundedReasonRejectionEvidence(value: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const evidence = parsed as Record<string, unknown>;
+  const pathList = (candidate: unknown): candidate is string[] =>
+    Array.isArray(candidate) &&
+    candidate.length > 0 &&
+    candidate.every((path) => typeof path === 'string' && isSafeEvidencePath(path));
+  return (
+    Object.keys(evidence).every((key) =>
+      new Set([
+        'schema',
+        'reason',
+        'targetPaths',
+        'changedPaths',
+        'terminalState',
+        'headSha',
+        'workingTreeFingerprint',
+      ]).has(key),
+    ) &&
+    evidence.schema === 'auto-fix-bounded-reason-rejection-v1' &&
+    typeof evidence.reason === 'string' &&
+    evidence.reason.trim().length > 0 &&
+    pathList(evidence.targetPaths) &&
+    pathList(evidence.changedPaths) &&
+    evidence.terminalState === 'BLOCKED' &&
+    typeof evidence.headSha === 'string' &&
+    /^[0-9a-f]{40}$/.test(evidence.headSha) &&
+    typeof evidence.workingTreeFingerprint === 'string' &&
+    /^[0-9a-f]{64}$/.test(evidence.workingTreeFingerprint)
+  );
+}
+
+function validateBoundedReasonRejectionWorkspace(
+  cwd: string,
+  headSha: string,
+  recovery: ReviewTerminationRecovery,
+): string | undefined {
+  if (recovery.recoveryReason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED') return undefined;
+  if (!isBoundedReasonRejectionEvidence(recovery.recoveryEvidence)) {
+    return 'Bounded-reason recovery evidence is malformed.';
+  }
+  const evidence = JSON.parse(recovery.recoveryEvidence) as Record<string, unknown>;
+  if (evidence.headSha !== headSha) {
+    return 'Bounded-reason recovery evidence is not bound to the current head.';
+  }
+  let currentPaths: string[];
+  try {
+    currentPaths = workingTreePaths(cwd).sort();
+  } catch {
+    return 'Bounded-reason recovery could not inspect the working tree.';
+  }
+  if (JSON.stringify(currentPaths) !== JSON.stringify(evidence.changedPaths)) {
+    return 'Bounded-reason recovery requires the original dirty diff to remain unchanged.';
+  }
+  for (const path of currentPaths) {
+    const pathError = validateRepositoryPathState(
+      realpathSync(
+        execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim(),
+      ),
+      path,
+    );
+    if (pathError) return 'Bounded-reason recovery requires safe, non-symlink paths.';
+  }
+  if (workingTreeFingerprint(cwd, currentPaths) !== evidence.workingTreeFingerprint) {
+    return 'Bounded-reason recovery detected changed working-tree bytes.';
+  }
+  return undefined;
 }
 
 function isKnownLegacyAutoFixMisclassification(accounting: ReviewAccounting): boolean {

@@ -164,6 +164,14 @@ pre-PR reviewer is available. Such a draft is a bootstrap exception: it is not
 gate-passed, not ready for merge, and must remain clearly marked as pending
 until a fresh reviewer returns `PASS`.
 
+An AUTO_FIX bounded-reason validation rejection is a distinct `BLOCKED` stop.
+Its durable evidence contains only the bounded rejection reason, safe target
+and dirty paths, terminal state, exact head, and a fingerprint of the dirty
+working-tree bytes. A human-authorized recovery may verify and revalidate that
+same state, but does not approve changes, create a commit, or produce `PASS`.
+If the evidence is missing, malformed, or the paths/bytes changed, the gate
+remains closed and no historical Issue or PR evidence may be reconstructed.
+
 ## Review checklist
 
 Use the following checklist for every independent review. Mark an item as not

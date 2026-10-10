@@ -39,6 +39,7 @@ export type TerminationReason = (typeof terminationReasons)[number];
 
 export const reviewRecoveryReasons = [
   'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED',
+  'AUTO_FIX_BOUNDED_REASON_REJECTED',
   'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED',
 ] as const;
 export type ReviewRecoveryReason = (typeof reviewRecoveryReasons)[number];

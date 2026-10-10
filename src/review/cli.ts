@@ -104,6 +104,7 @@ function recoveryEvidence() {
   const humanDecision = argumentsByName.get('human-decision');
   if (
     (reason !== 'AUTO_FIX_IMPLEMENTER_SELF_REVIEW_BLOCKED' &&
+      reason !== 'AUTO_FIX_BOUNDED_REASON_REJECTED' &&
       reason !== 'LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED') ||
     !evidence?.trim() ||
     humanDecision !== 'resume'
