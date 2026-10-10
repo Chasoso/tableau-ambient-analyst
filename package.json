@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
+    "debug:ui": "npm run build && node dist/debug-ui/server.js",
     "validate:skill": "node scripts/validate-skill.mjs",
     "validate": "npm run format:check && npm run validate:skill && npm run lint && npm run typecheck && npm test && npm run build",
     "review:independent": "npm run build && node dist/review/cli.js",
