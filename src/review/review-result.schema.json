@@ -28,6 +28,44 @@
       "enum": ["NO_DRIFT", "LOCAL_CLEANUP", "FOLLOW_UP_MAINTENANCE"]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": { "const": "HUMAN_DECISION_REQUIRED" }
+        }
+      },
+      "then": { "properties": { "escalationRequired": { "const": true } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "blockingFindings": {
+            "contains": {
+              "properties": {
+                "classification": { "enum": ["HUMAN_DECISION_REQUIRED", "BLOCKED"] }
+              }
+            }
+          }
+        }
+      },
+      "then": { "properties": { "escalationRequired": { "const": true } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "nonBlockingFindings": {
+            "contains": {
+              "properties": {
+                "classification": { "enum": ["HUMAN_DECISION_REQUIRED", "BLOCKED"] }
+              }
+            }
+          }
+        }
+      },
+      "then": { "properties": { "escalationRequired": { "const": true } } }
+    }
+  ],
   "$defs": {
     "blockingFinding": {
       "type": "object",

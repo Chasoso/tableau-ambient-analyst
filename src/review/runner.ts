@@ -33,6 +33,7 @@ import {
   validationFailure,
   reviewResults,
   findingClassifications,
+  reviewExecutionFailureKinds,
   type ReviewAccounting,
   type ReviewCycleRecord,
   type ReviewEpochHistory,
@@ -44,6 +45,7 @@ import {
   type ReviewRecoveryReason,
   type ReviewTerminationEvidence,
   type ReviewTerminationRecovery,
+  type ReviewExecutionFailureKind,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -109,6 +111,7 @@ export type ReviewRunnerDependencies = {
   runValidation: (cwd: string) => boolean;
   readIssue: (cwd: string, issue: string) => IssueContext | undefined;
   reserveCycle: (cwd: string, base: string) => string | undefined;
+  markReviewStarted: (cwd: string, base: string) => string | undefined;
   invokeReviewer: (
     input: IndependentReviewInput,
     issue: IssueContext,
@@ -118,6 +121,7 @@ export type ReviewRunnerDependencies = {
   currentBranch: (cwd: string) => string;
   readAccounting: (cwd: string, base: string) => ReviewAccounting | string;
   recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
+  recordReviewFailure: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
   recordTermination: (
     cwd: string,
@@ -235,6 +239,11 @@ return consolidated findings and sibling locations. Keep the search bounded to
 the Issue scope and directly related code; do not perform unbounded repository
 exploration.
 
+Set escalationRequired to true whenever result is HUMAN_DECISION_REQUIRED or
+any finding has classification HUMAN_DECISION_REQUIRED or BLOCKED. Set it to
+false only when no such escalation is present. This is a semantic contract,
+not merely a presentation choice.
+
 AUTO_FIX means existing Issue, ADR, policy, or acceptance criteria make the
 fix deterministic; it may return CHANGES_REQUIRED without human approval.
 HUMAN_DECISION_REQUIRED is only for an unresolved product, architecture,
@@ -301,6 +310,22 @@ export function runReadOnlyReview(
 ): ReviewGateResult {
   const review = runReviewControlFlow(input, dependencies);
   if (review.executionPhase !== 'REVIEW') return review;
+  if (review.executionStatus === 'FAILED') {
+    try {
+      return reviewerFailureResult(
+        review,
+        dependencies.recordReviewFailure(input.cwd, input.base, review),
+      );
+    } catch (error) {
+      return reviewerInvocationFailure(
+        `Review accounting persistence failed closed: ${
+          error instanceof Error ? error.message : 'unknown state error'
+        }`,
+        'REVIEW',
+        'UNCERTAIN',
+      );
+    }
+  }
   try {
     return {
       ...review,
@@ -1400,6 +1425,9 @@ export function runReviewControlFlow(
     return reviewerInvocationFailure(cycleError);
   }
 
+  const startError = dependencies.markReviewStarted(input.cwd, input.base);
+  if (startError) return reviewerInvocationFailure(startError, 'REVIEW', 'UNCERTAIN');
+
   const branch = dependencies.currentBranch(input.cwd);
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
 
@@ -1465,6 +1493,22 @@ function runBoundedReviewFixLoopUnsafe(
       if (typeof accounting === 'string') return reviewerInvocationFailure(accounting);
       return { ...review, accounting };
     }
+    if (review.executionStatus === 'FAILED') {
+      try {
+        return reviewerFailureResult(
+          review,
+          dependencies.recordReviewFailure(input.cwd, input.base, review),
+        );
+      } catch (error) {
+        return reviewerInvocationFailure(
+          `Review accounting persistence failed closed: ${
+            error instanceof Error ? error.message : 'unknown state error'
+          }`,
+          'REVIEW',
+          'UNCERTAIN',
+        );
+      }
+    }
     let accounting = dependencies.recordReview(input.cwd, input.base, review);
     const withAccounting = { ...review, accounting };
 
@@ -1473,14 +1517,11 @@ function runBoundedReviewFixLoopUnsafe(
     }
     if (!canContinueAutoFix(review)) {
       if (requiresHumanDecision(review)) {
-        const reason =
-          review.executionStatus === 'FAILED'
-            ? 'REVIEWER_FAILURE'
-            : review.blockingFindings.some(
-                  (finding) => typeof finding !== 'string' && finding.classification === 'BLOCKED',
-                )
-              ? 'BLOCKED'
-              : 'HUMAN_DECISION_REQUIRED';
+        const reason = review.blockingFindings.some(
+          (finding) => typeof finding !== 'string' && finding.classification === 'BLOCKED',
+        )
+          ? 'BLOCKED'
+          : 'HUMAN_DECISION_REQUIRED';
         accounting = dependencies.recordTermination(input.cwd, input.base, reason);
         return terminationResult(reason, accounting, review.blockingFindings);
       }
@@ -2184,14 +2225,28 @@ function defaultRunnerDependencies(): ReviewRunnerDependencies {
     runValidation: (cwd) => runDeterministicValidation(cwd).passed,
     readIssue: readIssueContext,
     reserveCycle: reserveReviewCycle,
+    markReviewStarted: markReviewStarted,
     invokeReviewer: invokeCodexReviewer,
     currentBranch,
     readAccounting: readReviewAccounting,
     recordReview: recordReviewAccounting,
+    recordReviewFailure: recordReviewFailureAccounting,
     recordAutoFix: recordAutoFixAccounting,
     recordTermination: recordTerminationAccounting,
     recordResume: recordResumeAccounting,
   };
+}
+
+function reviewerFailureResult(
+  review: ReviewGateResult,
+  accounting: ReviewAccounting,
+): ReviewGateResult {
+  return terminationResult(
+    'REVIEWER_FAILURE',
+    accounting,
+    review.blockingFindings,
+    'Reviewer execution failed; the invocation was durably recorded and cannot be retried automatically.',
+  );
 }
 
 function invokeCodexReviewer(
@@ -2217,13 +2272,20 @@ function invokeCodexReviewer(
     );
 
     if (processResult.error) {
-      return reviewerInvocationFailure(processResult.error.message, 'REVIEW');
+      return reviewerInvocationFailure(
+        'Reviewer process could not be launched or timed out.',
+        'REVIEW',
+        (processResult.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'
+          ? 'TIMEOUT'
+          : 'LAUNCH_FAILURE',
+      );
     }
 
     if (processResult.signal) {
       return reviewerInvocationFailure(
-        `Codex was terminated by ${processResult.signal}.`,
+        'Reviewer process was interrupted before producing a result.',
         'REVIEW',
+        'INTERRUPTED',
       );
     }
 
@@ -2232,19 +2294,25 @@ function invokeCodexReviewer(
         ? ` stderr=${sanitizeReviewerDiagnostic(processResult.stderr)}`
         : '';
       return reviewerInvocationFailure(
-        `Codex exited with status ${processResult.status ?? 'unknown'}.${diagnostic}`,
+        `Reviewer process exited unsuccessfully.${diagnostic}`,
         'REVIEW',
+        'NONZERO_EXIT',
       );
     }
 
     const output = extractFinalReviewerMessage(processResult.stdout);
     return output
       ? parseReviewResult(output)
-      : reviewerInvocationFailure('Reviewer returned no final message.', 'REVIEW');
-  } catch (error) {
+      : reviewerInvocationFailure(
+          'Reviewer returned no final message.',
+          'REVIEW',
+          'MALFORMED_OUTPUT',
+        );
+  } catch {
     return reviewerInvocationFailure(
-      error instanceof Error ? error.message : 'Unknown reviewer error.',
+      'Reviewer execution ended in an uncertain state.',
       'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
@@ -2863,6 +2931,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'resumeAuthorizationSource',
     'resumedFromEpoch',
     'terminationEvidence',
+    'pendingReview',
+    'reviewExecutionFailures',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -2906,12 +2976,19 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.resumedFromEpoch !== undefined &&
       (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
     !isCurrentTerminationEvidenceConsistent(state) ||
-    !isReviewEpochMetadataConsistent(state)
+    !isReviewEpochMetadataConsistent(state) ||
+    (state.pendingReview !== undefined && !isPendingReview(state.pendingReview)) ||
+    (state.reviewExecutionFailures !== undefined &&
+      (!Array.isArray(state.reviewExecutionFailures) ||
+        !state.reviewExecutionFailures.every(isReviewExecutionFailure)))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
 
   const parsedCycleResults = state.cycleResults as ReviewCycleRecord[];
+  const pendingReview = state.pendingReview as ReviewAccounting['pendingReview'];
+  const reviewExecutionFailures =
+    state.reviewExecutionFailures as ReviewAccounting['reviewExecutionFailures'];
   const generalizedRuleHistory = state.generalizedRuleHistory as string[];
   const legacyMigration = isIssue29LegacyMigrationState(
     state,
@@ -2952,6 +3029,14 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
         0,
       )
     : 0;
+  const parsedFailures = (state.reviewExecutionFailures ?? []) as NonNullable<
+    ReviewAccounting['reviewExecutionFailures']
+  >;
+  const failureInvocationsAreConsistent = parsedFailures.every(
+    (failure, index) =>
+      failure.reviewInvocation <= (state.reviewInvocationCount as number) &&
+      (index === 0 || failure.reviewInvocation > parsedFailures[index - 1]!.reviewInvocation),
+  );
   if (
     cycleResults.length > (state.reviewInvocationCount as number) ||
     !cycleInvocationsAreConsistent ||
@@ -2960,6 +3045,10 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       : JSON.stringify(generalizedRuleHistory) !== JSON.stringify(expectedRuleHistory)) ||
     expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
     expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
+    !failureInvocationsAreConsistent ||
+    (state.pendingReview !== undefined &&
+      (state.pendingReview as { reviewInvocation: number }).reviewInvocation !==
+        (state.reviewInvocationCount as number)) ||
     (state.terminationReason !== undefined &&
       state.terminationHistory.at(-1) !== state.terminationReason)
   ) {
@@ -3001,6 +3090,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       state.resumeAuthorizationSource === 'human-explicit' ? 'human-explicit' : undefined,
     resumedFromEpoch: state.resumedFromEpoch as number | undefined,
     terminationEvidence: state.terminationEvidence as ReviewTerminationEvidence | undefined,
+    pendingReview,
+    ...(reviewExecutionFailures === undefined ? {} : { reviewExecutionFailures }),
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -3009,6 +3100,38 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
   return { branch: state.branch, base: state.base, accounting };
+}
+
+function isPendingReview(value: unknown): value is NonNullable<ReviewAccounting['pendingReview']> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const pending = value as Record<string, unknown>;
+  return (
+    Object.keys(pending).every((key) => key === 'reviewInvocation' || key === 'status') &&
+    Number.isInteger(pending.reviewInvocation) &&
+    (pending.reviewInvocation as number) >= 1 &&
+    (pending.reviewInvocation as number) <= maxReviewInvocations &&
+    (pending.status === 'RESERVED' || pending.status === 'STARTED')
+  );
+}
+
+function isReviewExecutionFailure(
+  value: unknown,
+): value is NonNullable<ReviewAccounting['reviewExecutionFailures']>[number] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const failure = value as Record<string, unknown>;
+  return (
+    Object.keys(failure).every(
+      (key) => key === 'reviewInvocation' || key === 'kind' || key === 'diagnostic',
+    ) &&
+    Number.isInteger(failure.reviewInvocation) &&
+    (failure.reviewInvocation as number) >= 1 &&
+    (failure.reviewInvocation as number) <= maxReviewInvocations &&
+    typeof failure.kind === 'string' &&
+    reviewExecutionFailureKinds.includes(failure.kind as ReviewExecutionFailureKind) &&
+    typeof failure.diagnostic === 'string' &&
+    failure.diagnostic.length > 0 &&
+    failure.diagnostic.length <= 500
+  );
 }
 
 function isIssue29LegacyMigrationState(
@@ -3934,11 +4057,42 @@ function recordReviewAccounting(
     );
     return {
       ...accounting,
+      pendingReview: undefined,
       generalizedRuleHistory: rules.length
         ? [...accounting.generalizedRuleHistory, ...rules]
         : accounting.generalizedRuleHistory,
       consecutiveRepeatCount,
       cycleResults: [...accounting.cycleResults, currentCycle],
+    };
+  });
+}
+
+function recordReviewFailureAccounting(
+  cwd: string,
+  base: string,
+  review: ReviewGateResult,
+): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => {
+    const reviewInvocation =
+      accounting.pendingReview?.reviewInvocation ?? accounting.reviewInvocationCount;
+    if (
+      !accounting.pendingReview ||
+      accounting.pendingReview.reviewInvocation !== reviewInvocation
+    ) {
+      throw new Error('Review accounting reservation is missing; human recovery is required.');
+    }
+    const kind: ReviewExecutionFailureKind = review.executionFailureKind ?? 'UNCERTAIN';
+    const failure = {
+      reviewInvocation,
+      kind,
+      diagnostic: `Reviewer execution failed: ${kind}.`,
+    };
+    return {
+      ...accounting,
+      pendingReview: undefined,
+      reviewExecutionFailures: [...(accounting.reviewExecutionFailures ?? []), failure],
+      terminationHistory: [...(accounting.terminationHistory ?? []), 'REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
     };
   });
 }
@@ -4018,12 +4172,19 @@ function reserveReviewInvocationAtPath(
   try {
     return withAccountingLock(statePath, () => {
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (accounting.pendingReview) {
+        return 'Review accounting contains an incomplete reviewer execution; human recovery is required.';
+      }
       if (accounting.reviewInvocationCount >= maxReviewInvocations) {
         return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
       }
       writeAccountingAtPath(statePath, branch, base, {
         ...accounting,
         reviewInvocationCount: accounting.reviewInvocationCount + 1,
+        pendingReview: {
+          reviewInvocation: accounting.reviewInvocationCount + 1,
+          status: 'RESERVED',
+        },
       });
       return undefined;
     });
@@ -4033,6 +4194,31 @@ function reserveReviewInvocationAtPath(
       : 'Could not persist the bounded review accounting state.';
   }
   return undefined;
+}
+
+function markReviewStarted(cwd: string, base: string): string | undefined {
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath) return 'Could not resolve the repository git directory for review state.';
+  try {
+    withAccountingLock(statePath, () => {
+      const branch = currentBranch(cwd);
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (!accounting.pendingReview || accounting.pendingReview.status !== 'RESERVED') {
+        throw new Error(
+          'Review accounting reservation is not in a startable state; human recovery is required.',
+        );
+      }
+      writeAccountingAtPath(statePath, branch, base, {
+        ...accounting,
+        pendingReview: { ...accounting.pendingReview, status: 'STARTED' },
+      });
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the reviewer execution start state.';
+  }
 }
 
 function runDeterministicValidation(cwd: string): { passed: boolean } {

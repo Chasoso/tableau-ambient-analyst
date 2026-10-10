@@ -1,5 +1,14 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
 export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const;
+export const reviewExecutionFailureKinds = [
+  'LAUNCH_FAILURE',
+  'TIMEOUT',
+  'NONZERO_EXIT',
+  'MALFORMED_OUTPUT',
+  'INTERRUPTED',
+  'UNCERTAIN',
+] as const;
+export type ReviewExecutionFailureKind = (typeof reviewExecutionFailureKinds)[number];
 export const maxReviewInvocations = 16;
 export const maxAutoFixCycles = 8;
 export const repeatedRuleThreshold = 3;
@@ -131,6 +140,17 @@ export type ReviewAccounting = {
   resumeAuthorizationSource?: 'human-explicit' | undefined;
   resumedFromEpoch?: number | undefined;
   terminationEvidence?: ReviewTerminationEvidence | undefined;
+  pendingReview?:
+    | {
+        reviewInvocation: number;
+        status: 'RESERVED' | 'STARTED';
+      }
+    | undefined;
+  reviewExecutionFailures?: Array<{
+    reviewInvocation: number;
+    kind: ReviewExecutionFailureKind;
+    diagnostic: string;
+  }>;
 };
 
 export type ReviewGateResult = {
@@ -140,6 +160,7 @@ export type ReviewGateResult = {
   escalationRequired: boolean;
   executionStatus?: 'COMPLETED' | 'FAILED';
   executionPhase?: 'PRE_REVIEW' | 'VALIDATION' | 'REVIEW';
+  executionFailureKind?: ReviewExecutionFailureKind;
   accounting?: ReviewAccounting;
   terminationReason?: TerminationReason;
   maintainability?: MaintainabilityResult;
@@ -251,6 +272,7 @@ export function parseReviewResult(raw: string): ReviewGateResult {
 export function reviewerInvocationFailure(
   message: string,
   executionPhase: 'PRE_REVIEW' | 'REVIEW' = 'PRE_REVIEW',
+  executionFailureKind: ReviewExecutionFailureKind = 'UNCERTAIN',
 ): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
@@ -268,6 +290,7 @@ export function reviewerInvocationFailure(
     escalationRequired: true,
     executionStatus: 'FAILED',
     executionPhase,
+    ...(executionPhase === 'REVIEW' ? { executionFailureKind } : {}),
   };
 }
 
@@ -444,5 +467,7 @@ function malformedResult(message: string): ReviewGateResult {
     nonBlockingFindings: [],
     escalationRequired: true,
     executionStatus: 'FAILED',
+    executionPhase: 'REVIEW',
+    executionFailureKind: 'MALFORMED_OUTPUT',
   };
 }

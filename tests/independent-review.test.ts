@@ -298,8 +298,11 @@ describe('independent review gate contract', () => {
     expect(canOpenPullRequest(true, escalation)).toBe(false);
     expect(canOpenPullRequest(true, failedInvocation)).toBe(false);
     expect(failedInvocation.executionStatus).toBe('FAILED');
+    expect(failedInvocation.executionPhase).toBe('PRE_REVIEW');
     expect(canOpenPullRequest(true, malformed)).toBe(false);
     expect(malformed.executionStatus).toBe('FAILED');
+    expect(malformed.executionPhase).toBe('REVIEW');
+    expect(malformed.executionFailureKind).toBe('MALFORMED_OUTPUT');
   });
 
   it('marks valid reviewer output as completed execution', () => {
@@ -683,6 +686,7 @@ describe('independent review runner control flow', () => {
         url: 'https://example.test/26',
       }),
       reserveCycle: () => undefined,
+      markReviewStarted: () => undefined,
       invokeReviewer: () =>
         parseReviewResult(
           JSON.stringify({
@@ -735,6 +739,23 @@ describe('independent review runner control flow', () => {
               generalizedRules: rules,
               findingIdentities,
               repositoryChanged: null,
+            },
+          ],
+        };
+        return accounting;
+      },
+      recordReviewFailure: (_cwd, _base, review) => {
+        accounting = {
+          ...accounting,
+          pendingReview: undefined,
+          terminationReason: 'REVIEWER_FAILURE',
+          terminationHistory: [...(accounting.terminationHistory ?? []), 'REVIEWER_FAILURE'],
+          reviewExecutionFailures: [
+            ...(accounting.reviewExecutionFailures ?? []),
+            {
+              reviewInvocation: accounting.reviewInvocationCount,
+              kind: review.executionFailureKind ?? 'UNCERTAIN',
+              diagnostic: `Reviewer execution failed: ${review.executionFailureKind ?? 'UNCERTAIN'}.`,
             },
           ],
         };
@@ -1020,6 +1041,35 @@ describe('independent review runner control flow', () => {
     expect(result.blockingFindings[0]).toMatchObject({ classification: 'AUTO_FIX' });
     expect(reviews).toBe(1);
     expect(result.accounting?.reviewInvocationCount).toBe(1);
+  });
+
+  it('durably records reviewer execution failure without refunding or creating a cycle', () => {
+    const result = runReadOnlyReview(
+      input,
+      dependencies(
+        {
+          invokeReviewer: () =>
+            reviewerInvocationFailure('reviewer launch failed', 'REVIEW', 'LAUNCH_FAILURE'),
+        },
+        {
+          reviewInvocationCount: 1,
+          pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+        },
+      ),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.terminationReason).toBe('REVIEWER_FAILURE');
+    expect(result.accounting?.reviewInvocationCount).toBe(1);
+    expect(result.accounting?.cycleResults).toHaveLength(0);
+    expect(result.accounting?.pendingReview).toBeUndefined();
+    expect(result.accounting?.reviewExecutionFailures).toEqual([
+      {
+        reviewInvocation: 1,
+        kind: 'LAUNCH_FAILURE',
+        diagnostic: 'Reviewer execution failed: LAUNCH_FAILURE.',
+      },
+    ]);
   });
 
   it('includes the untrusted Issue boundary in the AUTO_FIX implementer prompt', () => {
@@ -1651,13 +1701,10 @@ describe('review cycle state', () => {
         consumedAt: expect.any(String),
       });
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
-      for (let invocation = 1; invocation < maxReviewInvocations; invocation += 1) {
-        expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
-      }
-      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('incomplete');
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewEpoch: 2,
-        reviewInvocationCount: maxReviewInvocations,
+        reviewInvocationCount: 1,
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2530,6 +2577,7 @@ process.stdout.write(typeof result === 'string' ? 'blocked' : 'resumed');
             consecutiveRepeatCount: 0,
             lastFixChangedRepository: null,
             terminationHistory: [],
+            pendingReview: { reviewInvocation: 1, status: 'RESERVED' },
             cycleResults: [],
           },
         ],
@@ -2709,10 +2757,12 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
       );
       const results = await Promise.all(workers);
 
-      expect(results.filter((result) => result === 'reserved')).toHaveLength(maxReviewInvocations);
-      expect(results.filter((result) => result === 'limited')).toHaveLength(maxReviewInvocations);
+      expect(results.filter((result) => result === 'reserved')).toHaveLength(1);
+      expect(results.filter((result) => result === 'limited')).toHaveLength(
+        maxReviewInvocations * 2 - 1,
+      );
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
-        reviewInvocationCount: maxReviewInvocations,
+        reviewInvocationCount: 1,
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -2727,10 +2777,10 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
       expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'main')).toBeUndefined();
       expect(reserveReviewCycleAtPath(statePath, 'feature/b', 'main')).toBeUndefined();
       expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'develop')).toBeUndefined();
-      expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'main')).toBeUndefined();
+      expect(reserveReviewCycleAtPath(statePath, 'feature/a', 'main')).toContain('incomplete');
 
       expect(readReviewAccountingAtPath(statePath, 'feature/a', 'main').reviewInvocationCount).toBe(
-        2,
+        1,
       );
       expect(readReviewAccountingAtPath(statePath, 'feature/b', 'main').reviewInvocationCount).toBe(
         1,
@@ -2755,7 +2805,7 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
         legacyReviewInvocations: 0,
         legacyAutoFixCycles: 0,
         accountingEpochStart: 'issue-29-accounting-v2',
-        reviewInvocationCount: 15,
+        reviewInvocationCount: 16,
         autoFixCycleCount: 0,
         generalizedRuleHistory: [],
         consecutiveRepeatCount: 0,
@@ -2767,11 +2817,6 @@ process.stdout.write(result === undefined ? 'reserved' : 'limited');
     );
 
     try {
-      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
-      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
-        reviewInvocationCount: 16,
-        autoFixCycleCount: 0,
-      });
       expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain('limit');
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -3051,6 +3096,7 @@ exit 1
         runValidation: () => true,
         readIssue: () => issue,
         reserveCycle: () => undefined,
+        markReviewStarted: () => undefined,
         invokeReviewer: () =>
           parseReviewResult(
             JSON.stringify({
@@ -3064,6 +3110,7 @@ exit 1
         currentBranch: () => 'feat/issue-38',
         readAccounting: () => followUpAccounting,
         recordReview: () => followUpAccounting,
+        recordReviewFailure: () => followUpAccounting,
         recordAutoFix: () => followUpAccounting,
         recordTermination: () => followUpAccounting,
       };
