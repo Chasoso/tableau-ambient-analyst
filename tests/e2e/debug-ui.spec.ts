@@ -65,6 +65,7 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.getByTestId('intervention-badge')).toBeVisible();
 
     await page.getByLabel('Scenario').selectOption('ignored');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveText('IDLE');
     await expect(page.getByTestId('intervention-badge')).toHaveCount(0);
     await page.getByRole('button', { name: 'Replay' }).click();
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('IGNORED');

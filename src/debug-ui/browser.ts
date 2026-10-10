@@ -41,6 +41,8 @@ function list(items: readonly string[], empty = 'None'): HTMLUListElement {
 }
 
 function renderIdle(scenario: DebugScenario): void {
+  status.textContent = 'IDLE';
+  status.dataset.status = 'idle';
   content.replaceChildren(
     panel(
       'Replay',
