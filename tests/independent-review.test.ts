@@ -3185,10 +3185,10 @@ exit 1
 describe('bounded-reason termination recovery', () => {
   it('requires and preserves the exact dirty diff across authorized revalidation', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-bounded-recovery-'));
-    const trackedPath = join(directory, 'src', 'tracked.ts');
+    const trackedPath = join(directory, 'tests', 'e2e', 'debug-ui.spec.ts');
     const original = 'export const value = 1;\n';
     const changed = 'export const value = 2;\n';
-    mkdirSync(join(directory, 'src'), { recursive: true });
+    mkdirSync(join(directory, 'tests', 'e2e'), { recursive: true });
     writeFileSync(trackedPath, original);
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
     execFileSync('git', ['add', '.'], { cwd: directory });
@@ -3197,7 +3197,7 @@ describe('bounded-reason termination recovery', () => {
       ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'fixture'],
       { cwd: directory },
     );
-    execFileSync('git', ['checkout', '-qb', 'feat/issue-75'], { cwd: directory });
+    execFileSync('git', ['checkout', '-qb', 'feat/issue-73'], { cwd: directory });
     writeFileSync(trackedPath, changed);
     const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: directory,
@@ -3216,20 +3216,21 @@ describe('bounded-reason termination recovery', () => {
       }),
     );
     hash.update(execFileSync('git', ['diff', '--binary', '--no-ext-diff'], { cwd: directory }));
-    hash.update('src/tracked.ts\0');
+    hash.update('tests/e2e/debug-ui.spec.ts\0');
     hash.update(changed);
     hash.update('\0');
     const recovery = {
       recoveryReason: 'AUTO_FIX_BOUNDED_REASON_REJECTED' as const,
       humanDecision: 'resume' as const,
-      issue: '75',
+      issue: '73',
       recoveryEvidence: JSON.stringify({
         schema: 'auto-fix-bounded-reason-rejection-v1',
-        reason: 'AUTO_FIX change src/tracked.ts has no valid bounded reason: direct_test.',
-        rejectedPath: 'src/tracked.ts',
+        reason:
+          'AUTO_FIX change tests/e2e/debug-ui.spec.ts has no valid bounded reason: direct_test.',
+        rejectedPath: 'tests/e2e/debug-ui.spec.ts',
         rejectedReason: 'direct_test',
-        targetPaths: ['src/tracked.ts'],
-        changedPaths: ['src/tracked.ts'],
+        targetPaths: ['tests/e2e/debug-ui.spec.ts'],
+        changedPaths: ['tests/e2e/debug-ui.spec.ts'],
         terminalState: 'BLOCKED',
         headSha,
         workingTreeFingerprint: hash.digest('hex'),
@@ -3254,12 +3255,12 @@ describe('bounded-reason termination recovery', () => {
       JSON.stringify({
         entries: [
           {
-            branch: 'feat/issue-75',
+            branch: 'feat/issue-73',
             base: 'main',
             legacyReviewInvocations: 0,
             legacyAutoFixCycles: 0,
             accountingEpochStart: 'issue-29-accounting-v2',
-            reviewInvocationCount: 1,
+            reviewInvocationCount: 7,
             autoFixCycleCount: 0,
             generalizedRuleHistory: [],
             consecutiveRepeatCount: 0,
@@ -3282,7 +3283,7 @@ describe('bounded-reason termination recovery', () => {
       const mismatchedRecovery = {
         ...recovery,
         recoveryEvidence: recovery.recoveryEvidence.replace(
-          '"targetPaths":["src/tracked.ts"]',
+          '"targetPaths":["tests/e2e/debug-ui.spec.ts"]',
           '"targetPaths":["tests/reviewer-cited.test.ts"]',
         ),
       };
@@ -3290,7 +3291,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feat/issue-75',
+          'feat/issue-73',
           'main',
           headSha,
           mismatchedRecovery,
@@ -3301,7 +3302,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feat/issue-75',
+          'feat/issue-73',
           'main',
           '0000000000000000000000000000000000000000',
           recovery,
@@ -3313,7 +3314,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feat/issue-75',
+          'feat/issue-73',
           'main',
           headSha,
           recovery,
@@ -3324,7 +3325,7 @@ describe('bounded-reason termination recovery', () => {
         authorizeReviewTerminationRecoveryAtPath(
           statePath,
           approvalPath,
-          'feat/issue-75',
+          'feat/issue-73',
           'main',
           headSha,
           recovery,
@@ -3345,11 +3346,13 @@ describe('bounded-reason termination recovery', () => {
         'working-tree',
       );
       writeFileSync(trackedPath, before);
-      execFileSync('git', ['add', '--', 'src/tracked.ts'], { cwd: directory });
+      execFileSync('git', ['add', '--', 'tests/e2e/debug-ui.spec.ts'], { cwd: directory });
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
         'working-tree',
       );
-      execFileSync('git', ['reset', '-q', 'HEAD', '--', 'src/tracked.ts'], { cwd: directory });
+      execFileSync('git', ['reset', '-q', 'HEAD', '--', 'tests/e2e/debug-ui.spec.ts'], {
+        cwd: directory,
+      });
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).not.toBeTypeOf(
         'string',
       );
@@ -3372,12 +3375,12 @@ describe('bounded-reason termination recovery', () => {
         JSON.stringify({
           entries: [
             {
-              branch: 'feat/issue-75',
+              branch: 'feat/issue-73',
               base: 'main',
               legacyReviewInvocations: 0,
               legacyAutoFixCycles: 0,
               accountingEpochStart: 'issue-29-accounting-v2',
-              reviewInvocationCount: 1,
+              reviewInvocationCount: 7,
               autoFixCycleCount: 0,
               generalizedRuleHistory: [],
               consecutiveRepeatCount: 0,
