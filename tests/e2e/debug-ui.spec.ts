@@ -27,6 +27,7 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.getByText('INTERVENE:', { exact: false })).toBeVisible();
     const badge = page.getByTestId('intervention-badge');
     await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('! INTERVENE');
     await badge.click();
     await expect(page.getByText('mock.intervention.details-opened')).toBeVisible();
   });
