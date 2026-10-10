@@ -30,6 +30,7 @@ import {
   terminationReasons,
   reviewRecoveryReasons,
   reviewRecoveryHumanDecisions,
+  reviewerFailureRecoveryHumanDecisions,
   validationFailure,
   reviewResults,
   findingClassifications,
@@ -81,6 +82,15 @@ const issue29LegacyHistoryPrefixHash =
   'b830b2505609a758c27a489994d540176ca3f79b6bfdea2a778d498cbc808b65';
 const accountingLockRetryCount = 1000;
 const accountingLockRetryMs = 10;
+const reviewerSchemaUnsupportedKeywords = new Set([
+  'allOf',
+  'if',
+  'then',
+  'else',
+  'contains',
+  'const',
+]);
+const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -2421,6 +2431,234 @@ export function reserveReviewCycleAtPath(
   return reserveReviewInvocationAtPath(statePath, branch, base);
 }
 
+type ReviewerFailureRecoveryPrerequisiteCheck = (cwd: string) => string | undefined;
+
+function reviewerFailureState(
+  accounting: ReviewAccounting,
+): { failedReviewInvocation: number; failureKind: ReviewExecutionFailureKind } | string {
+  const failure = accounting.reviewExecutionFailures?.at(-1);
+  if (
+    accounting.terminationReason !== 'REVIEWER_FAILURE' ||
+    accounting.terminationHistory?.at(-1) !== 'REVIEWER_FAILURE' ||
+    accounting.pendingReview !== undefined ||
+    !failure ||
+    failure.reviewInvocation !== accounting.reviewInvocationCount
+  ) {
+    return 'Reviewer-failure recovery requires a matching terminal failure state.';
+  }
+  return {
+    failedReviewInvocation: failure.reviewInvocation,
+    failureKind: failure.kind,
+  };
+}
+
+function reviewerFailureRecoveryPrerequisiteMismatch(
+  workspaceCwd: string,
+  expectedSchemaFingerprint: string,
+  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck,
+): string | undefined {
+  const prerequisiteError = prerequisiteCheck(workspaceCwd);
+  if (prerequisiteError) return prerequisiteError;
+  const actualSchemaFingerprint = reviewerSchemaFingerprint(workspaceCwd);
+  if (!actualSchemaFingerprint || actualSchemaFingerprint !== expectedSchemaFingerprint) {
+    return 'Reviewer Schema fingerprint changed or could not be verified.';
+  }
+  return undefined;
+}
+
+/** Create a single-use approval for one reviewer-failure retry. */
+export function authorizeReviewerFailureRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck = reviewerFailureRecoveryPrerequisiteError,
+): ReviewResumeApproval | string {
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    prerequisiteCheck,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const failureState = reviewerFailureState(accounting);
+      if (typeof failureState === 'string') return failureState;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review approval already exists for this epoch.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'reviewer-failure-recovery',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: accounting.reviewInvocationCount,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        originalTerminationReason: 'REVIEWER_FAILURE',
+        schemaFingerprint,
+        failedReviewInvocation: failureState.failedReviewInvocation,
+        humanDecision: 'retry-review',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist review approval.';
+  }
+}
+
+/** Consume a matching reviewer-failure approval without resetting accounting. */
+export function resumeReviewerFailureRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck = reviewerFailureRecoveryPrerequisiteError,
+): ReviewAccounting | string {
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    prerequisiteCheck,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const failureState = reviewerFailureState(accounting);
+      if (typeof failureState === 'string') return failureState;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'reviewer-failure-recovery' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === accounting.reviewInvocationCount &&
+          candidate.failedReviewInvocation === failureState.failedReviewInvocation &&
+          candidate.originalTerminationReason === 'REVIEWER_FAILURE' &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.authorizationSource === 'human-explicit' &&
+          candidate.humanDecision === 'retry-review' &&
+          !candidate.consumed &&
+          candidate.headSha === headSha,
+      );
+      if (!approval) {
+        return 'No matching unconsumed reviewer-failure approval exists for this state.';
+      }
+      const authorizedAt = new Date().toISOString();
+      const next: ReviewAccounting = {
+        ...accounting,
+        terminationReason: undefined,
+        reviewerFailureRecovery: {
+          approvalId: approval.id,
+          authorizedAt,
+          authorizationSource: 'human-explicit',
+          reviewEpoch: accounting.reviewEpoch ?? 1,
+          failedReviewInvocation: failureState.failedReviewInvocation,
+          headSha,
+          schemaFingerprint,
+        },
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: authorizedAt }
+          : candidate,
+      );
+      writeAccountingAndApprovalsAtomically(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+      );
+      return next;
+    });
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the reviewer-failure recovery.';
+  }
+}
+
+export function authorizeReviewerFailureRecovery(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reviewer-failure recovery.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  return authorizeReviewerFailureRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+export function resumeReviewerFailureRecovery(
+  cwd: string,
+  base: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reviewer-failure recovery.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  return resumeReviewerFailureRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+function readHeadSha(cwd: string): string | undefined {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Create the durable approval record. This is never called by review loops. */
 export function authorizeReviewResumeAfterLimitAtPath(
   statePath: string,
@@ -2830,6 +3068,79 @@ function resolveReviewApprovalPath(cwd: string): string | undefined {
   }
 }
 
+export function validateReviewerSchemaCompatibility(cwd: string): string | undefined {
+  const schemaPath = resolve(cwd, 'src/review/review-result.schema.json');
+  let schema: unknown;
+  try {
+    schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as unknown;
+  } catch {
+    return 'Reviewer Schema could not be parsed.';
+  }
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return 'Reviewer Schema root must be an object.';
+  }
+  const root = schema as Record<string, unknown>;
+  if (root.type !== 'object' || root.additionalProperties !== false) {
+    return 'Reviewer Schema root is outside the supported Structured Outputs shape.';
+  }
+  const required = root.required;
+  const requiredFields = [
+    'result',
+    'blockingFindings',
+    'nonBlockingFindings',
+    'escalationRequired',
+    'maintainability',
+  ];
+  if (
+    !Array.isArray(required) ||
+    required.some((field) => typeof field !== 'string') ||
+    requiredFields.some((field) => !required.includes(field))
+  ) {
+    return 'Reviewer Schema is missing required structured result fields.';
+  }
+
+  const foundKeywords = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (reviewerSchemaUnsupportedKeywords.has(key)) foundKeywords.add(key);
+      visit(child);
+    }
+  };
+  visit(schema);
+  if (foundKeywords.size > 0) {
+    return 'Reviewer Schema contains unsupported Structured Outputs keywords.';
+  }
+  return undefined;
+}
+
+export function reviewerSchemaFingerprint(cwd: string): string | undefined {
+  if (validateReviewerSchemaCompatibility(cwd)) return undefined;
+  try {
+    return createHash('sha256')
+      .update(readFileSync(resolve(cwd, 'src/review/review-result.schema.json')))
+      .digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+function reviewerFailureRecoveryPrerequisiteError(cwd: string): string | undefined {
+  if (!runDeterministicValidation(cwd).passed) {
+    return 'Deterministic validation must pass before reviewer-failure recovery.';
+  }
+  return (
+    validateReviewerSchemaCompatibility(cwd) ??
+    (reviewerSchemaFingerprint(cwd)
+      ? undefined
+      : 'Reviewer Schema fingerprint could not be computed.')
+  );
+}
+
 function emptyAccounting(): ReviewAccounting {
   return {
     legacyReviewInvocations: 0,
@@ -2933,6 +3244,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'terminationEvidence',
     'pendingReview',
     'reviewExecutionFailures',
+    'reviewerFailureRecovery',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -2980,7 +3292,10 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.pendingReview !== undefined && !isPendingReview(state.pendingReview)) ||
     (state.reviewExecutionFailures !== undefined &&
       (!Array.isArray(state.reviewExecutionFailures) ||
-        !state.reviewExecutionFailures.every(isReviewExecutionFailure)))
+        !state.reviewExecutionFailures.every(isReviewExecutionFailure))) ||
+    (state.reviewerFailureRecovery !== undefined &&
+      (!isReviewerFailureRecovery(state.reviewerFailureRecovery) ||
+        !isReviewerFailureRecoveryConsistent(state)))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -3092,6 +3407,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     terminationEvidence: state.terminationEvidence as ReviewTerminationEvidence | undefined,
     pendingReview,
     ...(reviewExecutionFailures === undefined ? {} : { reviewExecutionFailures }),
+    ...(state.reviewerFailureRecovery === undefined
+      ? {}
+      : {
+          reviewerFailureRecovery: state.reviewerFailureRecovery as NonNullable<
+            ReviewAccounting['reviewerFailureRecovery']
+          >,
+        }),
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -3637,50 +3959,129 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'originalTerminationReason',
     'recoveryReason',
     'recoveryEvidence',
+    'schemaFingerprint',
+    'failedReviewInvocation',
     'humanDecision',
     'issue',
   ]);
-  return (
-    Object.keys(approval).every((key) => allowedKeys.has(key)) &&
-    typeof approval.id === 'string' &&
-    (approval.approvalType === 'review-limit-resume' ||
-      approval.approvalType === 'review-termination-recovery') &&
-    approval.targetRepository === targetRepository &&
-    typeof approval.branch === 'string' &&
-    typeof approval.base === 'string' &&
-    Number.isInteger(approval.reviewEpoch) &&
-    (approval.reviewEpoch as number) >= 1 &&
-    Number.isInteger(approval.exhaustedReviewInvocationCount) &&
-    (approval.exhaustedReviewInvocationCount as number) >= 0 &&
-    (approval.exhaustedReviewInvocationCount as number) <= maxReviewInvocations &&
-    typeof approval.approvedAt === 'string' &&
-    approval.authorizationSource === 'human-explicit' &&
-    typeof approval.consumed === 'boolean' &&
-    typeof approval.headSha === 'string' &&
+  if (
+    !Object.keys(approval).every((key) => allowedKeys.has(key)) ||
+    typeof approval.id !== 'string' ||
+    !(
+      approval.approvalType === 'review-limit-resume' ||
+      approval.approvalType === 'review-termination-recovery' ||
+      approval.approvalType === 'reviewer-failure-recovery'
+    ) ||
+    approval.targetRepository !== targetRepository ||
+    typeof approval.branch !== 'string' ||
+    typeof approval.base !== 'string' ||
+    !Number.isInteger(approval.reviewEpoch) ||
+    (approval.reviewEpoch as number) < 1 ||
+    !Number.isInteger(approval.exhaustedReviewInvocationCount) ||
+    (approval.exhaustedReviewInvocationCount as number) < 0 ||
+    (approval.exhaustedReviewInvocationCount as number) > maxReviewInvocations ||
+    typeof approval.approvedAt !== 'string' ||
+    approval.authorizationSource !== 'human-explicit' ||
+    typeof approval.consumed !== 'boolean' ||
+    typeof approval.headSha !== 'string' ||
     (approval.consumed
-      ? typeof approval.consumedAt === 'string'
-      : approval.consumedAt === undefined) &&
-    (approval.approvalType === 'review-limit-resume'
-      ? approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
-        approval.originalTerminationReason === undefined &&
-        approval.recoveryReason === undefined &&
-        approval.recoveryEvidence === undefined &&
-        approval.humanDecision === undefined
-      : (approval.originalTerminationReason === 'BLOCKED' ||
-          approval.originalTerminationReason === 'NO_PROGRESS') &&
-        typeof approval.recoveryReason === 'string' &&
-        reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
-        typeof approval.recoveryEvidence === 'string' &&
-        approval.recoveryEvidence.trim().length > 0 &&
-        typeof approval.humanDecision === 'string' &&
-        reviewRecoveryHumanDecisions.includes(
-          approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
-        ) &&
-        (approval.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
-          ? typeof approval.issue === 'string' &&
-            /^\d+$/.test(approval.issue) &&
-            approval.branch === `feat/issue-${approval.issue}`
-          : approval.issue === undefined))
+      ? typeof approval.consumedAt !== 'string'
+      : approval.consumedAt !== undefined)
+  ) {
+    return false;
+  }
+  if (approval.approvalType === 'review-limit-resume') {
+    return (
+      approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      approval.schemaFingerprint === undefined &&
+      approval.failedReviewInvocation === undefined &&
+      approval.humanDecision === undefined
+    );
+  }
+  if (approval.approvalType === 'reviewer-failure-recovery') {
+    return (
+      approval.originalTerminationReason === 'REVIEWER_FAILURE' &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      Number.isInteger(approval.failedReviewInvocation) &&
+      (approval.failedReviewInvocation as number) >= 1 &&
+      (approval.failedReviewInvocation as number) <= maxReviewInvocations &&
+      typeof approval.humanDecision === 'string' &&
+      reviewerFailureRecoveryHumanDecisions.includes(
+        approval.humanDecision as (typeof reviewerFailureRecoveryHumanDecisions)[number],
+      ) &&
+      approval.issue === undefined
+    );
+  }
+  return (
+    (approval.originalTerminationReason === 'BLOCKED' ||
+      approval.originalTerminationReason === 'NO_PROGRESS') &&
+    typeof approval.recoveryReason === 'string' &&
+    reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
+    typeof approval.recoveryEvidence === 'string' &&
+    approval.recoveryEvidence.trim().length > 0 &&
+    typeof approval.humanDecision === 'string' &&
+    reviewRecoveryHumanDecisions.includes(
+      approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
+    ) &&
+    approval.schemaFingerprint === undefined &&
+    approval.failedReviewInvocation === undefined &&
+    (approval.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
+      ? typeof approval.issue === 'string' &&
+        /^\d+$/.test(approval.issue) &&
+        approval.branch === `feat/issue-${approval.issue}`
+      : approval.issue === undefined)
+  );
+}
+
+function isReviewerFailureRecovery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const recovery = value as Record<string, unknown>;
+  return (
+    Object.keys(recovery).every(
+      (key) =>
+        key === 'approvalId' ||
+        key === 'authorizedAt' ||
+        key === 'authorizationSource' ||
+        key === 'reviewEpoch' ||
+        key === 'failedReviewInvocation' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
+    ) &&
+    typeof recovery.approvalId === 'string' &&
+    typeof recovery.authorizedAt === 'string' &&
+    recovery.authorizationSource === 'human-explicit' &&
+    Number.isInteger(recovery.reviewEpoch) &&
+    (recovery.reviewEpoch as number) >= 1 &&
+    Number.isInteger(recovery.failedReviewInvocation) &&
+    (recovery.failedReviewInvocation as number) >= 1 &&
+    (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
+    typeof recovery.headSha === 'string' &&
+    typeof recovery.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
+  );
+}
+
+function isReviewerFailureRecoveryConsistent(state: Record<string, unknown>): boolean {
+  const recovery = state.reviewerFailureRecovery as Record<string, unknown>;
+  const failures = state.reviewExecutionFailures;
+  return (
+    state.terminationReason === undefined &&
+    Array.isArray(state.terminationHistory) &&
+    state.terminationHistory.at(-1) === 'REVIEWER_FAILURE' &&
+    Array.isArray(failures) &&
+    failures.some(
+      (failure) =>
+        isReviewExecutionFailure(failure) &&
+        failure.reviewInvocation === recovery.failedReviewInvocation,
+    ) &&
+    recovery.reviewEpoch === (state.reviewEpoch ?? 1) &&
+    (recovery.failedReviewInvocation as number) <= (state.reviewInvocationCount as number)
   );
 }
 
@@ -3807,6 +4208,15 @@ type ResumeTransaction = {
   approvalState: unknown;
 };
 
+type ReviewerFailureRecoveryTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
 function writeJsonAtomically(path: string, value: unknown): void {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, JSON.stringify(value), 'utf8');
@@ -3815,6 +4225,10 @@ function writeJsonAtomically(path: string, value: unknown): void {
 
 function resumeTransactionPath(statePath: string): string {
   return `${statePath}${resumeTransactionSuffix}`;
+}
+
+function reviewerFailureRecoveryTransactionPath(statePath: string): string {
+  return `${statePath}${reviewerFailureRecoveryTransactionSuffix}`;
 }
 
 function canonicalResumeApprovalPath(statePath: string): string {
@@ -3909,6 +4323,92 @@ function persistResumeTransaction(
   unlinkSync(transactionPath);
 }
 
+function writeAccountingAndApprovalsAtomically(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+): void {
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  const approvalState = { approvals };
+  const transactionPath = reviewerFailureRecoveryTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    accountingState,
+    approvalState,
+  } satisfies ReviewerFailureRecoveryTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function recoverPendingReviewerFailureRecoveryTransaction(statePath: string): void {
+  const transactionPath = reviewerFailureRecoveryTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewerFailureRecoveryTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    typeof transaction.branch !== 'string' ||
+    typeof transaction.base !== 'string' ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  entries.forEach((entry) =>
+    parseAccountingStateEntry({ branch: entry.branch, base: entry.base, ...entry.accounting }),
+  );
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction is invalid; human recovery is required.',
+    );
+  }
+  if (
+    !entries.some((entry) => entry.branch === transaction.branch && entry.base === transaction.base)
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction target is missing; human recovery is required.',
+    );
+  }
+  writeJsonAtomically(statePath, transaction.accountingState);
+  writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  unlinkSync(transactionPath);
+}
+
 function validateResumeTransactionSemantics(
   transaction: ResumeTransaction,
   accountingEntries: AccountingStateEntry[],
@@ -3983,6 +4483,7 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
       throw new Error('Review accounting state is locked; human recovery is required.');
     }
     recoverPendingResumeTransaction(statePath);
+    recoverPendingReviewerFailureRecoveryTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {

@@ -60,6 +60,9 @@ export type ReviewTerminationEvidence = {
 
 export const reviewRecoveryHumanDecisions = ['resume'] as const;
 export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[number];
+export const reviewerFailureRecoveryHumanDecisions = ['retry-review'] as const;
+export type ReviewerFailureRecoveryHumanDecision =
+  (typeof reviewerFailureRecoveryHumanDecisions)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
   issue?: string | undefined;
@@ -102,7 +105,7 @@ export type ReviewEpochHistory = {
 
 export type ReviewResumeApproval = {
   id: string;
-  approvalType: 'review-limit-resume' | 'review-termination-recovery';
+  approvalType: 'review-limit-resume' | 'review-termination-recovery' | 'reviewer-failure-recovery';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
   base: string;
@@ -113,10 +116,12 @@ export type ReviewResumeApproval = {
   consumed: boolean;
   headSha: string;
   consumedAt?: string | undefined;
-  originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | undefined;
+  originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | 'REVIEWER_FAILURE' | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
-  humanDecision?: ReviewRecoveryHumanDecision | undefined;
+  schemaFingerprint?: string | undefined;
+  failedReviewInvocation?: number | undefined;
+  humanDecision?: ReviewRecoveryHumanDecision | ReviewerFailureRecoveryHumanDecision | undefined;
   issue?: string | undefined;
 };
 
@@ -151,6 +156,15 @@ export type ReviewAccounting = {
     kind: ReviewExecutionFailureKind;
     diagnostic: string;
   }>;
+  reviewerFailureRecovery?: {
+    approvalId: string;
+    authorizedAt: string;
+    authorizationSource: 'human-explicit';
+    reviewEpoch: number;
+    failedReviewInvocation: number;
+    headSha: string;
+    schemaFingerprint: string;
+  };
 };
 
 export type ReviewGateResult = {

@@ -49,6 +49,9 @@ import {
   runPostPushCiGate,
   runReadOnlyReview,
   runReviewControlFlow,
+  authorizeReviewerFailureRecoveryAtPath,
+  resumeReviewerFailureRecoveryAtPath,
+  reviewerSchemaFingerprint,
   resolveActivePullRequest,
   validateAdvancedPullRequestHead,
   observePullRequestCi,
@@ -1633,6 +1636,224 @@ describe('independent review scope context', () => {
 });
 
 describe('review cycle state', () => {
+  it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    const schemaFingerprint = reviewerSchemaFingerprint(process.cwd());
+    if (!schemaFingerprint) throw new Error('test schema fingerprint unavailable');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['REVIEWER_FAILURE'],
+        reviewExecutionFailures: [
+          { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+        ],
+        terminationReason: 'REVIEWER_FAILURE',
+      }),
+      'utf8',
+    );
+
+    try {
+      const approval = authorizeReviewerFailureRecoveryAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head-sha',
+        schemaFingerprint,
+        process.cwd(),
+        () => undefined,
+      );
+      expect(typeof approval).not.toBe('string');
+      if (typeof approval === 'string') return;
+      expect(approval).toMatchObject({
+        approvalType: 'reviewer-failure-recovery',
+        reviewEpoch: 1,
+        exhaustedReviewInvocationCount: 1,
+        failedReviewInvocation: 1,
+        schemaFingerprint,
+        humanDecision: 'retry-review',
+        consumed: false,
+      });
+
+      const recovered = resumeReviewerFailureRecoveryAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head-sha',
+        schemaFingerprint,
+        process.cwd(),
+        () => undefined,
+      );
+      expect(typeof recovered).not.toBe('string');
+      if (typeof recovered === 'string') return;
+      expect(recovered).toMatchObject({
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        terminationHistory: ['REVIEWER_FAILURE'],
+        terminationReason: undefined,
+        reviewerFailureRecovery: {
+          approvalId: approval.id,
+          reviewEpoch: 1,
+          failedReviewInvocation: 1,
+          headSha: 'head-sha',
+          schemaFingerprint,
+          authorizationSource: 'human-explicit',
+        },
+      });
+      expect(recovered.reviewExecutionFailures).toEqual([
+        { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+      ]);
+      expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0]).toMatchObject({
+        consumed: true,
+        consumedAt: expect.any(String),
+      });
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: 2,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for missing approval, mismatched state, schema, head, and prerequisites', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
+    const statePath = join(directory, 'state.json');
+    const approvalPath = join(directory, 'approval.json');
+    const schemaFingerprint = reviewerSchemaFingerprint(process.cwd());
+    if (!schemaFingerprint) throw new Error('test schema fingerprint unavailable');
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      reviewExecutionFailures: [
+        { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+      ],
+      terminationReason: 'REVIEWER_FAILURE',
+    };
+    writeFileSync(statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+          schemaFingerprint,
+          process.cwd(),
+          () => undefined,
+        ),
+      ).toContain('No matching unconsumed');
+      expect(
+        authorizeReviewResumeAfterLimitAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+        ),
+      ).toContain('supported terminal state');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+          '0'.repeat(64),
+          process.cwd(),
+          () => undefined,
+        ),
+      ).toContain('fingerprint changed');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+          schemaFingerprint,
+          process.cwd(),
+          () => 'validation failed',
+        ),
+      ).toBe('validation failed');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+          schemaFingerprint,
+          process.cwd(),
+          () => undefined,
+        ),
+      ).not.toBeTypeOf('string');
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'different-head',
+          schemaFingerprint,
+          process.cwd(),
+          () => undefined,
+        ),
+      ).toContain('No matching unconsumed');
+      const recovered = resumeReviewerFailureRecoveryAtPath(
+        statePath,
+        approvalPath,
+        'feature/review',
+        'main',
+        'head-sha',
+        schemaFingerprint,
+        process.cwd(),
+        () => undefined,
+      );
+      expect(typeof recovered).not.toBe('string');
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          'head-sha',
+          schemaFingerprint,
+          process.cwd(),
+          () => undefined,
+        ),
+      ).toContain('matching terminal failure state');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps an exhausted epoch blocked until an explicit human resume', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));
     const statePath = join(directory, 'state.json');

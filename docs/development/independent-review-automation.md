@@ -333,6 +333,32 @@ from the dirty worktree, Issue text, or PR history. A separately authorized
 later operation may proceed only if the actual state contains the new schema
 and its branch/base/head/path/fingerprint checks pass.
 
+A `REVIEWER_FAILURE` is a separate terminal state and cannot use either the
+review-limit or AUTO_FIX recovery commands. A human may create one dedicated
+`reviewer-failure-recovery` approval only after deterministic validation and
+the offline reviewer Schema compatibility check pass. The approval is bound to
+the repository, branch, base, current HEAD, review epoch, failed invocation,
+and the SHA-256 fingerprint of the reviewer Schema. The dedicated recovery
+command consumes that approval once, clears only the terminal stop, preserves
+the failure history and invocation count, and leaves the next review to reserve
+the next invocation number. It never refunds or resets accounting, and a fresh
+Independent Review remains mandatory. The commands are:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-reviewer-failure-recovery \
+  --confirm-human-authorization \
+  --issue <N> --base main --cwd .worktrees/issue-<N>
+node dist/review/cli.js \
+  --resume-reviewer-failure-recovery \
+  --issue <N> --base main --cwd .worktrees/issue-<N>
+```
+
+Codex must not create or consume this approval without a separate explicit
+Human Decision. Missing approval, changed HEAD or Schema, failed deterministic
+validation, malformed evidence, and approval reuse remain fail-closed.
+
 If a future human-authorized recovery is applicable to the Issue #73 shape, the
 merged runner fix must first be made available in the canonical
 `.worktrees/issue-73` checkout through safe branch/base reconciliation. The
