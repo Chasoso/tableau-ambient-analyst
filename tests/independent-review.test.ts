@@ -2797,6 +2797,7 @@ describe('AUTO_FIX path scope', () => {
       "import '../src/tracked';\ntest();\n",
     );
     writeFileSync(join(directory, 'tests', 'unrelated.test.ts'), 'test();\n');
+    writeFileSync(join(directory, 'tests', 'basename.test.ts'), "test('tracked');\n");
     writeFileSync(join(directory, 'docs', 'unrelated.md'), '# unrelated\n');
     symlinkSync(join(directory, 'src', 'tracked.ts'), join(directory, 'src', 'link.ts'));
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: directory });
@@ -2888,6 +2889,11 @@ describe('AUTO_FIX path scope', () => {
       expect(
         validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
           { path: 'tests/unrelated.test.ts', reason: 'direct_test' },
+        ]),
+      ).toContain('no valid bounded reason');
+      expect(
+        validateAutoFixChanges(finding('src/tracked.ts:1'), directory, 'main', [
+          { path: 'tests/basename.test.ts', reason: 'direct_test' },
         ]),
       ).toContain('no valid bounded reason');
       expect(
@@ -3204,6 +3210,13 @@ describe('bounded-reason termination recovery', () => {
         encoding: 'utf8',
       }).trim(),
     );
+    const approvalPath = join(
+      directory,
+      execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+        cwd: directory,
+        encoding: 'utf8',
+      }).trim(),
+    );
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -3235,6 +3248,27 @@ describe('bounded-reason termination recovery', () => {
     try {
       const before = readFileSync(trackedPath, 'utf8');
       writeFileSync(trackedPath, 'export const value = 3;\n');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          headSha,
+          recovery,
+          directory,
+        ),
+      ).toContain('working-tree');
+      expect(
+        authorizeReviewTerminationRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          headSha,
+          recovery,
+        ),
+      ).toContain('workspace verification');
       expect(authorizeReviewTerminationRecovery(directory, 'main', recovery)).toContain(
         'working-tree',
       );

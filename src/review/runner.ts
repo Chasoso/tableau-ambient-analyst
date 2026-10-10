@@ -1991,12 +1991,14 @@ function isDirectDeterministicTest(
   } catch {
     return false;
   }
-  return affectedPaths.some((affectedPath) => {
+  return affectedPaths.some((affectedPathWithLocation) => {
+    const affectedPath = affectedPathWithLocation.split(':', 1)[0]?.replaceAll('\\', '/');
+    if (!affectedPath || path === affectedPath) return false;
     const withoutExtension = affectedPath.replace(/\.[^/.]+$/, '');
-    return (
-      content.includes(withoutExtension) ||
-      content.includes(withoutExtension.split('/').at(-1) ?? '')
-    );
+    const testDirectory = dirname(path);
+    const relativeModule = relative(testDirectory, withoutExtension).replaceAll('\\', '/');
+    const moduleReference = relativeModule.startsWith('.') ? relativeModule : `./${relativeModule}`;
+    return content.includes(affectedPath) || content.includes(moduleReference);
   });
 }
 
@@ -2546,7 +2548,13 @@ export function authorizeReviewTerminationRecoveryAtPath(
   base: string,
   headSha: string,
   recovery: ReviewTerminationRecovery,
+  workspaceCwd?: string,
 ): ReviewResumeApproval | string {
+  if (recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED') {
+    if (!workspaceCwd) return 'Bounded-reason recovery requires workspace verification.';
+    const workspaceError = validateBoundedReasonRejectionWorkspace(workspaceCwd, headSha, recovery);
+    if (workspaceError) return workspaceError;
+  }
   return authorizeReviewResumeAfterLimitAtPath(
     statePath,
     approvalPath,
@@ -2564,7 +2572,13 @@ export function resumeReviewTerminationRecoveryAtPath(
   base: string,
   headSha: string,
   recovery: ReviewTerminationRecovery,
+  workspaceCwd?: string,
 ): ReviewAccounting | string {
+  if (recovery.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED') {
+    if (!workspaceCwd) return 'Bounded-reason recovery requires workspace verification.';
+    const workspaceError = validateBoundedReasonRejectionWorkspace(workspaceCwd, headSha, recovery);
+    if (workspaceError) return workspaceError;
+  }
   return resumeReviewAfterLimitAtPath(statePath, approvalPath, branch, base, headSha, recovery);
 }
 
@@ -2593,6 +2607,7 @@ export function authorizeReviewTerminationRecovery(
     base,
     headSha,
     recovery,
+    cwd,
   );
 }
 
@@ -2621,6 +2636,7 @@ export function resumeReviewTerminationRecovery(
     base,
     headSha,
     recovery,
+    cwd,
   );
 }
 
