@@ -137,9 +137,10 @@ failure, Playwright keeps traces/screenshots and the HTML report under
 `test-results/` and `playwright-report/`; do not commit those directories.
 
 The normal `npm run validate` remains local/no-network and does not download
-browser binaries. CI provisions Chromium in a separate `e2e` job and runs this
-same command as an additional required verification alongside `validation`
-and `secret-scan`.
+browser binaries. CI provisions Chromium in the existing mandatory
+`validation` job and runs this E2E command after `npm run validate`, so an E2E
+failure fails that required job. `secret-scan` remains a separate required
+check.
 
 This covers formatting, linting, type checking, deterministic tests, and the
 build. Individual checks are also available:
