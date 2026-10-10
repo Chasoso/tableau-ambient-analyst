@@ -2,6 +2,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -51,7 +53,6 @@ import {
   runReviewControlFlow,
   authorizeReviewerFailureRecoveryAtPath,
   resumeReviewerFailureRecoveryAtPath,
-  reviewerSchemaFingerprint,
   resolveActivePullRequest,
   validateAdvancedPullRequestHead,
   observePullRequestCi,
@@ -63,6 +64,45 @@ import {
   type IndependentReviewInput,
   type ReviewRunnerDependencies,
 } from '../src/review/runner.js';
+
+function createReviewerRecoveryWorkspace(
+  directory: string,
+  validationScript = 'node -e "process.exit(0)"',
+): { cwd: string; headSha: string; schemaFingerprint: string } {
+  mkdirSync(join(directory, 'src/review'), { recursive: true });
+  copyFileSync(
+    join(process.cwd(), 'src/review/review-result.schema.json'),
+    join(directory, 'src/review/review-result.schema.json'),
+  );
+  writeFileSync(
+    join(directory, 'package.json'),
+    JSON.stringify({ private: true, scripts: { validate: validationScript } }),
+    'utf8',
+  );
+  execFileSync('git', ['init'], { cwd: directory, stdio: 'ignore' });
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'user.name=review-fixture',
+      '-c',
+      'user.email=review-fixture@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'review fixture',
+    ],
+    { cwd: directory, stdio: 'ignore' },
+  );
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: directory,
+    encoding: 'utf8',
+  }).trim();
+  const schemaFingerprint = createHash('sha256')
+    .update(readFileSync(join(directory, 'src/review/review-result.schema.json')))
+    .digest('hex');
+  return { cwd: directory, headSha, schemaFingerprint };
+}
 
 describe('independent review gate contract', () => {
   it('keeps the reviewer schema within the offline Structured Outputs subset', () => {
@@ -1640,8 +1680,8 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const statePath = join(directory, 'state.json');
     const approvalPath = join(directory, 'approval.json');
-    const schemaFingerprint = reviewerSchemaFingerprint(process.cwd());
-    if (!schemaFingerprint) throw new Error('test schema fingerprint unavailable');
+    const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const { cwd, headSha, schemaFingerprint } = reviewerWorkspace;
     writeFileSync(
       statePath,
       JSON.stringify({
@@ -1671,10 +1711,9 @@ describe('review cycle state', () => {
         approvalPath,
         'feature/review',
         'main',
-        'head-sha',
+        headSha,
         schemaFingerprint,
-        process.cwd(),
-        () => undefined,
+        cwd,
       );
       expect(typeof approval).not.toBe('string');
       if (typeof approval === 'string') return;
@@ -1693,10 +1732,9 @@ describe('review cycle state', () => {
         approvalPath,
         'feature/review',
         'main',
-        'head-sha',
+        headSha,
         schemaFingerprint,
-        process.cwd(),
-        () => undefined,
+        cwd,
       );
       expect(typeof recovered).not.toBe('string');
       if (typeof recovered === 'string') return;
@@ -1709,7 +1747,7 @@ describe('review cycle state', () => {
           approvalId: approval.id,
           reviewEpoch: 1,
           failedReviewInvocation: 1,
-          headSha: 'head-sha',
+          headSha,
           schemaFingerprint,
           authorizationSource: 'human-explicit',
         },
@@ -1734,8 +1772,12 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const statePath = join(directory, 'state.json');
     const approvalPath = join(directory, 'approval.json');
-    const schemaFingerprint = reviewerSchemaFingerprint(process.cwd());
-    if (!schemaFingerprint) throw new Error('test schema fingerprint unavailable');
+    const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const failingWorkspace = createReviewerRecoveryWorkspace(
+      join(directory, 'failing-workspace'),
+      'node -e "process.exit(1)"',
+    );
+    const { cwd, headSha, schemaFingerprint } = reviewerWorkspace;
     const state = {
       branch: 'feature/review',
       base: 'main',
@@ -1763,10 +1805,9 @@ describe('review cycle state', () => {
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          headSha,
           schemaFingerprint,
-          process.cwd(),
-          () => undefined,
+          cwd,
         ),
       ).toContain('No matching unconsumed');
       expect(
@@ -1775,7 +1816,7 @@ describe('review cycle state', () => {
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          headSha,
         ),
       ).toContain('supported terminal state');
       expect(
@@ -1784,10 +1825,9 @@ describe('review cycle state', () => {
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          headSha,
           '0'.repeat(64),
-          process.cwd(),
-          () => undefined,
+          cwd,
         ),
       ).toContain('fingerprint changed');
       expect(
@@ -1796,22 +1836,20 @@ describe('review cycle state', () => {
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          failingWorkspace.headSha,
           schemaFingerprint,
-          process.cwd(),
-          () => 'validation failed',
+          failingWorkspace.cwd,
         ),
-      ).toBe('validation failed');
+      ).toContain('Deterministic validation must pass');
       expect(
         authorizeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          headSha,
           schemaFingerprint,
-          process.cwd(),
-          () => undefined,
+          cwd,
         ),
       ).not.toBeTypeOf('string');
       expect(
@@ -1822,19 +1860,17 @@ describe('review cycle state', () => {
           'main',
           'different-head',
           schemaFingerprint,
-          process.cwd(),
-          () => undefined,
+          cwd,
         ),
-      ).toContain('No matching unconsumed');
+      ).toContain('HEAD does not match');
       const recovered = resumeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,
         'feature/review',
         'main',
-        'head-sha',
+        headSha,
         schemaFingerprint,
-        process.cwd(),
-        () => undefined,
+        cwd,
       );
       expect(typeof recovered).not.toBe('string');
       expect(
@@ -1843,12 +1879,161 @@ describe('review cycle state', () => {
           approvalPath,
           'feature/review',
           'main',
-          'head-sha',
+          headSha,
           schemaFingerprint,
-          process.cwd(),
-          () => undefined,
+          cwd,
         ),
       ).toContain('matching terminal failure state');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers only known partial transactions and rejects external or semantic changes', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-transaction-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const fingerprint = (raw: string) => createHash('sha256').update(raw).digest('hex');
+    const transactionPath = (statePath: string) =>
+      `${statePath}.reviewer-failure-recovery-transaction`;
+
+    const createTransactionFixture = (name: string) => {
+      const statePath = join(directory, `${name}-state.json`);
+      const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+      const preState = {
+        entries: [
+          {
+            branch: 'feature/review',
+            base: 'main',
+            legacyReviewInvocations: 0,
+            legacyAutoFixCycles: 0,
+            accountingEpochStart: 'issue-29-accounting-v2',
+            reviewInvocationCount: 1,
+            autoFixCycleCount: 0,
+            generalizedRuleHistory: [],
+            consecutiveRepeatCount: 0,
+            lastFixChangedRepository: null,
+            cycleResults: [],
+            terminationHistory: ['REVIEWER_FAILURE'],
+            reviewExecutionFailures: [
+              { reviewInvocation: 1, kind: 'NONZERO_EXIT', diagnostic: 'redacted' },
+            ],
+            terminationReason: 'REVIEWER_FAILURE',
+          },
+        ],
+      };
+      const authorizedAt = '2026-10-11T00:00:00.000Z';
+      const approval = {
+        id: 'approval-1',
+        approvalType: 'reviewer-failure-recovery',
+        targetRepository: 'Chasoso/tableau-ambient-analyst',
+        branch: 'feature/review',
+        base: 'main',
+        reviewEpoch: 1,
+        exhaustedReviewInvocationCount: 1,
+        approvedAt: '2026-10-11T00:00:00.000Z',
+        authorizationSource: 'human-explicit',
+        consumed: true,
+        consumedAt: authorizedAt,
+        headSha: workspace.headSha,
+        originalTerminationReason: 'REVIEWER_FAILURE',
+        schemaFingerprint: workspace.schemaFingerprint,
+        failedReviewInvocation: 1,
+        humanDecision: 'retry-review',
+      };
+      const postState = {
+        entries: [
+          {
+            ...preState.entries[0],
+            terminationReason: undefined,
+            reviewerFailureRecovery: {
+              approvalId: approval.id,
+              authorizedAt,
+              authorizationSource: 'human-explicit',
+              reviewEpoch: 1,
+              failedReviewInvocation: 1,
+              headSha: workspace.headSha,
+              schemaFingerprint: workspace.schemaFingerprint,
+            },
+          },
+        ],
+      };
+      const preStateRaw = JSON.stringify(preState);
+      const preApprovalRaw = JSON.stringify({ approvals: [] });
+      const postStateRaw = JSON.stringify(postState);
+      const postApprovalRaw = JSON.stringify({ approvals: [approval] });
+      writeFileSync(statePath, preStateRaw, 'utf8');
+      writeFileSync(approvalPath, preApprovalRaw, 'utf8');
+      writeFileSync(
+        transactionPath(statePath),
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          branch: 'feature/review',
+          base: 'main',
+          approvalId: approval.id,
+          statePreimageSha256: fingerprint(preStateRaw),
+          approvalPreimageSha256: fingerprint(preApprovalRaw),
+          accountingState: postState,
+          approvalState: { approvals: [approval] },
+        }),
+        'utf8',
+      );
+      return {
+        statePath,
+        approvalPath,
+        preStateRaw,
+        postStateRaw,
+        postApprovalRaw,
+      };
+    };
+
+    try {
+      const partial = createTransactionFixture('partial');
+      writeFileSync(partial.statePath, partial.postStateRaw, 'utf8');
+      expect(reserveReviewCycleAtPath(partial.statePath, 'feature/review', 'main')).toBeUndefined();
+      expect(existsSync(transactionPath(partial.statePath))).toBe(false);
+      expect(JSON.parse(readFileSync(partial.approvalPath, 'utf8')).approvals[0]).toMatchObject({
+        consumed: true,
+        id: 'approval-1',
+      });
+      expect(readReviewAccountingAtPath(partial.statePath, 'feature/review', 'main')).toMatchObject(
+        {
+          reviewInvocationCount: 2,
+          pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
+        },
+      );
+
+      const approvalPartial = createTransactionFixture('approval-partial');
+      writeFileSync(approvalPartial.approvalPath, approvalPartial.postApprovalRaw, 'utf8');
+      expect(
+        reserveReviewCycleAtPath(approvalPartial.statePath, 'feature/review', 'main'),
+      ).toBeUndefined();
+      expect(existsSync(transactionPath(approvalPartial.statePath))).toBe(false);
+      expect(
+        readReviewAccountingAtPath(approvalPartial.statePath, 'feature/review', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 2,
+        pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
+      });
+
+      const external = createTransactionFixture('external');
+      writeFileSync(external.statePath, JSON.stringify({ unexpected: true }), 'utf8');
+      expect(reserveReviewCycleAtPath(external.statePath, 'feature/review', 'main')).toContain(
+        'unexpected external change',
+      );
+      expect(readFileSync(external.statePath, 'utf8')).toBe(JSON.stringify({ unexpected: true }));
+      expect(existsSync(transactionPath(external.statePath))).toBe(true);
+
+      const semantic = createTransactionFixture('semantic');
+      const transaction = JSON.parse(readFileSync(transactionPath(semantic.statePath), 'utf8')) as {
+        approvalState: { approvals: Array<Record<string, unknown>> };
+      };
+      transaction.approvalState.approvals[0]!.id = 'different-approval';
+      writeFileSync(transactionPath(semantic.statePath), JSON.stringify(transaction), 'utf8');
+      expect(reserveReviewCycleAtPath(semantic.statePath, 'feature/review', 'main')).toContain(
+        'semantics are invalid',
+      );
+      expect(existsSync(transactionPath(semantic.statePath))).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

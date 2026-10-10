@@ -2475,12 +2475,15 @@ export function authorizeReviewerFailureRecoveryAtPath(
   headSha: string,
   schemaFingerprint: string,
   workspaceCwd: string,
-  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck = reviewerFailureRecoveryPrerequisiteError,
 ): ReviewResumeApproval | string {
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';
+  }
   const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
     workspaceCwd,
     schemaFingerprint,
-    prerequisiteCheck,
+    reviewerFailureRecoveryPrerequisiteError,
   );
   if (prerequisiteError) return prerequisiteError;
   try {
@@ -2534,12 +2537,15 @@ export function resumeReviewerFailureRecoveryAtPath(
   headSha: string,
   schemaFingerprint: string,
   workspaceCwd: string,
-  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck = reviewerFailureRecoveryPrerequisiteError,
 ): ReviewAccounting | string {
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';
+  }
   const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
     workspaceCwd,
     schemaFingerprint,
-    prerequisiteCheck,
+    reviewerFailureRecoveryPrerequisiteError,
   );
   if (prerequisiteError) return prerequisiteError;
   try {
@@ -4213,6 +4219,9 @@ type ReviewerFailureRecoveryTransaction = {
   approvalPath: string;
   branch: string;
   base: string;
+  approvalId: string;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
   accountingState: unknown;
   approvalState: unknown;
 };
@@ -4221,6 +4230,15 @@ function writeJsonAtomically(path: string, value: unknown): void {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, JSON.stringify(value), 'utf8');
   renameSync(temporaryPath, path);
+}
+
+function jsonFingerprint(value: unknown): string {
+  return sha256(JSON.stringify(value));
+}
+
+function fileFingerprint(path: string): string | null {
+  if (!existsSync(path)) return null;
+  return sha256(readFileSync(path, 'utf8'));
 }
 
 function resumeTransactionPath(statePath: string): string {
@@ -4331,6 +4349,14 @@ function writeAccountingAndApprovalsAtomically(
   accounting: ReviewAccounting,
   approvals: ReviewResumeApproval[],
 ): void {
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
+  const approvalId = accounting.reviewerFailureRecovery?.approvalId;
+  if (!approvalId) {
+    throw new Error(
+      'Reviewer-failure recovery approval identity is missing; human recovery is required.',
+    );
+  }
   const currentValue = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))
     : undefined;
@@ -4356,6 +4382,9 @@ function writeAccountingAndApprovalsAtomically(
     approvalPath,
     branch,
     base,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
     accountingState,
     approvalState,
   } satisfies ReviewerFailureRecoveryTransaction);
@@ -4375,6 +4404,17 @@ function recoverPendingReviewerFailureRecoveryTransaction(statePath: string): vo
     transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
     typeof transaction.branch !== 'string' ||
     typeof transaction.base !== 'string' ||
+    typeof transaction.approvalId !== 'string' ||
+    !(
+      transaction.statePreimageSha256 === null ||
+      (typeof transaction.statePreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.statePreimageSha256))
+    ) ||
+    !(
+      transaction.approvalPreimageSha256 === null ||
+      (typeof transaction.approvalPreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256))
+    ) ||
     transaction.accountingState === undefined ||
     transaction.approvalState === undefined
   ) {
@@ -4404,9 +4444,83 @@ function recoverPendingReviewerFailureRecoveryTransaction(statePath: string): vo
       'Reviewer-failure recovery transaction target is missing; human recovery is required.',
     );
   }
-  writeJsonAtomically(statePath, transaction.accountingState);
-  writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  validateReviewerFailureRecoveryTransactionSemantics(
+    transaction as ReviewerFailureRecoveryTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Reviewer-failure recovery transaction encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
   unlinkSync(transactionPath);
+}
+
+function validateReviewerFailureRecoveryTransactionSemantics(
+  transaction: ReviewerFailureRecoveryTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const recovery = entry?.accounting.reviewerFailureRecovery;
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  if (!entry || !recovery || !approval) {
+    throw new Error(
+      'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    approval.approvalType !== 'reviewer-failure-recovery' ||
+    !approval.consumed ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== recovery.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== entry.accounting.reviewInvocationCount ||
+    approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+    approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+    approval.headSha !== recovery.headSha ||
+    approval.schemaFingerprint !== recovery.schemaFingerprint ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.humanDecision !== 'retry-review' ||
+    approval.consumedAt !== recovery.authorizedAt ||
+    entry.accounting.terminationReason !== undefined ||
+    entry.accounting.terminationHistory?.at(-1) !== 'REVIEWER_FAILURE' ||
+    (entry.accounting.reviewEpoch ?? 1) !== recovery.reviewEpoch ||
+    entry.accounting.reviewExecutionFailures?.every(
+      (failure) => failure.reviewInvocation !== recovery.failedReviewInvocation,
+    )
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
+    );
+  }
 }
 
 function validateResumeTransactionSemantics(
