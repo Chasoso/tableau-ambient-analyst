@@ -24,6 +24,15 @@ test.describe('Ambient Analyst debug console', () => {
     await page.getByRole('button', { name: 'Replay' }).click();
 
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('COMPLETED');
+    const analysisStage = page
+      .locator('.stages li')
+      .filter({ hasText: 'Fixture analysis completed.' });
+    await expect(analysisStage).toHaveAttribute('data-status', 'complete');
+    await expect(analysisStage).toContainText('Analysis');
+    await expect(page.getByText('Baseline conversion: 12%', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('VERIFIED: Required evidence is complete and contradictory.', { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText('INTERVENE:', { exact: false })).toBeVisible();
     const badge = page.getByTestId('intervention-badge');
     await expect(badge).toBeVisible();
