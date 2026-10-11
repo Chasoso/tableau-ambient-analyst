@@ -907,6 +907,17 @@ function validateReviewerSchema(value: unknown): boolean {
   return validate(value);
 }
 
+function reviewerStructuredOutputBehavior(value: unknown): string {
+  const event = {
+    type: 'item.completed',
+    item: {
+      type: 'agent_message',
+      text: JSON.stringify(value),
+    },
+  };
+  return `printf '%s\\n' '${JSON.stringify(event)}'`;
+}
+
 const structuredPass = {
   result: 'PASS',
   blockingFindings: [],
@@ -2738,6 +2749,139 @@ describe('independent review runner control flow', () => {
         diagnostic: `Reviewer execution failed: ${failureKind}.`,
       },
     ]);
+  });
+
+  it.each([
+    [
+      'PASS with blocking finding',
+      {
+        result: 'PASS',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'AUTO_FIX',
+            finding: 'raw-reviewer-secret-pass',
+            generalized_rule: 'fixture',
+            affected_locations: ['fixture'],
+            recommended_fix: 'fixture',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+    [
+      'empty CHANGES_REQUIRED',
+      {
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+    [
+      'HUMAN_DECISION_REQUIRED with unsupported escalation',
+      {
+        result: 'HUMAN_DECISION_REQUIRED',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'AUTO_FIX',
+            finding: 'raw-reviewer-secret-human',
+            generalized_rule: 'fixture',
+            affected_locations: ['fixture'],
+            recommended_fix: 'fixture',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: true,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+    [
+      'BLOCKED finding without escalation',
+      {
+        result: 'CHANGES_REQUIRED',
+        blockingFindings: [
+          {
+            severity: 'blocking',
+            classification: 'BLOCKED',
+            finding: 'raw-reviewer-secret-blocked',
+            generalized_rule: 'fixture',
+            affected_locations: ['fixture'],
+            recommended_fix: 'fixture',
+          },
+        ],
+        nonBlockingFindings: [],
+        escalationRequired: false,
+        maintainability: 'NO_DRIFT',
+      },
+    ],
+  ] as const)('durably rejects Schema-valid semantic contradictions: %s', (_label, output) => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-schema-parser-runner-'));
+    const workspace = createCanonicalIndependentReviewWorkspace(
+      directory,
+      reviewerStructuredOutputBehavior(output),
+    );
+    const previousPath = process.env.PATH;
+    const secretValues = output.blockingFindings.flatMap((finding) =>
+      typeof finding === 'object' && 'finding' in finding ? [finding.finding] : [],
+    );
+    process.env.PATH = workspace.binDirectory;
+    try {
+      expect(validateReviewerSchema(output)).toBe(true);
+
+      const result = runIndependentReview({ cwd: workspace.cwd, base: 'main', issue: '76' });
+      const rawAccounting = readFileSync(workspace.statePath, 'utf8');
+      const accounting = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+
+      expect(result).toMatchObject({
+        result: 'HUMAN_DECISION_REQUIRED',
+        executionStatus: 'FAILED',
+        executionPhase: 'REVIEW',
+        executionFailureKind: 'MALFORMED_OUTPUT',
+        terminationReason: 'REVIEWER_FAILURE',
+      });
+      expect(result.accounting).toMatchObject({
+        reviewInvocationCount: 1,
+        pendingReview: undefined,
+        terminationReason: 'REVIEWER_FAILURE',
+        terminationHistory: ['REVIEWER_FAILURE'],
+      });
+      expect(accounting.reviewExecutionFailures).toEqual([
+        {
+          reviewInvocation: 1,
+          kind: 'MALFORMED_OUTPUT',
+          diagnostic: 'Reviewer execution failed: MALFORMED_OUTPUT.',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ]);
+      expect(accounting.cycleResults).toHaveLength(0);
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
+        'terminal',
+      );
+      for (const secret of secretValues) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(rawAccounting).not.toContain(secret);
+      }
+      expect(rawAccounting).not.toContain('raw reviewer output');
+      expect(
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 1,
+        pendingReview: undefined,
+        terminationReason: 'REVIEWER_FAILURE',
+      });
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('returns the actual SHA-256 fingerprint only for a compatible reviewer schema', () => {

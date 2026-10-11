@@ -2297,12 +2297,20 @@ function reviewerFailureResult(
   review: ReviewGateResult,
   accounting: ReviewAccounting,
 ): ReviewGateResult {
-  return terminationResult(
+  const terminated = terminationResult(
     'REVIEWER_FAILURE',
     accounting,
     review.blockingFindings,
     'Reviewer execution failed; the invocation was durably recorded and cannot be retried automatically.',
   );
+  return {
+    ...terminated,
+    ...(review.executionStatus === undefined ? {} : { executionStatus: review.executionStatus }),
+    ...(review.executionPhase === undefined ? {} : { executionPhase: review.executionPhase }),
+    ...(review.executionFailureKind === undefined
+      ? {}
+      : { executionFailureKind: review.executionFailureKind }),
+  };
 }
 
 function invokeCodexReviewer(
