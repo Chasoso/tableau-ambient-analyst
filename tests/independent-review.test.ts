@@ -3953,7 +3953,7 @@ describe('review cycle state', () => {
     }
   });
 
-  it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
+  it('rejects reviewer-failure-v1 as a new recovery target without mutation', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const { cwd, headSha, schemaFingerprint, statePath, approvalPath } = reviewerWorkspace;
@@ -3989,11 +3989,67 @@ describe('review cycle state', () => {
     );
 
     try {
+      const accountingBefore = readFileSync(statePath, 'utf8');
       expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
         reviewInvocationCount: 1,
         terminationReason: 'REVIEWER_FAILURE',
         reviewExecutionFailures: [{ reviewInvocation: 1, kind: 'NONZERO_EXIT' }],
       });
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          statePath,
+          approvalPath,
+          'feature/review',
+          'main',
+          headSha,
+          schemaFingerprint,
+          cwd,
+        ),
+      ).toContain('matching terminal failure state');
+      expect(readFileSync(statePath, 'utf8')).toBe(accountingBefore);
+      expect(() => readFileSync(approvalPath, 'utf8')).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('authorizes and consumes one reviewer-failure-v2 recovery without resetting accounting', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-v2-'));
+    const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const { cwd, headSha, schemaFingerprint, statePath, approvalPath } = reviewerWorkspace;
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['REVIEWER_FAILURE'],
+        reviewExecutionFailures: [
+          {
+            reviewInvocation: 1,
+            kind: 'NONZERO_EXIT',
+            diagnostic: 'redacted',
+            evidenceVersion: 'reviewer-failure-v2',
+            executionPhase: 'REVIEW',
+            reviewEpoch: 1,
+            headSha,
+            schemaFingerprint,
+          },
+        ],
+        terminationReason: 'REVIEWER_FAILURE',
+      }),
+      'utf8',
+    );
+
+    try {
       const approval = authorizeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,
@@ -4045,7 +4101,8 @@ describe('review cycle state', () => {
           reviewInvocation: 1,
           kind: 'NONZERO_EXIT',
           diagnostic: 'redacted',
-          evidenceVersion: 'reviewer-failure-v1',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
           reviewEpoch: 1,
           headSha,
           schemaFingerprint,
@@ -4312,7 +4369,8 @@ describe('review cycle state', () => {
           reviewInvocation: 1,
           kind: 'NONZERO_EXIT',
           diagnostic: 'redacted',
-          evidenceVersion: 'reviewer-failure-v1',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
           reviewEpoch: 1,
           headSha,
           schemaFingerprint,
@@ -4476,7 +4534,8 @@ describe('review cycle state', () => {
                 reviewInvocation: 1,
                 kind: 'NONZERO_EXIT',
                 diagnostic: 'redacted',
-                evidenceVersion: 'reviewer-failure-v1',
+                evidenceVersion: 'reviewer-failure-v2',
+                executionPhase: 'REVIEW',
                 reviewEpoch: 1,
                 headSha: workspace.headSha,
                 schemaFingerprint: workspace.schemaFingerprint,

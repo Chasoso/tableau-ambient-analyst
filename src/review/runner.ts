@@ -4051,6 +4051,13 @@ function reviewerFailureEvidenceIsValid(failure: Record<string, unknown>): boole
 
 function isReviewerFailureEvidenceForRecovery(failure: Record<string, unknown>): boolean {
   return (
+    failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+    reviewerFailureEvidenceIsValid(failure)
+  );
+}
+
+function isReviewerFailureEvidenceForHistoricalRecovery(failure: Record<string, unknown>): boolean {
+  return (
     typeof failure.evidenceVersion === 'string' &&
     reviewerFailureEvidenceVersions.includes(
       failure.evidenceVersion as (typeof reviewerFailureEvidenceVersions)[number],
@@ -4859,13 +4866,17 @@ function verifyIssue76HumanDecisionComment(
 function reviewFailureMatchesRecovery(
   failure: Record<string, unknown>,
   recovery: Record<string, unknown>,
+  historical = false,
 ): boolean {
+  const evidenceMatches = historical
+    ? isReviewerFailureEvidenceForHistoricalRecovery(failure)
+    : isReviewerFailureEvidenceForRecovery(failure);
   return (
     recovery.failedReviewInvocation === failure.reviewInvocation &&
     (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
     recovery.reviewEpoch === (failure.reviewEpoch ?? recovery.reviewEpoch) &&
     (failure.evidenceVersion === undefined ||
-      (isReviewerFailureEvidenceForRecovery(failure) &&
+      (evidenceMatches &&
         failure.reviewEpoch === recovery.reviewEpoch &&
         failure.headSha === recovery.headSha &&
         failure.schemaFingerprint === recovery.schemaFingerprint))
@@ -4905,7 +4916,7 @@ function reviewExecutionFailuresAreConsistent(state: Record<string, unknown>): b
       (failure.evidenceVersion === undefined || failure.reviewEpoch === (state.reviewEpoch ?? 1));
     const hasRecoveryEvidence =
       (activeRecovery !== undefined && reviewFailureMatchesRecovery(failure, activeRecovery)) ||
-      archivedRecoveries.some((recovery) => reviewFailureMatchesRecovery(failure, recovery));
+      archivedRecoveries.some((recovery) => reviewFailureMatchesRecovery(failure, recovery, true));
     return (isCurrentTerminal && currentFailureEvidenceIsConsistent) || hasRecoveryEvidence;
   });
 }
