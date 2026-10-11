@@ -51,6 +51,8 @@ describe('Issue #76 reserved-review reconciliation', () => {
         createHash('sha256')
           .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
           .digest('hex'),
+        reportedReservationHead,
+        humanDecisionUrl,
         fixture.statePreimageSha256,
         fixture.approvalPreimageSha256,
         workspace.cwd,
@@ -98,6 +100,16 @@ describe('Issue #76 reserved-review reconciliation', () => {
       ).toThrow(/invalid|human recovery/i);
       writeFileSync(workspace.approvalPath, approvalAfter, 'utf8');
 
+      const incompleteState = JSON.parse(stateAfter) as {
+        entries: Array<{ reconciledReviewReservations?: Array<Record<string, unknown>> }>;
+      };
+      delete incompleteState.entries[0]!.reconciledReviewReservations![0]!.executionEvidence;
+      writeFileSync(workspace.statePath, JSON.stringify(incompleteState), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+      writeFileSync(workspace.statePath, stateAfter, 'utf8');
+
       expect(
         reconcileReservedReviewAtPath(
           workspace.statePath,
@@ -106,6 +118,8 @@ describe('Issue #76 reserved-review reconciliation', () => {
           'main',
           workspace.headSha,
           reconciled.reconciledReviewReservations![0]!.schemaFingerprint,
+          reportedReservationHead,
+          humanDecisionUrl,
           createHash('sha256').update(stateAfter).digest('hex'),
           createHash('sha256').update(approvalAfter).digest('hex'),
           workspace.cwd,
@@ -154,6 +168,8 @@ describe('Issue #76 reserved-review reconciliation', () => {
         'base' in mismatch ? mismatch.base : 'main',
         'head' in mismatch ? mismatch.head : workspace.headSha,
         schema,
+        reportedReservationHead,
+        humanDecisionUrl,
         'statePreimage' in mismatch ? mismatch.statePreimage : fixture.statePreimageSha256,
         'approvalPreimage' in mismatch ? mismatch.approvalPreimage : fixture.approvalPreimageSha256,
         workspace.cwd,
@@ -169,6 +185,10 @@ describe('Issue #76 reserved-review reconciliation', () => {
   it.each([
     ['missing approval', []],
     ['already consumed approval', [{ consumed: true, consumedAt: '2026-01-01T00:03:00.000Z' }]],
+    ['missing Human Decision URL', [{ humanDecisionUrl: undefined }]],
+    ['mismatched Human Decision URL', [{ humanDecisionUrl: 'https://github.com/example' }]],
+    ['mismatched reported-head provenance', [{ reportedReservationHeadProvenance: 'UNVERIFIED' }]],
+    ['mismatched execution evidence', [{ executionEvidence: 'REVIEWER_NOT_STARTED' }]],
   ])('rejects %s without mutating the reservation', (_label, approvalChange) => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-approval-'));
     try {
@@ -189,6 +209,8 @@ describe('Issue #76 reserved-review reconciliation', () => {
           'main',
           workspace.headSha,
           workspace.schemaFingerprint,
+          reportedReservationHead,
+          humanDecisionUrl,
           fixture.statePreimageSha256,
           createHash('sha256').update(beforeApproval).digest('hex'),
           workspace.cwd,
@@ -220,6 +242,10 @@ describe('Issue #76 reserved-review reconciliation', () => {
         reservedInvocation: 13,
         status: 'RESERVED_NOT_STARTED',
         reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+        reportedReservationHeadSha: reportedReservationHead,
+        reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+        humanDecisionUrl,
         schemaFingerprint,
         reconciledAt: '2026-01-01T00:01:00.000Z',
       };
@@ -283,6 +309,10 @@ describe('Issue #76 reserved-review reconciliation', () => {
           reservedInvocation: 13,
           status: 'RESERVED_NOT_STARTED',
           reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+          reportedReservationHeadSha: reportedReservationHead,
+          reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+          executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+          humanDecisionUrl,
           schemaFingerprint: secondWorkspace.schemaFingerprint,
           reconciledAt: '2026-01-01T00:02:00.000Z',
         };
@@ -641,6 +671,10 @@ const structuredAutoFix = {
   maintainability: 'LOCAL_CLEANUP',
 };
 
+const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
+const humanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-9999999999';
+
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
     reviewInvocation: index + 1,
@@ -707,6 +741,10 @@ function prepareReservedReviewReconciliationFixture(workspace: {
     reconciliationInvocation: 13,
     reconciliationReason: 'PRE_REVIEW_ACCOUNTING_FAILURE',
     issue: '76',
+    reportedReservationHeadSha: reportedReservationHead,
+    reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+    executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+    humanDecisionUrl,
   };
   const priorRecoveryApproval = {
     id: 'prior-reviewer-failure-recovery-76',

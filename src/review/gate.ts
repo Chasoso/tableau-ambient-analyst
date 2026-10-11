@@ -66,6 +66,16 @@ export type ReviewerFailureRecoveryHumanDecision =
 export const reviewReservationReconciliationHumanDecisions = ['reconcile-reserved-review'] as const;
 export type ReviewReservationReconciliationHumanDecision =
   (typeof reviewReservationReconciliationHumanDecisions)[number];
+export const reviewReservationReconciliationProvenances = [
+  'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+] as const;
+export type ReviewReservationReconciliationProvenance =
+  (typeof reviewReservationReconciliationProvenances)[number];
+export const reviewReservationReconciliationEvidenceReasons = [
+  'NO_DURABLE_EXECUTION_EVIDENCE',
+] as const;
+export type ReviewReservationReconciliationEvidenceReason =
+  (typeof reviewReservationReconciliationEvidenceReasons)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
   issue?: string | undefined;
@@ -136,6 +146,10 @@ export type ReviewResumeApproval = {
     | undefined;
   reconciliationInvocation?: number | undefined;
   reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | undefined;
+  reportedReservationHeadSha?: string | undefined;
+  reportedReservationHeadProvenance?: ReviewReservationReconciliationProvenance | undefined;
+  executionEvidence?: ReviewReservationReconciliationEvidenceReason | undefined;
+  humanDecisionUrl?: string | undefined;
   issue?: string | undefined;
 };
 
@@ -207,6 +221,10 @@ export type ReviewAccounting = {
     reservedInvocation: number;
     status: 'RESERVED_NOT_STARTED';
     reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE';
+    reportedReservationHeadSha: string;
+    reportedReservationHeadProvenance: ReviewReservationReconciliationProvenance;
+    executionEvidence: ReviewReservationReconciliationEvidenceReason;
+    humanDecisionUrl: string;
     schemaFingerprint: string;
     reconciledAt: string;
   }>;

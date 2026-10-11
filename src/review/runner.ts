@@ -40,6 +40,8 @@ import {
   type ReviewEpochHistory,
   type ReviewResumeApproval,
   reviewReservationReconciliationHumanDecisions,
+  reviewReservationReconciliationProvenances,
+  reviewReservationReconciliationEvidenceReasons,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -2483,6 +2485,8 @@ export function reconcileReservedReviewAtPath(
   base: string,
   headSha: string,
   schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
   statePreimageSha256: string,
   approvalPreimageSha256: string,
   workspaceCwd: string,
@@ -2506,6 +2510,15 @@ export function reconcileReservedReviewAtPath(
   const actualHeadSha = readHeadSha(workspaceCwd);
   if (!actualHeadSha || actualHeadSha !== headSha) {
     return 'Reserved-review reconciliation HEAD does not match the current Git HEAD.';
+  }
+  if (
+    !/^[a-f0-9]{40}$/.test(reportedReservationHeadSha) ||
+    reportedReservationHeadSha === headSha
+  ) {
+    return 'Reserved-review reconciliation must record a distinct reported reservation HEAD.';
+  }
+  if (!isIssue76HumanDecisionUrl(humanDecisionUrl)) {
+    return 'Reserved-review reconciliation requires the canonical Issue #76 Human Decision URL.';
   }
   const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
     workspaceCwd,
@@ -2553,6 +2566,11 @@ export function reconcileReservedReviewAtPath(
           candidate.issue === '76' &&
           candidate.headSha === headSha &&
           candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.reportedReservationHeadSha === reportedReservationHeadSha &&
+          candidate.reportedReservationHeadProvenance ===
+            'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' &&
+          candidate.executionEvidence === 'NO_DURABLE_EXECUTION_EVIDENCE' &&
+          candidate.humanDecisionUrl === humanDecisionUrl &&
           candidate.authorizationSource === 'human-explicit' &&
           candidate.humanDecision === 'reconcile-reserved-review' &&
           !candidate.consumed,
@@ -2572,6 +2590,11 @@ export function reconcileReservedReviewAtPath(
         reservedInvocation: 13,
         status: 'RESERVED_NOT_STARTED' as const,
         reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE' as const,
+        reportedReservationHeadSha,
+        reportedReservationHeadProvenance:
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' as const,
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE' as const,
+        humanDecisionUrl,
         schemaFingerprint,
         reconciledAt,
       };
@@ -4330,6 +4353,10 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'humanDecision',
     'reconciliationInvocation',
     'reconciliationReason',
+    'reportedReservationHeadSha',
+    'reportedReservationHeadProvenance',
+    'executionEvidence',
+    'humanDecisionUrl',
     'issue',
   ]);
   if (
@@ -4410,7 +4437,20 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.reconciliationReason === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
       approval.issue === '76' &&
       approval.branch === 'feat/issue-76' &&
-      approval.base === 'main'
+      approval.base === 'main' &&
+      typeof approval.reportedReservationHeadSha === 'string' &&
+      /^[a-f0-9]{40}$/.test(approval.reportedReservationHeadSha) &&
+      typeof approval.reportedReservationHeadProvenance === 'string' &&
+      reviewReservationReconciliationProvenances.includes(
+        approval.reportedReservationHeadProvenance as (typeof reviewReservationReconciliationProvenances)[number],
+      ) &&
+      typeof approval.executionEvidence === 'string' &&
+      reviewReservationReconciliationEvidenceReasons.includes(
+        approval.executionEvidence as (typeof reviewReservationReconciliationEvidenceReasons)[number],
+      ) &&
+      typeof approval.humanDecisionUrl === 'string' &&
+      isIssue76HumanDecisionUrl(approval.humanDecisionUrl) &&
+      approval.reportedReservationHeadSha !== approval.headSha
     );
   }
   return (
@@ -4502,6 +4542,10 @@ function isReconciledReviewReservation(value: unknown): boolean {
     'reservedInvocation',
     'status',
     'reasonCode',
+    'reportedReservationHeadSha',
+    'reportedReservationHeadProvenance',
+    'executionEvidence',
+    'humanDecisionUrl',
     'schemaFingerprint',
     'reconciledAt',
   ]);
@@ -4520,8 +4564,26 @@ function isReconciledReviewReservation(value: unknown): boolean {
     (record.reservedInvocation as number) <= maxReviewInvocations &&
     record.status === 'RESERVED_NOT_STARTED' &&
     record.reasonCode === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+    /^[a-f0-9]{40}$/.test(record.reportedReservationHeadSha as string) &&
+    reviewReservationReconciliationProvenances.includes(
+      record.reportedReservationHeadProvenance as (typeof reviewReservationReconciliationProvenances)[number],
+    ) &&
+    reviewReservationReconciliationEvidenceReasons.includes(
+      record.executionEvidence as (typeof reviewReservationReconciliationEvidenceReasons)[number],
+    ) &&
+    isIssue76HumanDecisionUrl(record.humanDecisionUrl) &&
+    record.reportedReservationHeadSha !== record.headSha &&
     /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
     typeof record.reconciledAt === 'string'
+  );
+}
+
+function isIssue76HumanDecisionUrl(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-[0-9]+$/.test(
+      value,
+    )
   );
 }
 
@@ -4773,6 +4835,11 @@ function reviewReservationReconciliationApprovalStateIsConsistent(
       approval.issue !== '76' ||
       approval.headSha !== reconciliation.headSha ||
       approval.schemaFingerprint !== reconciliation.schemaFingerprint ||
+      approval.reportedReservationHeadSha !== reconciliation.reportedReservationHeadSha ||
+      approval.reportedReservationHeadProvenance !==
+        reconciliation.reportedReservationHeadProvenance ||
+      approval.executionEvidence !== reconciliation.executionEvidence ||
+      approval.humanDecisionUrl !== reconciliation.humanDecisionUrl ||
       approval.authorizationSource !== 'human-explicit' ||
       approval.humanDecision !== 'reconcile-reserved-review' ||
       approval.consumed !== true ||
@@ -5154,6 +5221,10 @@ function validateReviewReservationReconciliationTransactionSemantics(
     approval.issue !== '76' ||
     approval.headSha !== record.headSha ||
     approval.schemaFingerprint !== record.schemaFingerprint ||
+    approval.reportedReservationHeadSha !== record.reportedReservationHeadSha ||
+    approval.reportedReservationHeadProvenance !== record.reportedReservationHeadProvenance ||
+    approval.executionEvidence !== record.executionEvidence ||
+    approval.humanDecisionUrl !== record.humanDecisionUrl ||
     approval.humanDecision !== 'reconcile-reserved-review' ||
     approval.authorizationSource !== 'human-explicit' ||
     approval.consumed !== true ||
