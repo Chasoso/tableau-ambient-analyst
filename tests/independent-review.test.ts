@@ -15,7 +15,26 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const childProcessTestHooks = vi.hoisted(() => ({
+  throwOnCodexSpawn: false,
+  exceptionMessage: '',
+}));
+
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  return {
+    ...actual,
+    spawnSync: ((...args: Parameters<typeof actual.spawnSync>) => {
+      const [command] = args;
+      if (childProcessTestHooks.throwOnCodexSpawn && command === 'codex') {
+        throw new Error(childProcessTestHooks.exceptionMessage);
+      }
+      return actual.spawnSync(...args);
+    }) as typeof actual.spawnSync,
+  };
+});
 
 import {
   canOpenPullRequest,
@@ -1710,6 +1729,65 @@ describe('independent review runner control flow', () => {
       }
     },
   );
+
+  it('persists an unexpected reviewer exception as UNCERTAIN through the production state transition', () => {
+    const secret = 'token=uncertain-secret prompt=private-evidence';
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-uncertain-'));
+    const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = workspace.binDirectory;
+      childProcessTestHooks.exceptionMessage = secret;
+      childProcessTestHooks.throwOnCodexSpawn = true;
+
+      const result = runIndependentReview({ cwd: workspace.cwd, base: 'main', issue: '76' });
+      const rawAfterFailure = readFileSync(workspace.statePath, 'utf8');
+      const accounting = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      const failure = accounting.reviewExecutionFailures?.[0];
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+
+      expect(result.terminationReason).toBe('REVIEWER_FAILURE');
+      expect(result.accounting?.reviewExecutionFailures?.[0]?.kind).toBe('UNCERTAIN');
+      expect(accounting.reviewInvocationCount).toBe(1);
+      expect(accounting.pendingReview).toBeUndefined();
+      expect(accounting.terminationReason).toBe('REVIEWER_FAILURE');
+      expect(accounting.terminationHistory).toEqual(['REVIEWER_FAILURE']);
+      expect(failure).toMatchObject({
+        reviewInvocation: 1,
+        kind: 'UNCERTAIN',
+        diagnostic: 'Reviewer execution failed: UNCERTAIN.',
+        evidenceVersion: 'reviewer-failure-v1',
+        reviewEpoch: 1,
+        headSha: workspace.headSha,
+        schemaFingerprint,
+      });
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(JSON.stringify(accounting)).not.toContain(secret);
+      expect(rawAfterFailure).not.toContain(secret);
+      if (existsSync(workspace.promptPath)) {
+        expect(readFileSync(workspace.promptPath, 'utf8')).not.toContain(secret);
+      }
+
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
+        'terminal',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(rawAfterFailure);
+      expect(
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 1,
+        pendingReview: undefined,
+        terminationReason: 'REVIEWER_FAILURE',
+      });
+    } finally {
+      childProcessTestHooks.throwOnCodexSpawn = false;
+      childProcessTestHooks.exceptionMessage = '';
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('converts reviewer exceptions after reservation into a durable fail-closed failure', () => {
     const result = runReadOnlyReview(
