@@ -2222,6 +2222,33 @@ describe('review cycle state', () => {
     }
   });
 
+  it.each(['orphaned-reviewer-failure-record.json', 'inconsistent-reviewer-failure-evidence.json'])(
+    'rejects reviewer failure accounting fixture %s without mutation or retry',
+    (fixtureName) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-incomplete-reviewer-failure-'));
+      const statePath = join(directory, 'state.json');
+      const fixture = readFileSync(
+        join(process.cwd(), 'tests/fixtures/review-accounting', fixtureName),
+        'utf8',
+      );
+      writeFileSync(statePath, fixture, 'utf8');
+
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+            'Review accounting state is invalid',
+          );
+          expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+            'Review accounting state is invalid',
+          );
+          expect(readFileSync(statePath, 'utf8')).toBe(fixture);
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
     const reviewerWorkspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
@@ -2258,6 +2285,11 @@ describe('review cycle state', () => {
     );
 
     try {
+      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+        reviewInvocationCount: 1,
+        terminationReason: 'REVIEWER_FAILURE',
+        reviewExecutionFailures: [{ reviewInvocation: 1, kind: 'NONZERO_EXIT' }],
+      });
       const approval = authorizeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,

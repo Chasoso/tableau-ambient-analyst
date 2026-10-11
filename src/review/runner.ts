@@ -3404,7 +3404,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.pendingReview !== undefined && !isPendingReview(state.pendingReview)) ||
     (state.reviewExecutionFailures !== undefined &&
       (!Array.isArray(state.reviewExecutionFailures) ||
-        !state.reviewExecutionFailures.every(isReviewExecutionFailure))) ||
+        !state.reviewExecutionFailures.every(isReviewExecutionFailure) ||
+        !reviewExecutionFailuresAreConsistent(state))) ||
     (state.reviewerFailureRecovery !== undefined &&
       (!isReviewerFailureRecovery(state.reviewerFailureRecovery) ||
         !isReviewerFailureRecoveryConsistent(state))) ||
@@ -4262,6 +4263,61 @@ function isReviewerFailureRecoveryAudit(value: unknown): boolean {
       Object.fromEntries(Object.entries(audit).filter(([key]) => key !== 'archivedAt')),
     )
   );
+}
+
+function reviewFailureMatchesRecovery(
+  failure: Record<string, unknown>,
+  recovery: Record<string, unknown>,
+): boolean {
+  return (
+    recovery.failedReviewInvocation === failure.reviewInvocation &&
+    (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
+    recovery.reviewEpoch === (failure.reviewEpoch ?? recovery.reviewEpoch) &&
+    (failure.evidenceVersion === undefined ||
+      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+        failure.reviewEpoch === recovery.reviewEpoch &&
+        failure.headSha === recovery.headSha &&
+        failure.schemaFingerprint === recovery.schemaFingerprint))
+  );
+}
+
+function reviewExecutionFailuresAreConsistent(state: Record<string, unknown>): boolean {
+  const failures = state.reviewExecutionFailures;
+  if (!Array.isArray(failures) || failures.length === 0) return true;
+
+  const currentTerminalFailure =
+    state.terminationReason === 'REVIEWER_FAILURE' &&
+    Array.isArray(state.terminationHistory) &&
+    state.terminationHistory.at(-1) === 'REVIEWER_FAILURE';
+  const activeRecovery =
+    typeof state.reviewerFailureRecovery === 'object' &&
+    state.reviewerFailureRecovery !== null &&
+    !Array.isArray(state.reviewerFailureRecovery)
+      ? (state.reviewerFailureRecovery as Record<string, unknown>)
+      : undefined;
+  const archivedRecoveries = Array.isArray(state.reviewerFailureRecoveryHistory)
+    ? state.reviewerFailureRecoveryHistory
+        .filter((record) => typeof record === 'object' && record !== null && !Array.isArray(record))
+        .map((record) => record as Record<string, unknown>)
+    : [];
+  const reviewInvocationCount = state.reviewInvocationCount;
+
+  return failures.every((candidate) => {
+    if (!isReviewExecutionFailure(candidate) || !Number.isInteger(reviewInvocationCount)) {
+      return false;
+    }
+    const failure = candidate as Record<string, unknown>;
+    const isCurrentTerminal =
+      currentTerminalFailure && failure.reviewInvocation === reviewInvocationCount;
+    const currentFailureEvidenceIsConsistent =
+      failure.evidenceVersion === undefined ||
+      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+        failure.reviewEpoch === (state.reviewEpoch ?? 1));
+    const hasRecoveryEvidence =
+      (activeRecovery !== undefined && reviewFailureMatchesRecovery(failure, activeRecovery)) ||
+      archivedRecoveries.some((recovery) => reviewFailureMatchesRecovery(failure, recovery));
+    return (isCurrentTerminal && currentFailureEvidenceIsConsistent) || hasRecoveryEvidence;
+  });
 }
 
 function isReviewerFailureRecoveryConsistent(state: Record<string, unknown>): boolean {
