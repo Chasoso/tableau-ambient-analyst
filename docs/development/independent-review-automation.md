@@ -398,11 +398,47 @@ marker; a later reviewer failure can therefore set a new terminal
 persistence impossible. Invalid or incomplete history remains fail-closed.
 
 This dedicated mechanism was added for Issue #76 after the explicit Human
-Decision recorded in [Issue #76 comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431)
+Decision recorded in [the recovery-scope comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431)
 to preserve the invocation and failure audit trail when the reviewer
-subprocess terminates unsuccessfully. It is deliberately a narrow exception to
-the ordinary review loop, not a new general resume facility. Recovery is
-possible only for a current `REVIEWER_FAILURE` with a durable
+subprocess terminates unsuccessfully. The later decisions for the reserved
+invocation 13 are recorded in [the reconciliation-scope comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579),
+[the re-binding comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445),
+and [the current-HEAD comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567).
+Together these Human Decisions explicitly authorize the following bounded
+Issue #76 scope:
+
+| Approved capability | Implementation boundary | Not authorized |
+| --- | --- | --- |
+| Single-use recovery of a durable `REVIEWER_FAILURE` | `reviewer-failure-recovery` approval, `REVIEWER_FAILURE` evidence checks, and the existing CLI authorization/consumption commands | Generic retry/resume, automatic approval, counter refund/reset, or recovery of incomplete/legacy evidence |
+| One-time reconciliation of the reserved Issue #76 invocation 13 | `review-reservation-reconciliation` approval, the exact `feat/issue-76`/`main` workspace, invocation 13, current HEAD, epoch, Schema fingerprint, and transaction checks | Reconciliation for another Issue or invocation, inferred reviewer execution, or invocation 14+ execution |
+| Audit-compatible state handling | Existing accounting validation, append-only recovery history, single-use approval consumption, and legacy read-only compatibility | History fabrication, deletion, rewriting, or reuse of consumed approvals |
+
+These are bounded continuation mechanisms approved for this Issue's concrete
+failure states; they are not a general recovery framework or autonomous review
+loop. The commands are callable only after a separate matching Human Decision
+has created the durable approval, and every mismatch remains fail-closed.
+Review-limit recovery remains a separate pre-existing capability with its own
+`review-limit-resume` approval, epoch transition, limits, and tests; it is not
+implemented by or broadened through the Issue #76 reviewer-failure or
+reservation-reconciliation paths. AUTO_FIX recovery likewise retains its
+existing evidence and bounded-cycle rules.
+
+The implementation-to-decision mapping is:
+
+- [`src/review/runner.ts`](../../src/review/runner.ts): durable failure
+  evidence, approval binding, accounting validation, and the two bounded
+  transactions.
+- [`src/review/cli.ts`](../../src/review/cli.ts) and
+  [`src/review/cli-policy.ts`](../../src/review/cli-policy.ts): mutually
+  exclusive authorization/consumption entry points; no command creates an
+  approval without the explicit authorization flag and matching state.
+- [`src/review/gate.ts`](../../src/review/gate.ts): approval/evidence types and
+  fail-closed result contracts.
+- [`tests/independent-review.test.ts`](../../tests/independent-review.test.ts):
+  isolated approval, transaction, CLI, legacy-compatibility, and review-limit
+  recovery coverage.
+
+Recovery is possible only for a current `REVIEWER_FAILURE` with a durable
 `reviewer-failure-v2` record whose failed invocation, failure kind, review
 epoch, exact HEAD, Schema fingerprint, and `executionPhase: REVIEW` match the
 current state. `reviewer-failure-v1` and explicit `evidenceVersion`-absent
