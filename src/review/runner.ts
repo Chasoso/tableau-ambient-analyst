@@ -5416,6 +5416,7 @@ function readReviewAccountingAtPathUnsafe(
     reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
     reviewReservationReconciliationApprovalStateIsConsistent(statePath, branch, base, accounting);
     reviewLimitTerminalFinalizationApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewHistoryEvidenceIsConsistent(statePath, branch, base, accounting);
     return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
@@ -5587,6 +5588,118 @@ function reviewLimitTerminalFinalizationApprovalStateIsConsistent(
     throw new Error(
       'Review-limit terminal approval state is inconsistent; human recovery is required.',
     );
+  }
+}
+
+function reviewHistoryEvidenceIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const histories = accounting.reviewHistory ?? [];
+  if (histories.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const history of histories) {
+    const failures = history.reviewExecutionFailures ?? [];
+    for (const failure of failures) {
+      if (
+        failure.reviewInvocation > history.reviewInvocationCount ||
+        (failure.evidenceVersion !== undefined && failure.reviewEpoch !== history.reviewEpoch)
+      ) {
+        throw new Error(
+          'Historical reviewer-failure evidence is inconsistent; human recovery is required.',
+        );
+      }
+      const terminalFailure =
+        history.terminationReason === 'REVIEWER_FAILURE' &&
+        failure.reviewInvocation === history.reviewInvocationCount;
+      const recoveredFailure = [
+        ...(history.reviewerFailureRecovery ? [history.reviewerFailureRecovery] : []),
+        ...(history.reviewerFailureRecoveryHistory ?? []),
+      ].some(
+        (recovery) =>
+          recovery.reviewEpoch === history.reviewEpoch &&
+          recovery.failedReviewInvocation === failure.reviewInvocation &&
+          (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
+          (failure.evidenceVersion === undefined ||
+            (isReviewerFailureEvidenceForHistoricalRecovery(failure) &&
+              failure.headSha === recovery.headSha &&
+              failure.schemaFingerprint === recovery.schemaFingerprint)),
+      );
+      if (failure.evidenceVersion !== undefined && !terminalFailure && !recoveredFailure) {
+        throw new Error(
+          'Historical reviewer-failure evidence has no matching terminal or recovery record; human recovery is required.',
+        );
+      }
+    }
+
+    const recoveries = [
+      ...(history.reviewerFailureRecovery ? [history.reviewerFailureRecovery] : []),
+      ...(history.reviewerFailureRecoveryHistory ?? []),
+    ];
+    for (const recovery of recoveries) {
+      const approval = approvals.find((candidate) => candidate.id === recovery.approvalId);
+      if (
+        recovery.reviewEpoch !== history.reviewEpoch ||
+        recovery.failedReviewInvocation > history.reviewInvocationCount ||
+        !approval ||
+        approval.approvalType !== 'reviewer-failure-recovery' ||
+        approval.targetRepository !== targetRepository ||
+        approval.branch !== branch ||
+        approval.base !== base ||
+        approval.reviewEpoch !== recovery.reviewEpoch ||
+        approval.exhaustedReviewInvocationCount !== recovery.failedReviewInvocation ||
+        approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+        approval.failedReviewKind !== recovery.failureKind ||
+        approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+        approval.headSha !== recovery.headSha ||
+        approval.schemaFingerprint !== recovery.schemaFingerprint ||
+        approval.authorizationSource !== 'human-explicit' ||
+        approval.humanDecision !== 'retry-review' ||
+        approval.consumed !== true ||
+        approval.consumedAt !== recovery.authorizedAt
+      ) {
+        throw new Error(
+          'Historical reviewer-failure recovery approval is inconsistent; human recovery is required.',
+        );
+      }
+    }
+
+    for (const reconciliation of history.reconciledReviewReservations ?? []) {
+      const approval = approvals.find((candidate) => candidate.id === reconciliation.approvalId);
+      if (
+        reconciliation.reviewEpoch !== history.reviewEpoch ||
+        reconciliation.reservedInvocation > history.reviewInvocationCount ||
+        !approval ||
+        approval.approvalType !== 'review-reservation-reconciliation' ||
+        approval.targetRepository !== targetRepository ||
+        approval.branch !== branch ||
+        approval.base !== base ||
+        approval.reviewEpoch !== reconciliation.reviewEpoch ||
+        approval.exhaustedReviewInvocationCount !== reconciliation.reservedInvocation ||
+        approval.reconciliationInvocation !== reconciliation.reservedInvocation ||
+        approval.reconciliationReason !== reconciliation.reasonCode ||
+        approval.issue !== '76' ||
+        approval.headSha !== reconciliation.headSha ||
+        approval.schemaFingerprint !== reconciliation.schemaFingerprint ||
+        approval.reportedReservationHeadSha !== reconciliation.reportedReservationHeadSha ||
+        approval.reportedReservationHeadProvenance !==
+          reconciliation.reportedReservationHeadProvenance ||
+        approval.executionEvidence !== reconciliation.executionEvidence ||
+        approval.humanDecisionUrl !== reconciliation.humanDecisionUrl ||
+        approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+        approval.authorizationSource !== 'human-explicit' ||
+        approval.humanDecision !== 'reconcile-reserved-review' ||
+        approval.consumed !== true ||
+        approval.consumedAt !== reconciliation.reconciledAt
+      ) {
+        throw new Error(
+          'Historical reservation-reconciliation approval is inconsistent; human recovery is required.',
+        );
+      }
+    }
   }
 }
 

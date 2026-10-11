@@ -1088,6 +1088,21 @@ describe('Issue #76 review-limit terminal finalization', () => {
         reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
         reconciledReviewReservations: [reconciliation],
       });
+      const validRawState = JSON.parse(readFileSync(workspace.statePath, 'utf8'));
+      const mismatchedFailure = structuredClone(validRawState);
+      mismatchedFailure.entries[0].reviewHistory[0].reviewExecutionFailures[0].reviewEpoch = 2;
+      writeFileSync(workspace.statePath, JSON.stringify(mismatchedFailure), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+
+      const mismatchedApproval = structuredClone(validRawState);
+      mismatchedApproval.entries[0].reviewHistory[0].reconciledReviewReservations[0].approvalId =
+        'different-approval';
+      writeFileSync(workspace.statePath, JSON.stringify(mismatchedApproval), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
