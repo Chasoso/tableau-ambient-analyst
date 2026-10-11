@@ -51,6 +51,10 @@ import {
   type ReviewTerminationEvidence,
   type ReviewTerminationRecovery,
   type ReviewExecutionFailureKind,
+  reviewEpochEvidenceCoverageVersion,
+  reviewEpochEvidenceKinds,
+  type ReviewEpochEvidenceCoverage,
+  type ReviewEpochEvidenceKind,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -3639,6 +3643,7 @@ export function resumeReviewAfterLimitAtPath(
         reviewerFailureRecovery: accounting.reviewerFailureRecovery,
         reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
         reconciledReviewReservations: accounting.reconciledReviewReservations,
+        invocationEvidenceCoverage: buildReviewEpochEvidenceCoverage(accounting),
         recoveryReason: approval.recoveryReason,
         recoveryEvidence: approval.recoveryEvidence,
       };
@@ -4050,6 +4055,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
+    'invocationEvidenceCoverage',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -4569,6 +4575,7 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
+    'invocationEvidenceCoverage',
     'recoveryReason',
     'recoveryEvidence',
   ]);
@@ -4627,8 +4634,142 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
         history.reviewerFailureRecoveryHistory.every(isReviewerFailureRecoveryAudit))) &&
     (history.reconciledReviewReservations === undefined ||
       (Array.isArray(history.reconciledReviewReservations) &&
-        history.reconciledReviewReservations.every(isReconciledReviewReservation)))
+        history.reconciledReviewReservations.every(isReconciledReviewReservation))) &&
+    (history.invocationEvidenceCoverage === undefined ||
+      (isReviewEpochEvidenceCoverage(history.invocationEvidenceCoverage, history) &&
+        (history.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+          history.reviewLimitTerminalEvidence !== undefined)))
   );
+}
+
+function isReviewEpochEvidenceCoverage(
+  value: unknown,
+  history: Record<string, unknown>,
+): value is ReviewEpochEvidenceCoverage {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const coverage = value as Record<string, unknown>;
+  const entries = coverage.entries;
+  if (
+    Object.keys(coverage).some((key) => key !== 'version' && key !== 'entries') ||
+    coverage.version !== reviewEpochEvidenceCoverageVersion ||
+    !Array.isArray(entries) ||
+    entries.length !== history.reviewInvocationCount
+  ) {
+    return false;
+  }
+
+  const evidenceByInvocation = new Map<number, ReviewEpochEvidenceKind>();
+  const addEvidence = (
+    reviewInvocation: number,
+    evidenceKind: ReviewEpochEvidenceKind,
+  ): boolean => {
+    if (evidenceByInvocation.has(reviewInvocation)) return false;
+    evidenceByInvocation.set(reviewInvocation, evidenceKind);
+    return true;
+  };
+  const cycles = Array.isArray(history.cycleResults) ? history.cycleResults : [];
+  const failures = Array.isArray(history.reviewExecutionFailures)
+    ? history.reviewExecutionFailures
+    : [];
+  const reconciliations = Array.isArray(history.reconciledReviewReservations)
+    ? history.reconciledReviewReservations
+    : [];
+  for (const cycle of cycles) {
+    if (!isReviewCycleRecord(cycle) || !addEvidence(cycle.reviewInvocation, 'CYCLE_RESULT')) {
+      return false;
+    }
+  }
+  for (const failure of failures) {
+    const record = failure as Record<string, unknown>;
+    if (
+      !isReviewExecutionFailure(failure) ||
+      !addEvidence(record.reviewInvocation as number, 'REVIEWER_EXECUTION_FAILURE')
+    ) {
+      return false;
+    }
+  }
+  for (const reconciliation of reconciliations) {
+    const record = reconciliation as Record<string, unknown>;
+    if (
+      !isReconciledReviewReservation(reconciliation) ||
+      !addEvidence(record.reservedInvocation as number, 'RESERVATION_RECONCILIATION')
+    ) {
+      return false;
+    }
+  }
+
+  const invocationCount = history.reviewInvocationCount;
+  if (!Number.isInteger(invocationCount) || invocationCount < 0) return false;
+  const expectedInvocations = Array.from({ length: invocationCount }, (_, index) => index + 1);
+  if (
+    evidenceByInvocation.size !== expectedInvocations.length ||
+    expectedInvocations.some((reviewInvocation) => !evidenceByInvocation.has(reviewInvocation))
+  ) {
+    return false;
+  }
+  return (
+    entries.every((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+      const record = entry as Record<string, unknown>;
+      return (
+        Object.keys(record).length === 2 &&
+        Number.isInteger(record.reviewInvocation) &&
+        evidenceByInvocation.get(record.reviewInvocation as number) === record.evidenceKind &&
+        reviewEpochEvidenceKinds.includes(record.evidenceKind as ReviewEpochEvidenceKind)
+      );
+    }) &&
+    new Set(entries.map((entry) => (entry as Record<string, unknown>).reviewInvocation)).size ===
+      entries.length
+  );
+}
+
+function buildReviewEpochEvidenceCoverage(
+  accounting: ReviewAccounting,
+): ReviewEpochEvidenceCoverage | undefined {
+  // Accounting without explicit epoch metadata is an older legacy shape. It
+  // remains read-compatible and must not be silently promoted to the new
+  // complete-coverage contract during recovery.
+  if (
+    accounting.reviewEpoch === undefined ||
+    (accounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+      accounting.reviewLimitTerminalEvidence === undefined)
+  ) {
+    // Historical MAX snapshots created before terminal evidence was durable
+    // remain legacy read-compatible and are not promoted to the new contract.
+    return undefined;
+  }
+
+  const evidenceByInvocation = new Map<number, ReviewEpochEvidenceKind>();
+  const addEvidence = (reviewInvocation: number, evidenceKind: ReviewEpochEvidenceKind): void => {
+    if (evidenceByInvocation.has(reviewInvocation)) {
+      throw new Error('Cannot snapshot an invocation with multiple durable evidence records.');
+    }
+    evidenceByInvocation.set(reviewInvocation, evidenceKind);
+  };
+  accounting.cycleResults.forEach((cycle) => addEvidence(cycle.reviewInvocation, 'CYCLE_RESULT'));
+  (accounting.reviewExecutionFailures ?? []).forEach((failure) =>
+    addEvidence(failure.reviewInvocation, 'REVIEWER_EXECUTION_FAILURE'),
+  );
+  (accounting.reconciledReviewReservations ?? []).forEach((reconciliation) =>
+    addEvidence(reconciliation.reservedInvocation, 'RESERVATION_RECONCILIATION'),
+  );
+  const expectedInvocations = Array.from(
+    { length: accounting.reviewInvocationCount },
+    (_, index) => index + 1,
+  );
+  if (
+    evidenceByInvocation.size !== expectedInvocations.length ||
+    expectedInvocations.some((reviewInvocation) => !evidenceByInvocation.has(reviewInvocation))
+  ) {
+    throw new Error('Cannot snapshot incomplete invocation evidence coverage.');
+  }
+  return {
+    version: reviewEpochEvidenceCoverageVersion,
+    entries: expectedInvocations.map((reviewInvocation) => ({
+      reviewInvocation,
+      evidenceKind: evidenceByInvocation.get(reviewInvocation) as ReviewEpochEvidenceKind,
+    })),
+  };
 }
 
 function isReviewLimitTerminalEvidenceForEpochHistory(history: Record<string, unknown>): boolean {

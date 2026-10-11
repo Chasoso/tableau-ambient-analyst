@@ -962,19 +962,45 @@ describe('Issue #76 review-limit terminal finalization', () => {
       expect(resumed).toMatchObject({ reviewEpoch: 2, reviewInvocationCount: 0 });
       if (typeof resumed === 'string') return;
       expect(resumed.reviewHistory?.[0]?.reviewLimitTerminalEvidence).toEqual(evidence);
+      expect(resumed.reviewHistory?.[0]?.invocationEvidenceCoverage).toMatchObject({
+        version: 'review-epoch-evidence-v1',
+        entries: expect.arrayContaining([
+          { reviewInvocation: 1, evidenceKind: 'CYCLE_RESULT' },
+          { reviewInvocation: 16, evidenceKind: 'CYCLE_RESULT' },
+        ]),
+      });
       expect(
         readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toMatchObject({ reviewEpoch: 2, reviewInvocationCount: 0 });
       const reloaded = JSON.parse(readFileSync(workspace.statePath, 'utf8'));
       expect(reloaded.entries[0].reviewHistory[0].reviewLimitTerminalEvidence).toEqual(evidence);
-      delete reloaded.entries[0].reviewHistory[0].reviewLimitTerminalEvidence;
+      const missingTerminalEvidence = structuredClone(reloaded);
+      delete missingTerminalEvidence.entries[0].reviewHistory[0].reviewLimitTerminalEvidence;
+      writeFileSync(workspace.statePath, JSON.stringify(missingTerminalEvidence), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+
+      const missingCoverageEntry = structuredClone(reloaded);
+      missingCoverageEntry.entries[0].reviewHistory[0].invocationEvidenceCoverage.entries.pop();
+      writeFileSync(workspace.statePath, JSON.stringify(missingCoverageEntry), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+
+      reloaded.entries[0].reviewHistory[0].cycleResults.splice(0, 1);
       writeFileSync(workspace.statePath, JSON.stringify(reloaded), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+
+      const legacyState = JSON.parse(readFileSync(workspace.statePath, 'utf8'));
+      delete legacyState.entries[0].reviewHistory[0].invocationEvidenceCoverage;
+      delete legacyState.entries[0].reviewHistory[0].reviewLimitTerminalEvidence;
+      writeFileSync(workspace.statePath, JSON.stringify(legacyState), 'utf8');
       const legacyReload = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(legacyReload.reviewHistory?.[0]?.invocationEvidenceCoverage).toBeUndefined();
       expect(legacyReload.reviewHistory?.[0]?.reviewLimitTerminalEvidence).toBeUndefined();
-      expect(
-        JSON.parse(readFileSync(workspace.statePath, 'utf8')).entries[0].reviewHistory[0]
-          .reviewLimitTerminalEvidence,
-      ).toBeUndefined();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1010,9 +1036,13 @@ describe('Issue #76 review-limit terminal finalization', () => {
         ...fixture.accounting,
         reviewInvocationCount: 16,
         pendingReview: undefined,
-        cycleResults: completedReviewCycles(16).map((cycle, index) =>
-          index === 15 ? { ...cycle, result: 'CHANGES_REQUIRED' as const } : cycle,
-        ),
+        cycleResults: completedReviewCycles(16)
+          .filter((cycle) => cycle.reviewInvocation !== 1 && cycle.reviewInvocation !== 13)
+          .map((cycle) =>
+            cycle.reviewInvocation === 16
+              ? { ...cycle, result: 'CHANGES_REQUIRED' as const }
+              : cycle,
+          ),
         reconciledReviewReservations: [reconciliation],
       };
       writeFileSync(
@@ -1081,6 +1111,13 @@ describe('Issue #76 review-limit terminal finalization', () => {
         reviewExecutionFailures: accounting.reviewExecutionFailures,
         reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
         reconciledReviewReservations: [reconciliation],
+      });
+      expect(resumed.reviewHistory?.[0]?.invocationEvidenceCoverage).toMatchObject({
+        version: 'review-epoch-evidence-v1',
+        entries: expect.arrayContaining([
+          { reviewInvocation: 1, evidenceKind: 'REVIEWER_EXECUTION_FAILURE' },
+          { reviewInvocation: 13, evidenceKind: 'RESERVATION_RECONCILIATION' },
+        ]),
       });
       const reloaded = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
       expect(reloaded.reviewHistory?.[0]).toMatchObject({

@@ -94,6 +94,22 @@ export type ReviewCycleRecord = {
   repositoryChanged: boolean | null;
 };
 
+export const reviewEpochEvidenceCoverageVersion = 'review-epoch-evidence-v1' as const;
+export const reviewEpochEvidenceKinds = [
+  'CYCLE_RESULT',
+  'REVIEWER_EXECUTION_FAILURE',
+  'RESERVATION_RECONCILIATION',
+] as const;
+export type ReviewEpochEvidenceKind = (typeof reviewEpochEvidenceKinds)[number];
+export type ReviewEpochEvidenceCoverageEntry = {
+  reviewInvocation: number;
+  evidenceKind: ReviewEpochEvidenceKind;
+};
+export type ReviewEpochEvidenceCoverage = {
+  version: typeof reviewEpochEvidenceCoverageVersion;
+  entries: ReviewEpochEvidenceCoverageEntry[];
+};
+
 export type ReviewEpochHistory = {
   reviewEpoch: number;
   accountingEpochStart: string;
@@ -120,6 +136,7 @@ export type ReviewEpochHistory = {
   reviewerFailureRecovery?: ReviewAccounting['reviewerFailureRecovery'] | undefined;
   reviewerFailureRecoveryHistory?: ReviewAccounting['reviewerFailureRecoveryHistory'] | undefined;
   reconciledReviewReservations?: ReviewAccounting['reconciledReviewReservations'] | undefined;
+  invocationEvidenceCoverage?: ReviewEpochEvidenceCoverage | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
 };

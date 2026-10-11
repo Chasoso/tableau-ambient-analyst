@@ -375,6 +375,17 @@ malformed evidence record keeps the gate closed. Older historical snapshots
 that predate one of these optional evidence fields remain read-only compatible;
 the reader does not infer, migrate, or silently reconstruct missing evidence.
 
+New epoch snapshots additionally carry the versioned
+`review-epoch-evidence-v1` `invocationEvidenceCoverage` contract. It maps every
+consumed invocation exactly once to a cycle result, reviewer execution failure,
+or reservation reconciliation. Invocation numbers must be unique, in range,
+and complete, and each coverage entry must match the corresponding durable
+evidence. Removing an intermediate cycle or evidence record from a new-format
+snapshot therefore fails closed. Snapshots without this metadata remain legacy
+read-compatible only; that compatibility does not certify historical
+completeness or authorize recovery, and `known-incomplete` history is never
+treated as complete coverage.
+
 ```bash
 npm run build
 node dist/review/cli.js \
