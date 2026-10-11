@@ -321,6 +321,31 @@ abstraction solely for hypothetical future flexibility.
 }
 
 function issueScopeContext(issue: string): string {
+  if (issue === '76') {
+    return `Review scope context for Issue #76:
+The repository's durable Issue #76 decision record documents four explicit
+Human Decision references:
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567
+Treat those URLs as references to verify against the repository's durable
+documentation and implementation, not as authorization or as a basis for a
+positive result. The approved Issue-specific boundaries are limited to single-use
+recovery of durable reviewer-failure-v2 evidence at executionPhase REVIEW,
+the one-time reconciliation of reserved invocation 13, and the supporting
+approval, transaction, CLI, and accounting validation needed for those two
+bounded paths. Generic retry/resume, automatic approval, recovery of
+incomplete or legacy evidence, invocation 17+, and broad autonomous recovery
+are outside the approved scope. Existing review-limit recovery and AUTO_FIX
+rules remain separate and unchanged. If the durable documentation or relevant
+implementation does not substantiate a scope claim, report the missing
+evidence or inconsistency; do not infer or waive it.
+
+This is scope context only; independently assess the complete diff, acceptance
+criteria, implementation, tests, and safety boundaries.
+`;
+  }
   if (issue !== '17') return '';
   return `Review scope context:
 Issue #17 is an architecture feasibility spike. The selected four cases are
@@ -5720,6 +5745,10 @@ type ResumeTransaction = {
   base: string;
   exhaustedEpoch: number;
   exhaustedReviewInvocationCount?: number;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
+  statePostimageSha256: string;
+  approvalPostimageSha256: string;
   accountingState: unknown;
   approvalState: unknown;
 };
@@ -5775,6 +5804,10 @@ function fileFingerprint(path: string): string | null {
   return sha256(readFileSync(path, 'utf8'));
 }
 
+function isFileFingerprint(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && /^[a-f0-9]{64}$/.test(value));
+}
+
 function resumeTransactionPath(statePath: string): string {
   return `${statePath}${resumeTransactionSuffix}`;
 }
@@ -5818,6 +5851,18 @@ function recoverPendingResumeTransaction(statePath: string): void {
   ) {
     throw new Error('Review resume transaction is invalid; human recovery is required.');
   }
+  const statePostimageSha256 = transaction.statePostimageSha256;
+  const approvalPostimageSha256 = transaction.approvalPostimageSha256;
+  if (
+    !isFileFingerprint(transaction.statePreimageSha256) ||
+    !isFileFingerprint(transaction.approvalPreimageSha256) ||
+    typeof statePostimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(statePostimageSha256) ||
+    typeof approvalPostimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approvalPostimageSha256)
+  ) {
+    throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
   const accountingEntries = accountingStateEntries(transaction.accountingState);
   const approvalState = transaction.approvalState as Record<string, unknown>;
   if (
@@ -5833,8 +5878,20 @@ function recoverPendingResumeTransaction(statePath: string): void {
     accountingEntries,
     approvalState.approvals as ReviewResumeApproval[],
   );
-  writeJsonAtomically(statePath, transaction.accountingState);
-  writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  const currentStateFingerprint = fileFingerprint(statePath);
+  const currentApprovalFingerprint = fileFingerprint(transaction.approvalPath);
+  const stateIsPreimage = currentStateFingerprint === transaction.statePreimageSha256;
+  const stateIsPostimage = currentStateFingerprint === statePostimageSha256;
+  const approvalIsPreimage = currentApprovalFingerprint === transaction.approvalPreimageSha256;
+  const approvalIsPostimage = currentApprovalFingerprint === approvalPostimageSha256;
+  if ((!stateIsPreimage && !stateIsPostimage) || (!approvalIsPreimage && !approvalIsPostimage)) {
+    throw new Error(
+      'Review resume transaction preimage/postimage mismatch; human recovery is required.',
+    );
+  }
+  if (!stateIsPostimage) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalIsPostimage)
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
   unlinkSync(transactionPath);
 }
 
@@ -5848,6 +5905,8 @@ function persistResumeTransaction(
   approvalId: string,
   exhaustedEpoch: number,
 ): void {
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
   const currentValue = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))
     : undefined;
@@ -5860,6 +5919,7 @@ function persistResumeTransaction(
       { branch, base, ...accounting },
     ],
   };
+  const approvalState = { approvals };
   parseAccountingStateEntry({ branch, base, ...accounting });
   approvals.forEach((approval) => {
     if (!isReviewResumeApproval(approval)) {
@@ -5875,8 +5935,12 @@ function persistResumeTransaction(
     base,
     exhaustedEpoch,
     exhaustedReviewInvocationCount: accounting.reviewHistory?.at(-1)?.reviewInvocationCount ?? 0,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    statePostimageSha256: jsonFingerprint(accountingState),
+    approvalPostimageSha256: jsonFingerprint(approvalState),
     accountingState,
-    approvalState: { approvals },
+    approvalState,
   } satisfies ResumeTransaction);
   writeJsonAtomically(statePath, accountingState);
   writeJsonAtomically(approvalPath, { approvals });

@@ -1473,6 +1473,10 @@ function completedReviewCycles(count: number) {
   }));
 }
 
+function testSha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function prepareReservedReviewReconciliationFixture(workspace: {
   statePath: string;
   approvalPath: string;
@@ -4447,6 +4451,25 @@ describe('independent review scope context', () => {
     expect(prompt).not.toContain('return PASS');
   });
 
+  it('provides Issue #76 decision references without prescribing a result', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '76' },
+      { title: 'Review recovery', body: 'Body', url: 'https://example.test/issues/76' },
+      ['npm run validate: passed'],
+      'feat/issue-76',
+    );
+
+    expect(prompt).toContain('issuecomment-6105656431');
+    expect(prompt).toContain('issuecomment-6106685579');
+    expect(prompt).toContain('issuecomment-6107011445');
+    expect(prompt).toContain('issuecomment-6107122567');
+    expect(prompt).toContain('reviewer-failure-v2');
+    expect(prompt).toContain('reserved invocation 13');
+    expect(prompt).toContain('Generic retry/resume');
+    expect(prompt).toContain('report the missing');
+    expect(prompt).not.toContain('return PASS');
+  });
+
   it('requires bounded integration-boundary and adversarial seam review', () => {
     const prompt = buildReviewerPrompt(
       { cwd: '/repo', base: 'main', issue: '57' },
@@ -5963,6 +5986,8 @@ describe('review cycle state', () => {
         ),
       ).not.toBeTypeOf('string');
       const approvals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      const statePreimage = readFileSync(statePath, 'utf8');
+      const approvalPreimage = readFileSync(approvalPath, 'utf8');
       const result = resumeReviewAfterLimitAtPath(
         statePath,
         approvalPath,
@@ -5983,6 +6008,10 @@ describe('review cycle state', () => {
           branch: 'feature/review',
           base: 'main',
           exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
           accountingState: recoveredState,
           approvalState: recoveredApprovals,
         }),
@@ -5996,6 +6025,58 @@ describe('review cycle state', () => {
       });
       expect(JSON.parse(readFileSync(approvalPath, 'utf8')).approvals[0].consumed).toBe(true);
       expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).toThrow();
+
+      const externallyChangedState = readFileSync(statePath, 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+        'preimage/postimage mismatch',
+      );
+      expect(readFileSync(statePath, 'utf8')).toBe(externallyChangedState);
+      expect(() => readFileSync(`${statePath}.resume-transaction`, 'utf8')).not.toThrow();
+
+      const externallyChangedApproval = JSON.stringify({ approvals: [] });
+      writeFileSync(statePath, JSON.stringify(recoveredState), 'utf8');
+      writeFileSync(approvalPath, externallyChangedApproval, 'utf8');
+      writeFileSync(
+        `${statePath}.resume-transaction`,
+        JSON.stringify({
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        }),
+        'utf8',
+      );
+      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+        'preimage/postimage mismatch',
+      );
+      expect(readFileSync(statePath, 'utf8')).toBe(JSON.stringify(recoveredState));
+      expect(readFileSync(approvalPath, 'utf8')).toBe(externallyChangedApproval);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -6034,6 +6115,8 @@ describe('review cycle state', () => {
         ),
       ).not.toBeTypeOf('string');
       const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      const statePreimage = readFileSync(statePath, 'utf8');
+      const approvalPreimage = readFileSync(approvalPath, 'utf8');
       expect(
         resumeReviewAfterLimitAtPath(
           statePath,
@@ -6056,6 +6139,10 @@ describe('review cycle state', () => {
           branch: 'feature/review',
           base: 'main',
           exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
           accountingState: recoveredState,
           approvalState: recoveredApprovals,
         }),
@@ -6161,6 +6248,8 @@ process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transa
         ),
       ).not.toBeTypeOf('string');
       const originalApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+      const statePreimage = readFileSync(statePath, 'utf8');
+      const approvalPreimage = readFileSync(approvalPath, 'utf8');
       expect(
         resumeReviewAfterLimitAtPath(
           statePath,
@@ -6184,6 +6273,10 @@ process.stdout.write(JSON.stringify({ epoch: accounting.reviewEpoch ?? 1, transa
           branch: 'feature/review',
           base: 'main',
           exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
           accountingState: recoveredState,
           approvalState: recoveredApprovals,
         }),
