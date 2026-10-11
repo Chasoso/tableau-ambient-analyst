@@ -42,6 +42,7 @@ import {
   reviewReservationReconciliationHumanDecisions,
   reviewReservationReconciliationProvenances,
   reviewReservationReconciliationEvidenceReasons,
+  reviewLimitTerminalFinalizationHumanDecisions,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -97,6 +98,8 @@ const reviewerSchemaUnsupportedKeywords = new Set([
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
 const reviewReservationReconciliationTransactionSuffix =
   '.review-reservation-reconciliation-transaction';
+const reviewLimitTerminalFinalizationTransactionSuffix =
+  '.review-limit-terminal-finalization-transaction';
 const issue76HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
 const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
@@ -3158,6 +3161,249 @@ function validateReviewerFailureRecoveryScope(
   return undefined;
 }
 
+function validateReviewLimitTerminalFinalizationScope(
+  workspaceCwd: string,
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+): string | undefined {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Review-limit terminal finalization is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76') ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Review-limit terminal finalization requires the canonical Issue #76 worktree.';
+  }
+  if (!isGitCommitSha(headSha) || readHeadSha(workspaceCwd) !== headSha) {
+    return 'Review-limit terminal finalization HEAD does not match the current Git HEAD.';
+  }
+  return reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+}
+
+function reviewLimitTerminalFinalizationStateIsEligible(
+  accounting: ReviewAccounting,
+): string | undefined {
+  if (
+    (accounting.reviewEpoch !== undefined && accounting.reviewEpoch !== 1) ||
+    accounting.reviewInvocationCount !== maxReviewInvocations ||
+    accounting.pendingReview !== undefined ||
+    accounting.terminationReason !== undefined ||
+    accounting.terminationHistory?.at(-1) === 'MAX_REVIEW_INVOCATIONS' ||
+    accounting.reviewLimitTerminalEvidence !== undefined ||
+    accounting.cycleResults.at(-1)?.reviewInvocation !== maxReviewInvocations ||
+    accounting.cycleResults.at(-1)?.result !== 'CHANGES_REQUIRED'
+  ) {
+    return 'Review-limit terminal finalization requires count 16 with the final CHANGES_REQUIRED cycle and no terminal state.';
+  }
+  return undefined;
+}
+
+/** Create the dedicated single-use approval for Issue #76 terminal finalization. */
+export function authorizeReviewLimitTerminalFinalizationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  const scopeError = validateReviewLimitTerminalFinalizationScope(
+    workspaceCwd,
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    headSha,
+    schemaFingerprint,
+  );
+  if (scopeError) return scopeError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const eligibilityError = reviewLimitTerminalFinalizationStateIsEligible(accounting);
+      if (eligibilityError) return eligibilityError;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.approvalType === 'review-limit-terminal-finalization' &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review-limit terminal finalization approval already exists.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'review-limit-terminal-finalization',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: maxReviewInvocations,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        schemaFingerprint,
+        humanDecision: reviewLimitTerminalFinalizationHumanDecisions[0],
+        issue: '76',
+        finalizationReviewInvocation: maxReviewInvocations,
+        finalizationResult: 'CHANGES_REQUIRED',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist review approval.';
+  }
+}
+
+export function authorizeReviewLimitTerminalFinalization(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return authorizeReviewLimitTerminalFinalizationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+export function finalizeReviewLimitTerminalAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  const scopeError = validateReviewLimitTerminalFinalizationScope(
+    workspaceCwd,
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    headSha,
+    schemaFingerprint,
+  );
+  if (scopeError) return scopeError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const eligibilityError = reviewLimitTerminalFinalizationStateIsEligible(accounting);
+      if (eligibilityError) return eligibilityError;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'review-limit-terminal-finalization' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === maxReviewInvocations &&
+          candidate.headSha === headSha &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.humanDecision === reviewLimitTerminalFinalizationHumanDecisions[0] &&
+          candidate.issue === '76' &&
+          candidate.finalizationReviewInvocation === maxReviewInvocations &&
+          candidate.finalizationResult === 'CHANGES_REQUIRED' &&
+          !candidate.consumed,
+      );
+      if (!approval) return 'No matching unconsumed review-limit terminal approval exists.';
+      const finalizedAt = new Date().toISOString();
+      const next: ReviewAccounting = {
+        ...accounting,
+        terminationHistory: [...(accounting.terminationHistory ?? []), 'MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+        reviewLimitTerminalEvidence: {
+          approvalId: approval.id,
+          finalizedAt,
+          authorizationSource: 'human-explicit',
+          headSha,
+          schemaFingerprint,
+          reviewEpoch: accounting.reviewEpoch ?? 1,
+          reviewInvocation: maxReviewInvocations,
+          lastCycleResult: 'CHANGES_REQUIRED',
+        },
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: finalizedAt }
+          : candidate,
+      );
+      persistReviewLimitTerminalFinalizationTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+        approval.id,
+        fileFingerprint(statePath),
+        fileFingerprint(approvalPath),
+      );
+      return next;
+    });
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist review-limit terminal evidence; human recovery is required.';
+  }
+}
+
+export function finalizeReviewLimitTerminal(cwd: string, base: string): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return finalizeReviewLimitTerminalAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
 /** Create the durable approval record. This is never called by review loops. */
 export function authorizeReviewResumeAfterLimitAtPath(
   statePath: string,
@@ -3746,6 +3992,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
+    'reviewLimitTerminalEvidence',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -3820,7 +4067,10 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
           state.reconciledReviewReservations.map(
             (record) => (record as Record<string, unknown>).reservedInvocation,
           ),
-        ).size !== state.reconciledReviewReservations.length))
+        ).size !== state.reconciledReviewReservations.length)) ||
+    (state.reviewLimitTerminalEvidence !== undefined &&
+      (!isReviewLimitTerminalEvidence(state.reviewLimitTerminalEvidence) ||
+        !reviewLimitTerminalEvidenceIsConsistent(state)))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -3975,6 +4225,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
             ReviewAccounting['reconciledReviewReservations']
           >,
         }),
+    ...(state.reviewLimitTerminalEvidence === undefined
+      ? {}
+      : {
+          reviewLimitTerminalEvidence: state.reviewLimitTerminalEvidence as NonNullable<
+            ReviewAccounting['reviewLimitTerminalEvidence']
+          >,
+        }),
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -3983,6 +4240,60 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
   return { branch: state.branch, base: state.base, accounting };
+}
+
+function isReviewLimitTerminalEvidence(
+  value: unknown,
+): value is NonNullable<ReviewAccounting['reviewLimitTerminalEvidence']> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return (
+    Object.keys(evidence).every((key) =>
+      new Set([
+        'approvalId',
+        'finalizedAt',
+        'authorizationSource',
+        'headSha',
+        'schemaFingerprint',
+        'reviewEpoch',
+        'reviewInvocation',
+        'lastCycleResult',
+      ]).has(key),
+    ) &&
+    typeof evidence.approvalId === 'string' &&
+    typeof evidence.finalizedAt === 'string' &&
+    evidence.authorizationSource === 'human-explicit' &&
+    isGitCommitSha(evidence.headSha) &&
+    typeof evidence.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(evidence.schemaFingerprint) &&
+    Number.isInteger(evidence.reviewEpoch) &&
+    (evidence.reviewEpoch as number) >= 1 &&
+    Number.isInteger(evidence.reviewInvocation) &&
+    (evidence.reviewInvocation as number) === maxReviewInvocations &&
+    evidence.lastCycleResult === 'CHANGES_REQUIRED'
+  );
+}
+
+function reviewLimitTerminalEvidenceIsConsistent(state: Record<string, unknown>): boolean {
+  const evidence = state.reviewLimitTerminalEvidence;
+  if (evidence === undefined) return true;
+  if (
+    state.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    state.pendingReview !== undefined ||
+    state.reviewInvocationCount !== maxReviewInvocations ||
+    !Array.isArray(state.cycleResults)
+  ) {
+    return false;
+  }
+  const lastCycle = state.cycleResults.at(-1);
+  const terminal = evidence as Record<string, unknown>;
+  return (
+    typeof lastCycle === 'object' &&
+    lastCycle !== null &&
+    (lastCycle as Record<string, unknown>).reviewInvocation === maxReviewInvocations &&
+    (lastCycle as Record<string, unknown>).result === 'CHANGES_REQUIRED' &&
+    terminal.reviewEpoch === (state.reviewEpoch ?? 1)
+  );
 }
 
 function isPendingReview(value: unknown): value is NonNullable<ReviewAccounting['pendingReview']> {
@@ -4586,6 +4897,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'humanDecisionUrl',
     'humanDecisionVerification',
     'issue',
+    'finalizationReviewInvocation',
+    'finalizationResult',
   ]);
   if (
     !Object.keys(approval).every((key) => allowedKeys.has(key)) ||
@@ -4594,7 +4907,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.approvalType === 'review-limit-resume' ||
       approval.approvalType === 'review-termination-recovery' ||
       approval.approvalType === 'reviewer-failure-recovery' ||
-      approval.approvalType === 'review-reservation-reconciliation'
+      approval.approvalType === 'review-reservation-reconciliation' ||
+      approval.approvalType === 'review-limit-terminal-finalization'
     ) ||
     approval.targetRepository !== targetRepository ||
     typeof approval.branch !== 'string' ||
@@ -4682,6 +4996,32 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
       approval.reportedReservationHeadSha !== approval.headSha &&
       isGitCommitSha(approval.headSha)
+    );
+  }
+  if (approval.approvalType === 'review-limit-terminal-finalization') {
+    return (
+      approval.branch === 'feat/issue-76' &&
+      approval.base === 'main' &&
+      approval.reviewEpoch === 1 &&
+      approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      approval.reconciliationInvocation === undefined &&
+      approval.reconciliationReason === undefined &&
+      approval.reportedReservationHeadSha === undefined &&
+      approval.reportedReservationHeadProvenance === undefined &&
+      approval.executionEvidence === undefined &&
+      approval.humanDecisionUrl === undefined &&
+      approval.humanDecisionVerification === undefined &&
+      approval.humanDecision === 'finalize-review-limit' &&
+      approval.issue === '76' &&
+      approval.finalizationReviewInvocation === maxReviewInvocations &&
+      approval.finalizationResult === 'CHANGES_REQUIRED'
     );
   }
   return (
@@ -5039,6 +5379,7 @@ function readReviewAccountingAtPathUnsafe(
     );
     reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
     reviewReservationReconciliationApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewLimitTerminalFinalizationApprovalStateIsConsistent(statePath, branch, base, accounting);
     return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
@@ -5174,6 +5515,45 @@ function reviewReservationReconciliationApprovalStateIsConsistent(
   }
 }
 
+function reviewLimitTerminalFinalizationApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const evidence = accounting.reviewLimitTerminalEvidence;
+  if (evidence === undefined) return;
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    throw new Error(
+      'Review-limit terminal evidence scope is inconsistent; human recovery is required.',
+    );
+  }
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  const approval = approvals.find((candidate) => candidate.id === evidence.approvalId);
+  if (
+    !approval ||
+    approval.approvalType !== 'review-limit-terminal-finalization' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== branch ||
+    approval.base !== base ||
+    approval.reviewEpoch !== evidence.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.headSha !== evidence.headSha ||
+    approval.schemaFingerprint !== evidence.schemaFingerprint ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.humanDecision !== 'finalize-review-limit' ||
+    approval.issue !== '76' ||
+    approval.finalizationReviewInvocation !== evidence.reviewInvocation ||
+    approval.finalizationResult !== evidence.lastCycleResult ||
+    approval.consumedAt !== evidence.finalizedAt ||
+    approval.consumed !== true
+  ) {
+    throw new Error(
+      'Review-limit terminal approval state is inconsistent; human recovery is required.',
+    );
+  }
+}
+
 function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResumeApproval[]): void {
   approvals.forEach((approval) => {
     if (!isReviewResumeApproval(approval)) {
@@ -5219,6 +5599,18 @@ type ReviewReservationReconciliationTransaction = {
   approvalState: unknown;
 };
 
+type ReviewLimitTerminalFinalizationTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  approvalId: string;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
 function writeJsonAtomically(path: string, value: unknown): void {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, JSON.stringify(value), 'utf8');
@@ -5244,6 +5636,10 @@ function reviewerFailureRecoveryTransactionPath(statePath: string): string {
 
 function reviewReservationReconciliationTransactionPath(statePath: string): string {
   return `${statePath}${reviewReservationReconciliationTransactionSuffix}`;
+}
+
+function reviewLimitTerminalFinalizationTransactionPath(statePath: string): string {
+  return `${statePath}${reviewLimitTerminalFinalizationTransactionSuffix}`;
 }
 
 function canonicalResumeApprovalPath(statePath: string): string {
@@ -5699,6 +6095,182 @@ function validateReviewerFailureRecoveryTransactionSemantics(
   }
 }
 
+function persistReviewLimitTerminalFinalizationTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+  approvalId: string,
+  statePreimageSha256: string | null,
+  approvalPreimageSha256: string | null,
+): void {
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const approvalState = { approvals };
+  const transactionPath = reviewLimitTerminalFinalizationTransactionPath(statePath);
+  if (
+    fileFingerprint(statePath) !== statePreimageSha256 ||
+    fileFingerprint(approvalPath) !== approvalPreimageSha256
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization preimage does not match current state; human recovery is required.',
+    );
+  }
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    accountingState,
+    approvalState,
+  } satisfies ReviewLimitTerminalFinalizationTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function recoverPendingReviewLimitTerminalFinalizationTransaction(statePath: string): void {
+  const transactionPath = reviewLimitTerminalFinalizationTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewLimitTerminalFinalizationTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    transaction.branch !== 'feat/issue-76' ||
+    transaction.base !== 'main' ||
+    typeof transaction.approvalId !== 'string' ||
+    !(
+      transaction.statePreimageSha256 === null ||
+      (typeof transaction.statePreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.statePreimageSha256))
+    ) ||
+    !(
+      transaction.approvalPreimageSha256 === null ||
+      (typeof transaction.approvalPreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256))
+    ) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction is invalid; human recovery is required.',
+    );
+  }
+  validateReviewLimitTerminalFinalizationTransactionSemantics(
+    transaction as ReviewLimitTerminalFinalizationTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Review-limit terminal finalization encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
+  unlinkSync(transactionPath);
+}
+
+function validateReviewLimitTerminalFinalizationTransactionSemantics(
+  transaction: ReviewLimitTerminalFinalizationTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const accounting = entry?.accounting;
+  const evidence = accounting?.reviewLimitTerminalEvidence;
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  if (!entry || !accounting || !evidence || !approval) {
+    throw new Error(
+      'Review-limit terminal finalization transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    approval.approvalType !== 'review-limit-terminal-finalization' ||
+    approval.consumed !== true ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== evidence.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.headSha !== evidence.headSha ||
+    approval.schemaFingerprint !== evidence.schemaFingerprint ||
+    approval.humanDecision !== 'finalize-review-limit' ||
+    approval.issue !== '76' ||
+    approval.finalizationReviewInvocation !== maxReviewInvocations ||
+    approval.finalizationResult !== 'CHANGES_REQUIRED' ||
+    evidence.approvalId !== transaction.approvalId ||
+    approval.consumedAt !== evidence.finalizedAt ||
+    accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    accounting.reviewInvocationCount !== maxReviewInvocations ||
+    accounting.pendingReview !== undefined ||
+    accounting.cycleResults.at(-1)?.reviewInvocation !== maxReviewInvocations ||
+    accounting.cycleResults.at(-1)?.result !== 'CHANGES_REQUIRED'
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction semantics are invalid; human recovery is required.',
+    );
+  }
+}
+
 function validateResumeTransactionSemantics(
   transaction: ResumeTransaction,
   accountingEntries: AccountingStateEntry[],
@@ -5775,6 +6347,7 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
     recoverPendingResumeTransaction(statePath);
     recoverPendingReviewerFailureRecoveryTransaction(statePath);
     recoverPendingReviewReservationReconciliationTransaction(statePath);
+    recoverPendingReviewLimitTerminalFinalizationTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {

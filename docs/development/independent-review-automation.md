@@ -349,6 +349,42 @@ Independent Review and the exact-head CI gate remain mandatory. If the new
 epoch reaches its limit, automation stops again and requires a new explicit
 human authorization.
 
+Issue #76 terminal finalization is a separate, narrower operation from
+review-limit resume. It exists for the recorded state in which invocation 16
+has a durable `CHANGES_REQUIRED` cycle, the counter is 16, no review is
+pending, and the historical review loop has not emitted the
+`MAX_REVIEW_INVOCATIONS` terminal evidence. It does not reserve or run another
+review and does not advance the epoch. A dedicated
+`review-limit-terminal-finalization` approval is required and is bound to the
+canonical `feat/issue-76`/`main` workspace, exact current HEAD, Schema
+fingerprint, epoch 1, count 16, and the invocation-16 `CHANGES_REQUIRED`
+result. The operation appends only the MAX terminal reason and its evidence,
+consumes that approval once, and preserves all counters, cycles, histories,
+recovery records, and reconciliation evidence.
+
+The two commands are intentionally separate and must be run only after a
+separate Human Decision has authorized this exact state; they are not a
+generic resume or retry path:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-review-limit-terminal \
+  --confirm-human-authorization \
+  --issue 76 --base main --cwd .worktrees/issue-76
+node dist/review/cli.js \
+  --finalize-review-limit-terminal \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The implementation and tests exercise these commands only against isolated
+fixtures. They do not authorize or modify the real Issue #76 accounting. A
+future real operation must re-read and verify the current HEAD, accounting,
+approval, transaction marker, and preimage before either command; any stale,
+partial, duplicate, or externally modified state fails closed. Terminal
+finalization and `--resume-after-limit` remain separate operations with
+separate approvals; finalization alone never permits an invocation 17.
+
 An AUTO_FIX implementer self-review that reports blocking issues is a distinct
 `BLOCKED` stop. It does not consume an AUTO_FIX cycle and is never retried
 automatically. A matching `BLOCKED` state is recoverable only when its durable

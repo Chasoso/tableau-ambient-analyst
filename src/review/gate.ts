@@ -66,6 +66,9 @@ export type ReviewerFailureRecoveryHumanDecision =
 export const reviewReservationReconciliationHumanDecisions = ['reconcile-reserved-review'] as const;
 export type ReviewReservationReconciliationHumanDecision =
   (typeof reviewReservationReconciliationHumanDecisions)[number];
+export const reviewLimitTerminalFinalizationHumanDecisions = ['finalize-review-limit'] as const;
+export type ReviewLimitTerminalFinalizationHumanDecision =
+  (typeof reviewLimitTerminalFinalizationHumanDecisions)[number];
 export const reviewReservationReconciliationProvenances = [
   'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
 ] as const;
@@ -122,7 +125,8 @@ export type ReviewResumeApproval = {
     | 'review-limit-resume'
     | 'review-termination-recovery'
     | 'reviewer-failure-recovery'
-    | 'review-reservation-reconciliation';
+    | 'review-reservation-reconciliation'
+    | 'review-limit-terminal-finalization';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
   base: string;
@@ -143,6 +147,7 @@ export type ReviewResumeApproval = {
     | ReviewRecoveryHumanDecision
     | ReviewerFailureRecoveryHumanDecision
     | ReviewReservationReconciliationHumanDecision
+    | ReviewLimitTerminalFinalizationHumanDecision
     | undefined;
   reconciliationInvocation?: number | undefined;
   reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | undefined;
@@ -152,6 +157,8 @@ export type ReviewResumeApproval = {
   humanDecisionUrl?: string | undefined;
   humanDecisionVerification?: 'GITHUB_COMMENT_VERIFIED' | undefined;
   issue?: string | undefined;
+  finalizationReviewInvocation?: number | undefined;
+  finalizationResult?: 'CHANGES_REQUIRED' | undefined;
 };
 
 export type ReviewAccounting = {
@@ -230,6 +237,16 @@ export type ReviewAccounting = {
     schemaFingerprint: string;
     reconciledAt: string;
   }>;
+  reviewLimitTerminalEvidence?: {
+    approvalId: string;
+    finalizedAt: string;
+    authorizationSource: 'human-explicit';
+    headSha: string;
+    schemaFingerprint: string;
+    reviewEpoch: number;
+    reviewInvocation: number;
+    lastCycleResult: 'CHANGES_REQUIRED';
+  };
 };
 
 export type ReviewGateResult = {
