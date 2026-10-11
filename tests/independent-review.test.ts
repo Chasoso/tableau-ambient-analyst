@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -878,32 +878,25 @@ function runBuiltReviewCli(
   cwd: string,
   binDirectory: string,
   args: string[],
-): { exitCode: number; stdout: string } {
+): { exitCode: number; stdout: string; stderr: string } {
   if (!builtCliReady) {
     execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'ignore' });
     builtCliReady = true;
   }
   const cliPath = join(process.cwd(), 'dist/review/cli.js');
-  try {
-    return {
-      exitCode: 0,
-      stdout: execFileSync(process.execPath, [cliPath, ...args], {
-        cwd,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: [binDirectory, process.env.PATH].filter(Boolean).join(':'),
-        },
-      }),
-    };
-  } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { status?: number; stdout?: string | Buffer };
-    return {
-      exitCode: typeof failure.status === 'number' ? failure.status : 1,
-      stdout:
-        typeof failure.stdout === 'string' ? failure.stdout : (failure.stdout?.toString() ?? ''),
-    };
-  }
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: [binDirectory, process.env.PATH].filter(Boolean).join(':'),
+    },
+  });
+  return {
+    exitCode: typeof result.status === 'number' ? result.status : 1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
 }
 
 function validateReviewerSchema(value: unknown): boolean {
@@ -1131,6 +1124,8 @@ describe('built independent-review CLI integration', () => {
         workspace.cwd,
       ]);
       expect(cli.exitCode).toBe(0);
+      expect(cli.stderr).not.toContain('secret');
+      expect(cli.stderr).not.toContain('Error:');
       const result = JSON.parse(cli.stdout) as ReviewAccounting;
       expect(result.reviewInvocationCount).toBe(13);
       expect(result.pendingReview).toBeUndefined();
@@ -1143,6 +1138,9 @@ describe('built independent-review CLI integration', () => {
       ]);
       const reloaded = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
       expect(reloaded).toMatchObject({ reviewInvocationCount: 13, pendingReview: undefined });
+      expect(
+        existsSync(`${workspace.statePath}.review-reservation-reconciliation-transaction`),
+      ).toBe(false);
       expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1196,6 +1194,7 @@ describe('built independent-review CLI integration', () => {
       expect(reconciliationApproval).toBeDefined();
       reconciliationApproval!.consumed = true;
       reconciliationApproval!.consumedAt = '2026-01-01T00:00:03.000Z';
+      reconciliationApproval!.unexpectedDiagnostic = 'fixture-secret-do-not-leak';
       writeFileSync(workspace.approvalPath, JSON.stringify(approvalState), 'utf8');
       const stateBefore = readFileSync(workspace.statePath, 'utf8');
       const approvalBefore = readFileSync(workspace.approvalPath, 'utf8');
@@ -1213,9 +1212,16 @@ describe('built independent-review CLI integration', () => {
         workspace.cwd,
       ]);
       expect(cli.exitCode).toBe(1);
-      expect(JSON.parse(cli.stdout)).toMatch(/unconsumed|matching/i);
+      expect(cli.stdout).not.toContain('fixture-secret-do-not-leak');
+      expect(cli.stderr).not.toContain('secret');
+      expect(cli.stderr).not.toContain('Error:');
+      expect(cli.stderr).not.toContain('fixture-secret-do-not-leak');
+      expect(JSON.parse(cli.stdout)).toMatch(/unconsumed|matching|could not persist/i);
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBefore);
       expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(approvalBefore);
+      expect(
+        existsSync(`${workspace.statePath}.review-reservation-reconciliation-transaction`),
+      ).toBe(false);
     } finally {
       childProcessTestHooks.humanDecisionComment = undefined;
       rmSync(directory, { recursive: true, force: true });
@@ -1277,6 +1283,8 @@ describe('built independent-review CLI integration', () => {
         workspace.cwd,
       ]);
       expect(cli.exitCode).toBe(0);
+      expect(cli.stderr).not.toContain('secret');
+      expect(cli.stderr).not.toContain('Error:');
       const resumed = JSON.parse(cli.stdout) as ReviewAccounting;
       expect(resumed).toMatchObject({
         reviewEpoch: 1,
@@ -1287,6 +1295,9 @@ describe('built independent-review CLI integration', () => {
       expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toEqual([
         expect.objectContaining({ approvalType: 'reviewer-failure-recovery', consumed: true }),
       ]);
+      expect(existsSync(`${workspace.statePath}.reviewer-failure-recovery-transaction`)).toBe(
+        false,
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1333,6 +1344,8 @@ describe('built independent-review CLI integration', () => {
         workspace.cwd,
       ]);
       expect(cli.exitCode).toBe(0);
+      expect(cli.stderr).not.toContain('secret');
+      expect(cli.stderr).not.toContain('Error:');
       expect(JSON.parse(cli.stdout)).toMatchObject({
         reviewEpoch: 2,
         reviewInvocationCount: 0,
@@ -1341,6 +1354,104 @@ describe('built independent-review CLI integration', () => {
       expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toEqual([
         expect.objectContaining({ approvalType: 'review-limit-resume', consumed: true }),
       ]);
+      expect(existsSync(`${workspace.statePath}.resume-transaction`)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('checks the isolated invocation-15 precondition and reserves only after count fourteen is valid', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-invocation-15-precondition-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const reconciledAt = '2026-01-01T00:00:03.000Z';
+      const reconciliation = {
+        reconciliationId: 'reconciliation-76',
+        approvalId: fixture.approval.id,
+        repository: 'Chasoso/tableau-ambient-analyst' as const,
+        branch: 'feat/issue-76',
+        base: 'main',
+        headSha: workspace.headSha,
+        reviewEpoch: 1,
+        reservedInvocation: 13,
+        status: 'RESERVED_NOT_STARTED' as const,
+        reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE' as const,
+        reportedReservationHeadSha: reportedReservationHead,
+        reportedReservationHeadProvenance:
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' as const,
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE' as const,
+        humanDecisionUrl,
+        humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED' as const,
+        schemaFingerprint: workspace.schemaFingerprint,
+        reconciledAt,
+      };
+      const accounting: ReviewAccounting = {
+        ...fixture.accounting,
+        reviewInvocationCount: 14,
+        pendingReview: undefined,
+        cycleResults: [
+          ...fixture.accounting.cycleResults,
+          {
+            reviewInvocation: 14,
+            result: 'CHANGES_REQUIRED',
+            maintainability: 'NO_DRIFT',
+            classifications: ['AUTO_FIX'],
+            generalizedRules: [],
+            repositoryChanged: false,
+          },
+        ],
+        reconciledReviewReservations: [reconciliation],
+      };
+      const consumedApproval = {
+        ...fixture.approval,
+        consumed: true,
+        consumedAt: reconciledAt,
+      };
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({ entries: [{ branch: 'feat/issue-76', base: 'main', ...accounting }] }),
+        'utf8',
+      );
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({ approvals: [consumedApproval, fixture.priorRecoveryApproval] }),
+        'utf8',
+      );
+
+      const beforeReservation = readReviewAccountingAtPath(
+        workspace.statePath,
+        'feat/issue-76',
+        'main',
+      );
+      expect(beforeReservation.reviewInvocationCount).toBe(14);
+      expect(beforeReservation.pendingReview).toBeUndefined();
+      expect(beforeReservation.terminationReason).toBeUndefined();
+      expect(beforeReservation.reconciledReviewReservations).toEqual([
+        expect.objectContaining({
+          reservedInvocation: 13,
+          executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+        }),
+      ]);
+      expect(beforeReservation.reviewExecutionFailures).toHaveLength(1);
+      expect(beforeReservation.reviewerFailureRecoveryHistory).toHaveLength(1);
+
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toBeUndefined();
+      const afterReservation = readReviewAccountingAtPath(
+        workspace.statePath,
+        'feat/issue-76',
+        'main',
+      );
+      expect(afterReservation.reviewInvocationCount).toBe(15);
+      expect(afterReservation.pendingReview).toEqual({ reviewInvocation: 15, status: 'RESERVED' });
+      expect(afterReservation.reconciledReviewReservations).toHaveLength(1);
+      expect(afterReservation.reviewExecutionFailures).toHaveLength(1);
+      expect(afterReservation.reviewerFailureRecoveryHistory).toHaveLength(1);
+      expect(
+        existsSync(`${workspace.statePath}.review-reservation-reconciliation-transaction`),
+      ).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
