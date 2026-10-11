@@ -97,6 +97,8 @@ const reviewerSchemaUnsupportedKeywords = new Set([
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
 const reviewReservationReconciliationTransactionSuffix =
   '.review-reservation-reconciliation-transaction';
+const issue76HumanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579';
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
 const reviewerFailureEvidenceVersions = [
@@ -4732,12 +4734,7 @@ function isReconciledReviewReservation(value: unknown): boolean {
 }
 
 function isIssue76HumanDecisionUrl(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-[0-9]+$/.test(
-      value,
-    )
-  );
+  return value === issue76HumanDecisionUrl;
 }
 
 function reviewFailureMatchesRecovery(

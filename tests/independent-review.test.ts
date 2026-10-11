@@ -807,7 +807,7 @@ const structuredAutoFix = {
 
 const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
-  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-9999999999';
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579';
 
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
