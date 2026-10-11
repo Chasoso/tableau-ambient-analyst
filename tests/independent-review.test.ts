@@ -1089,6 +1089,14 @@ describe('Issue #76 review-limit terminal finalization', () => {
         reconciledReviewReservations: [reconciliation],
       });
       const validRawState = JSON.parse(readFileSync(workspace.statePath, 'utf8'));
+      const orphanedRecovery = structuredClone(validRawState);
+      delete orphanedRecovery.entries[0].reviewHistory[0].reviewExecutionFailures;
+      writeFileSync(workspace.statePath, JSON.stringify(orphanedRecovery), 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+      writeFileSync(workspace.statePath, JSON.stringify(validRawState), 'utf8');
+
       const mismatchedFailure = structuredClone(validRawState);
       mismatchedFailure.entries[0].reviewHistory[0].reviewExecutionFailures[0].reviewEpoch = 2;
       writeFileSync(workspace.statePath, JSON.stringify(mismatchedFailure), 'utf8');
@@ -4466,7 +4474,12 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('reviewer-failure-v2');
     expect(prompt).toContain('reserved invocation 13');
     expect(prompt).toContain('Generic retry/resume');
+    expect(prompt).toContain('direct invocation 17 or later within epoch 1');
+    expect(prompt).toMatch(
+      /Review execution in a new epoch is governed\s+separately by the existing review-limit-resume rules/,
+    );
     expect(prompt).toContain('report the missing');
+    expect(prompt).not.toContain('invocation 17+');
     expect(prompt).not.toContain('return PASS');
   });
 
@@ -6081,6 +6094,112 @@ describe('review cycle state', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    [
+      'postimage hash only',
+      (marker: Record<string, unknown>) => {
+        marker.statePostimageSha256 = '0'.repeat(64);
+      },
+    ],
+    [
+      'postimage content only',
+      (marker: Record<string, unknown>) => {
+        const accountingState = marker.accountingState as {
+          entries: Array<Record<string, unknown>>;
+        };
+        const entry = accountingState.entries[0]!;
+        marker.accountingState = {
+          entries: [Object.fromEntries(Object.entries(entry).reverse())],
+        };
+      },
+    ],
+    [
+      'postimage content and hash with invalid semantics',
+      (marker: Record<string, unknown>) => {
+        const accountingState = marker.accountingState as {
+          entries: Array<Record<string, unknown>>;
+        };
+        accountingState.entries[0]!.reviewInvocationCount = maxReviewInvocations + 1;
+        marker.statePostimageSha256 = testSha256(JSON.stringify(marker.accountingState));
+      },
+    ],
+  ])(
+    'rejects a tampered resume transaction %s before writing',
+    (_label, tamper: (marker: Record<string, unknown>) => void) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-review-resume-postimage-'));
+      const statePath = join(directory, 'state.json');
+      const approvalPath = join(directory, 'tableau-ambient-review-approval.json');
+      const initialState = {
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: maxReviewInvocations,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: completedReviewCycles(maxReviewInvocations),
+        terminationHistory: ['MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      };
+      try {
+        writeFileSync(statePath, JSON.stringify(initialState), 'utf8');
+        expect(
+          authorizeReviewResumeAfterLimitAtPath(
+            statePath,
+            approvalPath,
+            'feature/review',
+            'main',
+            validTestHead,
+          ),
+        ).not.toBeTypeOf('string');
+        const statePreimage = readFileSync(statePath, 'utf8');
+        const approvalPreimage = readFileSync(approvalPath, 'utf8');
+        expect(
+          resumeReviewAfterLimitAtPath(
+            statePath,
+            approvalPath,
+            'feature/review',
+            'main',
+            validTestHead,
+          ),
+        ).not.toBeTypeOf('string');
+        const recoveredState = JSON.parse(readFileSync(statePath, 'utf8'));
+        const recoveredApprovals = JSON.parse(readFileSync(approvalPath, 'utf8'));
+        writeFileSync(statePath, statePreimage, 'utf8');
+        writeFileSync(approvalPath, approvalPreimage, 'utf8');
+        const marker: Record<string, unknown> = {
+          statePath,
+          approvalPath,
+          approvalId: recoveredApprovals.approvals[0].id,
+          branch: 'feature/review',
+          base: 'main',
+          exhaustedEpoch: 1,
+          statePreimageSha256: testSha256(statePreimage),
+          approvalPreimageSha256: testSha256(approvalPreimage),
+          statePostimageSha256: testSha256(JSON.stringify(recoveredState)),
+          approvalPostimageSha256: testSha256(JSON.stringify(recoveredApprovals)),
+          accountingState: recoveredState,
+          approvalState: recoveredApprovals,
+        };
+        tamper(marker);
+        writeFileSync(`${statePath}.resume-transaction`, JSON.stringify(marker), 'utf8');
+        const beforeState = readFileSync(statePath, 'utf8');
+        const beforeApproval = readFileSync(approvalPath, 'utf8');
+        expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toMatch(
+          /invalid|mismatch|human recovery/i,
+        );
+        expect(readFileSync(statePath, 'utf8')).toBe(beforeState);
+        expect(readFileSync(approvalPath, 'utf8')).toBe(beforeApproval);
+        expect(existsSync(`${statePath}.resume-transaction`)).toBe(true);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('recovers a pending transaction before a concurrent reader observes accounting', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-review-state-'));

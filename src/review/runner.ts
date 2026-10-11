@@ -336,9 +336,12 @@ recovery of durable reviewer-failure-v2 evidence at executionPhase REVIEW,
 the one-time reconciliation of reserved invocation 13, and the supporting
 approval, transaction, CLI, and accounting validation needed for those two
 bounded paths. Generic retry/resume, automatic approval, recovery of
-incomplete or legacy evidence, invocation 17+, and broad autonomous recovery
-are outside the approved scope. Existing review-limit recovery and AUTO_FIX
-rules remain separate and unchanged. If the durable documentation or relevant
+incomplete or legacy evidence, direct invocation 17 or later within epoch 1,
+and broad autonomous recovery
+are outside the approved scope. Review execution in a new epoch is governed
+separately by the existing review-limit-resume rules and required Human
+authorization. Existing review-limit recovery and AUTO_FIX rules remain
+separate and unchanged. If the durable documentation or relevant
 implementation does not substantiate a scope claim, report the missing
 evidence or inconsistency; do not infer or waive it.
 
@@ -5665,8 +5668,14 @@ function reviewHistoryEvidenceIsConsistent(
       ...(history.reviewerFailureRecoveryHistory ?? []),
     ];
     for (const recovery of recoveries) {
+      const matchingFailure = failures.find(
+        (failure) =>
+          failure.reviewInvocation === recovery.failedReviewInvocation &&
+          reviewFailureMatchesRecovery(failure, recovery, true),
+      );
       const approval = approvals.find((candidate) => candidate.id === recovery.approvalId);
       if (
+        !matchingFailure ||
         recovery.reviewEpoch !== history.reviewEpoch ||
         recovery.failedReviewInvocation > history.reviewInvocationCount ||
         !approval ||
@@ -5862,6 +5871,14 @@ function recoverPendingResumeTransaction(statePath: string): void {
     !/^[a-f0-9]{64}$/.test(approvalPostimageSha256)
   ) {
     throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
+  if (
+    statePostimageSha256 !== jsonFingerprint(transaction.accountingState) ||
+    approvalPostimageSha256 !== jsonFingerprint(transaction.approvalState)
+  ) {
+    throw new Error(
+      'Review resume transaction postimage hash is invalid; human recovery is required.',
+    );
   }
   const accountingEntries = accountingStateEntries(transaction.accountingState);
   const approvalState = transaction.approvalState as Record<string, unknown>;
