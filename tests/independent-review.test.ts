@@ -4510,6 +4510,7 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('issuecomment-6107122567');
     expect(prompt).toContain('issuecomment-6114641832');
     expect(prompt).toContain('issuecomment-6114863696');
+    expect(prompt).toContain('issuecomment-6115135183');
     expect(prompt).toContain('reviewer-failure-v2');
     expect(prompt).toContain('reserved invocation 13');
     expect(prompt).toContain('two-stage contract');
@@ -4527,6 +4528,11 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('already executed');
     expect(prompt).toContain('historical evidence gap remains unresolved');
     expect(prompt).toContain('does not authorize a rerun');
+    expect(prompt).toContain('review-epoch-evidence-v1');
+    expect(prompt).toContain('invocationEvidenceCoverage');
+    expect(prompt).toContain('Legacy snapshots remain read-compatible only');
+    expect(prompt).toContain('does not authorize inference');
+    expect(prompt).toMatch(/new\s+contract\s+violations/);
     expect(prompt).not.toContain('invocation 17+');
     expect(prompt).not.toContain('return PASS');
   });

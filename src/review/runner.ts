@@ -335,6 +335,7 @@ Human Decision references:
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114641832
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6115135183
 Treat those URLs as references to verify against the repository's durable
 documentation and implementation, not as authorization or as a basis for a
 positive result. The approved Issue-specific boundaries are limited to single-use
@@ -357,6 +358,20 @@ enums, and closed properties; the Semantic Parser validates cross-field
 meaning. Schema-valid but semantically contradictory output must still be
 rejected fail-closed, and only output accepted by both gates is a valid review
 result. This context does not require a PASS or suppress findings.
+
+The Human Decision at
+https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6115135183
+approves the versioned historical epoch evidence coverage contract
+\`review-epoch-evidence-v1\` and \`invocationEvidenceCoverage\`. For new-format
+snapshots, every consumed invocation must map exactly once to its durable
+cycle result, reviewer execution failure, or reservation reconciliation
+evidence; range, uniqueness, missing-entry, and evidence-mismatch checks are
+fail-closed. Legacy snapshots remain read-compatible only and are not evidence
+of complete history. The known epoch 1 evidence gap remains unresolved: this
+decision does not authorize inference, automatic migration, evidence
+reconstruction, accounting changes, or a new review. This is design and scope
+approval only; independently assess the implementation, tests, and any new
+contract violations.
 
 The Human Decision at
 https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
