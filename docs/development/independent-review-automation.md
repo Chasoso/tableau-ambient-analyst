@@ -379,8 +379,13 @@ command consumes that approval once, clears only the terminal stop, preserves
 the failure history and invocation count, and leaves the next review to reserve
 the next invocation number. It never refunds or resets accounting, and a fresh
 Independent Review remains mandatory. The recovery target is limited to a new
-durable `reviewer-failure-v1` evidence record containing the failed invocation,
-failure kind, review epoch, exact HEAD, and Schema fingerprint. States with
+durable `reviewer-failure-v2` evidence record containing the failed invocation,
+failure kind, review epoch, exact HEAD, Schema fingerprint, and
+`executionPhase: REVIEW`. `reviewer-failure-v1` is retained as a legacy
+compatibility-read format under its existing contract. Legitimate legacy
+records without an `evidenceVersion` are read only when the existing explicit
+compatibility conditions accept them. Old records are never automatically
+migrated, completed, or rewritten. States with
 `pendingReview`, incomplete failure evidence, legacy accounting shapes, or
 inferred history are not recoverable; they remain fail-closed for explicit
 human handling. Existing consumed approval and recovery records remain readable
@@ -398,8 +403,11 @@ to preserve the invocation and failure audit trail when the reviewer
 subprocess terminates unsuccessfully. It is deliberately a narrow exception to
 the ordinary review loop, not a new general resume facility. Recovery is
 possible only for a current `REVIEWER_FAILURE` with a durable
-`reviewer-failure-v1` record whose failed invocation, failure kind, review
-epoch, exact HEAD, and Schema fingerprint match the current state. Legacy
+`reviewer-failure-v2` record whose failed invocation, failure kind, review
+epoch, exact HEAD, Schema fingerprint, and `executionPhase: REVIEW` match the
+current state. `reviewer-failure-v1` and explicit `evidenceVersion`-absent
+legacy records remain read-only compatibility formats and are never inferred
+or upgraded. Legacy
 accounting, missing evidence, pending reservations, and inferred history are
 outside the recovery boundary. Review-limit recovery and AUTO_FIX recovery
 retain their existing commands, evidence requirements, and approval types.
