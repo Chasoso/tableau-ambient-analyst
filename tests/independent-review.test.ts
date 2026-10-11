@@ -1848,6 +1848,34 @@ describe('independent review runner control flow', () => {
     expect(result.terminationReason).toBeUndefined();
   });
 
+  it.each([
+    ['read-only review', (deps: ReviewRunnerDependencies) => runReadOnlyReview(input, deps)],
+    [
+      'bounded review loop',
+      (deps: ReviewRunnerDependencies) =>
+        runBoundedReviewFixLoop(input, deps, () => 'unexpected auto-fix'),
+    ],
+  ] as const)('does not expose accounting persistence exception messages: %s', (_name, execute) => {
+    const secret = 'token=accounting-secret prompt=private-evidence';
+    const result = execute(
+      dependencies({
+        recordReview: () => {
+          throw new Error(secret);
+        },
+      }),
+    );
+
+    expect(result.executionStatus).toBe('FAILED');
+    expect(result.executionPhase).toBe('REVIEW');
+    expect(result.executionFailureKind).toBe('UNCERTAIN');
+    expect(result.blockingFindings[0]).toMatchObject({
+      finding: 'Review accounting persistence failed closed.',
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain('accounting-secret');
+    expect(JSON.stringify(result)).not.toContain('private-evidence');
+  });
+
   it('records a new reviewer failure without discarding archived recovery history', () => {
     const archivedRecovery = {
       approvalId: 'approval-1',
@@ -2803,6 +2831,177 @@ describe('review cycle state', () => {
           workspace.cwd,
         ),
       ).toContain('matching terminal failure state');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an active recovery when its canonical approval is missing or altered', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-recovery-approval-integrity-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
+      reviewEpoch: 1,
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'redacted',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+    };
+    writeFileSync(workspace.statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      const approval = authorizeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof approval).not.toBe('string');
+      if (typeof approval === 'string') return;
+      const recovered = resumeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof recovered).not.toBe('string');
+      if (typeof recovered === 'string') return;
+      const accountingBeforeTamper = readFileSync(workspace.statePath, 'utf8');
+
+      rmSync(workspace.approvalPath);
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+        'Review accounting state is invalid',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
+
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({
+          approvals: [
+            {
+              ...approval,
+              consumed: true,
+              consumedAt: recovered.reviewerFailureRecovery?.authorizedAt,
+              headSha: '0'.repeat(40),
+            },
+          ],
+        }),
+        'utf8',
+      );
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+        'Review accounting state is invalid',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects archived recovery reservation when its canonical approval is missing or altered', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-archived-approval-integrity-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
+      reviewEpoch: 1,
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'redacted',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+    };
+    writeFileSync(workspace.statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      const approval = authorizeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof approval).not.toBe('string');
+      if (typeof approval === 'string') return;
+      const recovered = resumeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof recovered).not.toBe('string');
+      if (typeof recovered === 'string') return;
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main'),
+      ).toBeUndefined();
+      const accountingBeforeTamper = readFileSync(workspace.statePath, 'utf8');
+      const approvalState = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')) as {
+        approvals: Array<Record<string, unknown>>;
+      };
+      approvalState.approvals[0]!.schemaFingerprint = '0'.repeat(64);
+      writeFileSync(workspace.approvalPath, JSON.stringify(approvalState), 'utf8');
+
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+        'Review accounting state is invalid',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

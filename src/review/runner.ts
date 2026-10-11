@@ -355,11 +355,9 @@ export function runReadOnlyReview(
         review,
         dependencies.recordReviewFailure(input.cwd, input.base, review),
       );
-    } catch (error) {
+    } catch {
       return reviewerInvocationFailure(
-        `Review accounting persistence failed closed: ${
-          error instanceof Error ? error.message : 'unknown state error'
-        }`,
+        'Review accounting persistence failed closed.',
         'REVIEW',
         'UNCERTAIN',
       );
@@ -370,11 +368,11 @@ export function runReadOnlyReview(
       ...review,
       accounting: dependencies.recordReview(input.cwd, input.base, review),
     };
-  } catch (error) {
+  } catch {
     return reviewerInvocationFailure(
-      `Review accounting persistence failed closed: ${
-        error instanceof Error ? error.message : 'unknown state error'
-      }`,
+      'Review accounting persistence failed closed.',
+      'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
@@ -1497,11 +1495,11 @@ export function runBoundedReviewFixLoop(
 ): ReviewGateResult {
   try {
     return runBoundedReviewFixLoopUnsafe(input, dependencies, applyAutoFix);
-  } catch (error) {
+  } catch {
     return reviewerInvocationFailure(
-      `Review accounting persistence failed closed: ${
-        error instanceof Error ? error.message : 'unknown state error'
-      }`,
+      'Review accounting persistence failed closed.',
+      'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
@@ -1551,11 +1549,9 @@ function runBoundedReviewFixLoopUnsafe(
           review,
           dependencies.recordReviewFailure(input.cwd, input.base, review),
         );
-      } catch (error) {
+      } catch {
         return reviewerInvocationFailure(
-          `Review accounting persistence failed closed: ${
-            error instanceof Error ? error.message : 'unknown state error'
-          }`,
+          'Review accounting persistence failed closed.',
           'REVIEW',
           'UNCERTAIN',
         );
@@ -4431,11 +4427,13 @@ function readReviewAccountingAtPathUnsafe(
   base: string,
 ): ReviewAccounting {
   try {
-    return stateForBranch(
+    const accounting = stateForBranch(
       existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
       branch,
       base,
     );
+    reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
+    return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
       cause: error,
@@ -4485,6 +4483,46 @@ function readReviewApprovalsAtPath(approvalPath: string): ReviewResumeApproval[]
     throw new Error('Review approval state is invalid; human recovery is required.');
   }
   return approvals;
+}
+
+function reviewerFailureRecoveryApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const recoveries = [
+    ...(accounting.reviewerFailureRecovery ? [accounting.reviewerFailureRecovery] : []),
+    ...(accounting.reviewerFailureRecoveryHistory ?? []),
+  ];
+  if (recoveries.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const recovery of recoveries) {
+    const approval = approvals.find((candidate) => candidate.id === recovery.approvalId);
+    if (
+      !approval ||
+      approval.approvalType !== 'reviewer-failure-recovery' ||
+      approval.targetRepository !== targetRepository ||
+      approval.branch !== branch ||
+      approval.base !== base ||
+      approval.reviewEpoch !== recovery.reviewEpoch ||
+      approval.exhaustedReviewInvocationCount !== recovery.failedReviewInvocation ||
+      approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+      approval.failedReviewKind !== recovery.failureKind ||
+      approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+      approval.headSha !== recovery.headSha ||
+      approval.schemaFingerprint !== recovery.schemaFingerprint ||
+      approval.authorizationSource !== 'human-explicit' ||
+      approval.humanDecision !== 'retry-review' ||
+      approval.consumed !== true ||
+      approval.consumedAt !== recovery.authorizedAt
+    ) {
+      throw new Error(
+        'Reviewer-failure recovery approval state is inconsistent; human recovery is required.',
+      );
+    }
+  }
 }
 
 function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResumeApproval[]): void {
