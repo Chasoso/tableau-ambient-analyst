@@ -100,6 +100,7 @@ const reviewReservationReconciliationTransactionSuffix =
 const issue76HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
 const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
+const gitCommitShaPattern = /^[a-f0-9]{40}$/;
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
 const reviewerFailureEvidenceVersions = [
@@ -4029,8 +4030,7 @@ function reviewerFailureEvidenceIsValid(failure: Record<string, unknown>): boole
   const hasDurableMetadata =
     Number.isInteger(failure.reviewEpoch) &&
     (failure.reviewEpoch as number) >= 1 &&
-    typeof failure.headSha === 'string' &&
-    /^[a-f0-9]{40}$/.test(failure.headSha) &&
+    isGitCommitSha(failure.headSha) &&
     typeof failure.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(failure.schemaFingerprint);
 
@@ -4378,8 +4378,7 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     (targetPaths as string[]).includes(evidence.rejectedPath as string) &&
     (targetPaths as string[]).every((path) => (changedPaths as string[]).includes(path)) &&
     evidence.terminalState === 'BLOCKED' &&
-    typeof evidence.headSha === 'string' &&
-    /^[0-9a-f]{40}$/.test(evidence.headSha) &&
+    isGitCommitSha(evidence.headSha) &&
     typeof evidence.workingTreeFingerprint === 'string' &&
     /^[0-9a-f]{64}$/.test(evidence.workingTreeFingerprint)
   );
@@ -4552,6 +4551,10 @@ function isLegacyRecoveryEvidence(
   );
 }
 
+function isGitCommitSha(value: unknown): value is string {
+  return typeof value === 'string' && gitCommitShaPattern.test(value);
+}
+
 function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const approval = value as Record<string, unknown>;
@@ -4604,7 +4607,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     typeof approval.approvedAt !== 'string' ||
     approval.authorizationSource !== 'human-explicit' ||
     typeof approval.consumed !== 'boolean' ||
-    typeof approval.headSha !== 'string' ||
+    !isGitCommitSha(approval.headSha) ||
     (approval.consumed
       ? typeof approval.consumedAt !== 'string'
       : approval.consumedAt !== undefined)
@@ -4630,7 +4633,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.recoveryEvidence === undefined &&
       typeof approval.schemaFingerprint === 'string' &&
       /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
-      /^[a-f0-9]{40}$/.test(approval.headSha) &&
+      isGitCommitSha(approval.headSha) &&
       Number.isInteger(approval.failedReviewInvocation) &&
       (approval.failedReviewInvocation as number) >= 1 &&
       (approval.failedReviewInvocation as number) <= maxReviewInvocations &&
@@ -4678,7 +4681,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       isIssue76HumanDecisionUrl(approval.humanDecisionUrl) &&
       approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
       approval.reportedReservationHeadSha !== approval.headSha &&
-      /^[a-f0-9]{40}$/.test(approval.headSha)
+      isGitCommitSha(approval.headSha)
     );
   }
   return (
@@ -4727,8 +4730,7 @@ function isReviewerFailureRecovery(value: unknown): boolean {
     (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
     typeof recovery.failureKind === 'string' &&
     reviewExecutionFailureKinds.includes(recovery.failureKind as ReviewExecutionFailureKind) &&
-    typeof recovery.headSha === 'string' &&
-    /^[a-f0-9]{40}$/.test(recovery.headSha) &&
+    isGitCommitSha(recovery.headSha) &&
     typeof recovery.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
   );
@@ -4785,8 +4787,7 @@ function isHistoricalReviewerFailureRecovery(value: unknown): boolean {
         reviewExecutionFailureKinds.includes(
           recovery.failureKind as ReviewExecutionFailureKind,
         ))) &&
-    typeof recovery.headSha === 'string' &&
-    /^[a-f0-9]{40}$/.test(recovery.headSha) &&
+    isGitCommitSha(recovery.headSha) &&
     typeof recovery.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
   );
@@ -4821,7 +4822,7 @@ function isReconciledReviewReservation(value: unknown): boolean {
     record.repository === targetRepository &&
     typeof record.branch === 'string' &&
     typeof record.base === 'string' &&
-    /^[a-f0-9]{40}$/.test(record.headSha as string) &&
+    isGitCommitSha(record.headSha) &&
     Number.isInteger(record.reviewEpoch) &&
     (record.reviewEpoch as number) >= 1 &&
     Number.isInteger(record.reservedInvocation) &&
@@ -4829,7 +4830,7 @@ function isReconciledReviewReservation(value: unknown): boolean {
     (record.reservedInvocation as number) <= maxReviewInvocations &&
     record.status === 'RESERVED_NOT_STARTED' &&
     record.reasonCode === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
-    /^[a-f0-9]{40}$/.test(record.reportedReservationHeadSha as string) &&
+    isGitCommitSha(record.reportedReservationHeadSha) &&
     reviewReservationReconciliationProvenances.includes(
       record.reportedReservationHeadProvenance as (typeof reviewReservationReconciliationProvenances)[number],
     ) &&
