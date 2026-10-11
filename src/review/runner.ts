@@ -2928,6 +2928,46 @@ export function authorizeReviewReservationReconciliation(
   );
 }
 
+/**
+ * Consume only the dedicated Issue #76 reservation-reconciliation approval.
+ * This is deliberately separate from approval issuance and does not reserve a
+ * new review invocation.
+ */
+export function reconcileReservedReview(
+  cwd: string,
+  base: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  const headSha = readHeadSha(cwd);
+  const statePreimageSha256 = statePath ? fileFingerprint(statePath) : undefined;
+  const approvalPreimageSha256 = approvalPath ? fileFingerprint(approvalPath) : undefined;
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reserved-review reconciliation.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!statePreimageSha256 || !approvalPreimageSha256) {
+    return 'Could not fingerprint the canonical review state files.';
+  }
+  return reconcileReservedReviewAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+    humanDecisionUrl,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    cwd,
+  );
+}
+
 /** Consume a matching reviewer-failure approval without resetting accounting. */
 export function resumeReviewerFailureRecoveryAtPath(
   statePath: string,

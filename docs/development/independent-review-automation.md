@@ -436,8 +436,10 @@ validation, malformed evidence, and approval reuse remain fail-closed.
 Issue #76's reserved invocation 13 has a separate, one-time
 `review-reservation-reconciliation` approval. Its scope is fixed to Issue #76,
 invocation 13, the canonical `feat/issue-76`/`main` workspace, the current
-HEAD, review epoch, Schema fingerprint, and the Human Decision recorded in
-[the Issue #76 comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579).
+HEAD, review epoch, Schema fingerprint, and the Human Decision URL supplied to
+the dedicated commands. The URL is not a fixed comment ID: it is verified
+against GitHub at approval issuance and recorded in both the approval and the
+durable reconciliation evidence.
 At issuance, the canonical comment URL is fetched through the explicit GitHub
 verification path. The verified comment must be authored by `Chasoso`, point to
 Issue #76, and contain the exact current HEAD, reported reservation HEAD,
@@ -465,6 +467,25 @@ an existing unconsumed approval, changed HEAD or Schema, an invalid Human
 Decision URL, and any non-exact invocation-13 reservation fail closed. The
 existing reviewer-failure approval type is never reused, and the accounting
 counter and prior history are preserved.
+
+After a separately authorized approval has been issued, reconciliation is a
+second, bounded command. It recomputes the canonical state and approval
+preimages, rechecks the exact HEAD, Schema fingerprint, reported reservation
+HEAD, Human Decision URL, canonical worktree, and the unconsumed approval, and
+then invokes the reconciliation transaction. It never reserves a new review
+invocation:
+
+```bash
+node dist/review/cli.js \
+  --reconcile-reserved-review \
+  --reported-reservation-head <reported-sha> \
+  --human-decision-url <issue-76-comment-url> \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The consumption command is mutually exclusive with all approval-creation and
+other resume commands. A missing, reused, altered, or mismatched approval or
+preimage fails closed; it does not retry, refund, or modify a reservation.
 
 If a future human-authorized recovery is applicable to the Issue #73 shape, the
 merged runner fix must first be made available in the canonical

@@ -166,6 +166,80 @@ describe('Issue #76 reserved-review reconciliation', () => {
     }
   });
 
+  it('consumes the dedicated approval through the repository-native reconciliation entry point', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-command-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({ approvals: [fixture.priorRecoveryApproval] }),
+        'utf8',
+      );
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+      childProcessTestHooks.humanDecisionComment = {
+        url: humanDecisionUrl,
+        author: 'Chasoso',
+        body: [
+          `Current HEAD: ${workspace.headSha}`,
+          `Reported reservation HEAD: ${reportedReservationHead}`,
+          'Review epoch: 1',
+          'Reserved invocation: 13',
+          `Schema fingerprint: ${schemaFingerprint}`,
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+          'NO_DURABLE_EXECUTION_EVIDENCE',
+        ].join('\n'),
+      };
+      const issued = authorizeReviewReservationReconciliation(
+        workspace.cwd,
+        'main',
+        reportedReservationHead,
+        humanDecisionUrl,
+      );
+      expect(issued).not.toBeTypeOf('string');
+
+      const reconciled = reconcileReservedReview(
+        workspace.cwd,
+        'main',
+        reportedReservationHead,
+        humanDecisionUrl,
+      );
+      expect(reconciled).not.toBeTypeOf('string');
+      if (typeof reconciled === 'string') return;
+      expect(reconciled).toMatchObject({ reviewInvocationCount: 13, pendingReview: undefined });
+      expect(reconciled.reconciledReviewReservations).toEqual([
+        expect.objectContaining({
+          reservedInvocation: 13,
+          executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+          reportedReservationHeadSha: reportedReservationHead,
+          humanDecisionUrl,
+        }),
+      ]);
+      const reloaded = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(reloaded).toMatchObject({ reviewInvocationCount: 13, pendingReview: undefined });
+      expect(
+        JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals.find(
+          (approval: { approvalType?: string }) =>
+            approval.approvalType === 'review-reservation-reconciliation',
+        ),
+      ).toMatchObject({ consumed: true });
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toBeUndefined();
+      expect(
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 14,
+        pendingReview: expect.objectContaining({ reviewInvocation: 14, status: 'RESERVED' }),
+      });
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects issuance when the Human Decision binding changes', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-approval-reject-'));
     try {
@@ -601,8 +675,10 @@ import {
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
+  authorizeReviewReservationReconciliation,
   authorizeReviewReservationReconciliationAtPath,
   reconcileReservedReviewAtPath,
+  reconcileReservedReview,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
@@ -1038,8 +1114,19 @@ describe('independent review gate contract', () => {
       ['--authorize-reservation-reconciliation', '--resume-reviewer-failure-recovery'],
       true,
     ],
+    [
+      'reservation reconciliation authorization and consumption modes',
+      ['--authorize-reservation-reconciliation', '--reconcile-reserved-review'],
+      true,
+    ],
+    [
+      'reservation reconciliation and a different consumption mode',
+      ['--reconcile-reserved-review', '--resume-reviewer-failure-recovery'],
+      true,
+    ],
     ['authorization only', ['--authorize-reviewer-failure-recovery'], false],
     ['resume only', ['--resume-reviewer-failure-recovery'], false],
+    ['reservation reconciliation consumption only', ['--reconcile-reserved-review'], false],
     ['unrelated flags', ['--review-only', '--issue', '76'], false],
   ])('rejects conflicting CLI modes: %s', (_label, args, expected) => {
     expect(hasAuthorizationResumeConflict(args)).toBe(expected);

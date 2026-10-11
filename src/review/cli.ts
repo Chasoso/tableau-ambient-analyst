@@ -10,6 +10,7 @@ import {
   authorizeReviewerFailureRecovery,
   resumeReviewerFailureRecovery,
   authorizeReviewReservationReconciliation,
+  reconcileReservedReview,
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
@@ -47,6 +48,7 @@ const authorizeAfterReviewerFailure = rawArguments.includes(
 const authorizeReservationReconciliation = rawArguments.includes(
   '--authorize-reservation-reconciliation',
 );
+const reconcileReservation = rawArguments.includes('--reconcile-reserved-review');
 const existingPullRequest = argumentsByName.get('update-pr');
 if (hasAuthorizationResumeConflict(rawArguments)) {
   console.error('Authorization and resume are separate commands.');
@@ -75,6 +77,10 @@ if (hasAuthorizationResumeConflict(rawArguments)) {
   const authorizationResult = authorizeReservation(input);
   console.log(JSON.stringify(authorizationResult, null, 2));
   if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (reconcileReservation) {
+  const reconciliationResult = reconcileReservationFromApproval(input);
+  console.log(JSON.stringify(reconciliationResult, null, 2));
+  if (typeof reconciliationResult === 'string') process.exitCode = 1;
 } else if (resumeAfterReviewerFailure) {
   const resumeResult = resumeReviewerFailure(input);
   console.log(JSON.stringify(resumeResult, null, 2));
@@ -195,6 +201,17 @@ function authorizeReservation(reviewInput: IndependentReviewInput) {
     reportedHead,
     decisionUrl,
   );
+}
+
+function reconcileReservationFromApproval(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  const reportedHead = argumentsByName.get('reported-reservation-head');
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!reportedHead || !decisionUrl) {
+    return 'Reserved-review reconciliation requires --reported-reservation-head and --human-decision-url.';
+  }
+  return reconcileReservedReview(reviewInput.cwd, reviewInput.base, reportedHead, decisionUrl);
 }
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {

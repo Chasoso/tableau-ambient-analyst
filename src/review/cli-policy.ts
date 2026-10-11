@@ -9,10 +9,11 @@ const resumeFlags = [
   '--resume-after-limit',
   '--resume-after-recovery',
   '--resume-reviewer-failure-recovery',
+  '--reconcile-reserved-review',
 ] as const;
 
 export function hasAuthorizationResumeConflict(rawArguments: readonly string[]): boolean {
-  const hasAuthorization = authorizationFlags.some((flag) => rawArguments.includes(flag));
-  const hasResume = resumeFlags.some((flag) => rawArguments.includes(flag));
-  return hasAuthorization && hasResume;
+  return (
+    [...authorizationFlags, ...resumeFlags].filter((flag) => rawArguments.includes(flag)).length > 1
+  );
 }
