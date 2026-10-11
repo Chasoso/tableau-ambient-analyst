@@ -94,6 +94,16 @@ const reviewerSchemaUnsupportedKeywords = new Set([
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
 const reviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 
+function reviewerTimeoutForProcess(): number {
+  if (process.env.NODE_ENV === 'test') {
+    const configured = Number(process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST);
+    if (Number.isInteger(configured) && configured > 0 && configured < reviewerTimeoutMs) {
+      return configured;
+    }
+  }
+  return reviewerTimeoutMs;
+}
+
 export type IndependentReviewInput = {
   cwd: string;
   base: string;
@@ -2286,8 +2296,7 @@ function reviewerFailureResult(
   );
 }
 
-/** Exported for deterministic subprocess-boundary tests; production callers use the default runner. */
-export function invokeCodexReviewer(
+function invokeCodexReviewer(
   input: IndependentReviewInput,
   issue: IssueContext,
   validationEvidence: string[],
@@ -2305,7 +2314,7 @@ export function invokeCodexReviewer(
         env: reviewerEnvironment(),
         input: buildReviewerPrompt(input, issue, validationEvidence, branch),
         maxBuffer: 1024 * 1024,
-        timeout: reviewerTimeoutMs,
+        timeout: reviewerTimeoutForProcess(),
       },
     );
 
@@ -5065,6 +5074,9 @@ function reserveReviewInvocationAtPath(
       }
       if (accounting.reviewInvocationCount >= maxReviewInvocations) {
         return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
+      }
+      if (accounting.terminationReason) {
+        return 'Review accounting is terminal; human recovery is required.';
       }
       const nextReviewState = {
         reviewInvocationCount: accounting.reviewInvocationCount + 1,

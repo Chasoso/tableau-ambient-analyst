@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -41,13 +42,13 @@ import {
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
-  invokeCodexReviewer,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
   resumeReviewTerminationRecovery,
   readReviewAccountingAtPath,
   runBoundedReviewFixLoop,
+  runIndependentReview,
   runExistingPullRequestUpdate,
   runPostPushCiGate,
   runReadOnlyReview,
@@ -129,6 +130,88 @@ function createReviewerRecoveryWorkspace(
     }).trim(),
   );
   return { cwd: directory, headSha, schemaFingerprint, statePath, approvalPath };
+}
+
+function createCanonicalIndependentReviewWorkspace(
+  directory: string,
+  behavior: string,
+): {
+  cwd: string;
+  statePath: string;
+  binDirectory: string;
+  headSha: string;
+  promptPath: string;
+} {
+  const worktreePath = join(directory, '.worktrees', 'issue-76');
+  const binDirectory = join(directory, 'bin');
+  const promptPath = join(directory, 'captured-prompt.txt');
+  mkdirSync(join(directory, 'src/review'), { recursive: true });
+  mkdirSync(join(directory, '.worktrees'), { recursive: true });
+  mkdirSync(binDirectory, { recursive: true });
+  for (const [name, target] of [
+    ['node', process.execPath],
+    ['npm', execFileSync('which', ['npm'], { encoding: 'utf8' }).trim()],
+    ['git', execFileSync('which', ['git'], { encoding: 'utf8' }).trim()],
+    ['sh', '/bin/sh'],
+  ] as const) {
+    symlinkSync(target, join(binDirectory, name));
+  }
+  copyFileSync(
+    join(process.cwd(), 'src/review/review-result.schema.json'),
+    join(directory, 'src/review/review-result.schema.json'),
+  );
+  writeFileSync(
+    join(directory, 'package.json'),
+    JSON.stringify({ private: true, scripts: { validate: 'node -e "process.exit(0)"' } }),
+    'utf8',
+  );
+  writeFileSync(
+    join(binDirectory, 'gh'),
+    '#!/bin/sh\nprintf \'%s\\n\' \'{"title":"fixture","body":"fixture","url":"https://example.invalid/76"}\'\n',
+    'utf8',
+  );
+  chmodSync(join(binDirectory, 'gh'), 0o755);
+  if (behavior === 'LAUNCH_FAILURE') {
+    mkdirSync(join(binDirectory, 'codex'));
+  } else {
+    writeFileSync(
+      join(binDirectory, 'codex'),
+      `#!/bin/sh\ncat > '${promptPath}'\n${behavior}\n`,
+      'utf8',
+    );
+    chmodSync(join(binDirectory, 'codex'), 0o755);
+  }
+
+  execFileSync('git', ['init'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'review-fixture'], { cwd: directory });
+  execFileSync('git', ['config', 'user.email', 'review-fixture@example.invalid'], {
+    cwd: directory,
+  });
+  execFileSync('git', ['add', 'package.json', 'src/review/review-result.schema.json'], {
+    cwd: directory,
+  });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['branch', '-M', 'main'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/issue-76', worktreePath, 'main'], {
+    cwd: directory,
+    stdio: 'ignore',
+  });
+  writeFileSync(join(worktreePath, 'changed.txt'), 'changed\n', 'utf8');
+  execFileSync('git', ['add', 'changed.txt'], { cwd: worktreePath });
+  execFileSync('git', ['commit', '-m', 'change'], { cwd: worktreePath, stdio: 'ignore' });
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: worktreePath,
+    encoding: 'utf8',
+  }).trim();
+  const realWorktreePath = realpathSync(worktreePath);
+  const statePath = resolve(
+    realWorktreePath,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  return { cwd: realWorktreePath, statePath, binDirectory, headSha, promptPath };
 }
 
 type JsonSchemaNode = {
@@ -1552,59 +1635,81 @@ describe('independent review runner control flow', () => {
   });
 
   it.each([
-    ['non-zero exit', 'exit 17', 'NONZERO_EXIT'],
+    ['LAUNCH_FAILURE', 'LAUNCH_FAILURE'],
+    ['TIMEOUT', "printf '%s\\n' 'token=ephemeral-secret prompt=private-evidence' >&2\nsleep 1"],
     [
-      'malformed output',
-      `printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"not-json"}}'`,
-      'MALFORMED_OUTPUT',
+      'NONZERO_EXIT',
+      "printf '%s\\n' 'token=ephemeral-secret prompt=private-evidence' >&2\nexit 17",
     ],
-  ] as const)('keeps subprocess diagnostics bounded for %s', (_name, behavior, expectedKind) => {
-    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-subprocess-'));
-    const binDirectory = join(directory, 'bin');
-    const codexPath = join(binDirectory, 'codex');
-    mkdirSync(binDirectory, { recursive: true });
-    const secret = 'token=ephemeral-secret prompt=private-evidence';
-    writeFileSync(codexPath, `#!/bin/sh\nprintf '%s\\n' '${secret}' >&2\n${behavior}\n`, 'utf8');
-    chmodSync(codexPath, 0o755);
+    [
+      'MALFORMED_OUTPUT',
+      'printf \'%s\\n\' \'token=ephemeral-secret prompt=private-evidence\' >&2\nprintf \'%s\\n\' \'{"type":"item.completed","item":{"type":"agent_message","text":"not-json"}}\'',
+    ],
+    [
+      'INTERRUPTED',
+      "printf '%s\\n' 'token=ephemeral-secret prompt=private-evidence' >&2\nkill -TERM $$",
+    ],
+  ] as const)(
+    'persists %s through the production failure state transition',
+    (expectedKind, behavior) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-durable-failure-'));
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, behavior);
+      const previousPath = process.env.PATH;
+      const previousNodeEnv = process.env.NODE_ENV;
+      const previousTimeout = process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST;
+      process.env.PATH = workspace.binDirectory;
+      process.env.NODE_ENV = 'test';
+      process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST = expectedKind === 'TIMEOUT' ? '50' : '';
+      try {
+        const result = runIndependentReview({ cwd: workspace.cwd, base: 'main', issue: '76' });
+        const rawAfterFailure = readFileSync(workspace.statePath, 'utf8');
+        const accounting = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
 
-    const previousPath = process.env.PATH;
-    process.env.PATH = binDirectory;
-    try {
-      const result = invokeCodexReviewer(
-        { cwd: directory, base: 'main', issue: '76' },
-        { title: 'fixture', body: 'fixture', url: 'https://example.invalid/76' },
-        ['npm run validate: passed'],
-        'feature/review',
-      );
-      const serialized = JSON.stringify(result);
-      expect(result.executionFailureKind).toBe(expectedKind);
-      expect(serialized).not.toContain(secret);
-      expect(serialized).not.toContain('ephemeral-secret');
-      expect(serialized).not.toContain('private-evidence');
-    } finally {
-      process.env.PATH = previousPath;
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+        expect(result.terminationReason).toBe('REVIEWER_FAILURE');
+        expect(JSON.stringify(result)).not.toContain('ephemeral-secret');
+        expect(JSON.stringify(result)).not.toContain('private-evidence');
+        expect(accounting.reviewInvocationCount).toBe(1);
+        expect(accounting.cycleResults).toHaveLength(0);
+        expect(accounting.pendingReview).toBeUndefined();
+        expect(accounting.terminationReason).toBe('REVIEWER_FAILURE');
+        expect(accounting.terminationHistory).toEqual(['REVIEWER_FAILURE']);
+        expect(accounting.reviewExecutionFailures).toMatchObject([
+          {
+            reviewInvocation: 1,
+            kind: expectedKind,
+            evidenceVersion: 'reviewer-failure-v1',
+            headSha: workspace.headSha,
+            schemaFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        ]);
+        expect(rawAfterFailure).not.toContain('ephemeral-secret');
+        expect(rawAfterFailure).not.toContain('private-evidence');
+        if (existsSync(workspace.promptPath)) {
+          expect(readFileSync(workspace.promptPath, 'utf8')).not.toContain('ephemeral-secret');
+          expect(readFileSync(workspace.promptPath, 'utf8')).not.toContain('private-evidence');
+        }
 
-  it('maps a missing reviewer executable to a bounded launch failure', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-launch-'));
-    const previousPath = process.env.PATH;
-    process.env.PATH = directory;
-    try {
-      const result = invokeCodexReviewer(
-        { cwd: directory, base: 'main', issue: '76' },
-        { title: 'fixture', body: 'fixture', url: 'https://example.invalid/76' },
-        [],
-        'feature/review',
-      );
-      expect(result.executionFailureKind).toBe('LAUNCH_FAILURE');
-      expect(JSON.stringify(result)).not.toContain('ENOENT');
-    } finally {
-      process.env.PATH = previousPath;
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+        expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
+          'terminal',
+        );
+        expect(readFileSync(workspace.statePath, 'utf8')).toBe(rawAfterFailure);
+        expect(
+          readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+        ).toMatchObject({
+          reviewInvocationCount: 1,
+          pendingReview: undefined,
+          terminationReason: 'REVIEWER_FAILURE',
+        });
+      } finally {
+        process.env.PATH = previousPath;
+        if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = previousNodeEnv;
+        if (previousTimeout === undefined) delete process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST;
+        else process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST = previousTimeout;
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('converts reviewer exceptions after reservation into a durable fail-closed failure', () => {
     const result = runReadOnlyReview(
