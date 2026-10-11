@@ -198,6 +198,24 @@ state without mutation or refund. A separate pending reservation is also
 rejected by the normal reservation guard. Recovery must not delete, rewrite,
 or refund prior failure history, and no missing historical reason is inferred.
 
+Issue #79 compatibility decision
+--------------------------------
+
+The historical state assessed for Issue #79 is represented by
+`tests/fixtures/review-accounting/issue-79-orphaned-invocation.json`: the
+current invocation count is non-zero, but there is no corresponding cycle
+result, termination evidence, execution-failure evidence, or pending marker.
+This is not a supported legacy format. A read of the state, a new reservation,
+and the same checks after a process restart must all fail closed without
+rewriting the file, guessing the missing reason, or resetting or refunding the
+counter.
+
+This is distinct from the explicitly supported Issue #29 migration shape. That
+shape is recognized only by its exact repository, branch, base, legacy counter,
+and accounting-epoch invariants. It remains audit history and does not make an
+orphaned current invocation recoverable. Other legacy or incomplete shapes are
+not silently upgraded; they require a separately authorized human decision.
+
 The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
 known prior state of 6 invocations and 1 completed AUTO_FIX is retained as
 legacy counter audit history. That legacy shape did not contain termination
@@ -372,8 +390,24 @@ and reservation of the next invocation. That reservation atomically moves the
 marker into append-only `reviewerFailureRecoveryHistory` and clears the active
 marker; a later reviewer failure can therefore set a new terminal
 `REVIEWER_FAILURE` without overwriting the consumed approval or making failure
-persistence impossible. Invalid or incomplete history remains fail-closed. The
-commands are:
+persistence impossible. Invalid or incomplete history remains fail-closed.
+
+This dedicated mechanism was added for Issue #76 after an explicit Human
+Decision to preserve the invocation and failure audit trail when the reviewer
+subprocess terminates unsuccessfully. It is deliberately a narrow exception to
+the ordinary review loop, not a new general resume facility. Recovery is
+possible only for a current `REVIEWER_FAILURE` with a durable
+`reviewer-failure-v1` record whose failed invocation, failure kind, review
+epoch, exact HEAD, and Schema fingerprint match the current state. Legacy
+accounting, missing evidence, pending reservations, and inferred history are
+outside the recovery boundary. Review-limit recovery and AUTO_FIX recovery
+retain their existing commands, evidence requirements, and approval types.
+The single-use approval is bound to the repository, branch, base, HEAD, Schema
+fingerprint, review epoch, and failed invocation; consuming it preserves the
+failure history and invocation count. No approval is reused and no invocation
+is refunded or reset.
+
+The commands are:
 
 ```bash
 npm run build

@@ -379,6 +379,67 @@ describe('independent review gate contract', () => {
     },
   );
 
+  it.each([
+    [
+      'PASS with non-blocking BLOCKED finding and no escalation',
+      {
+        ...structuredPass,
+        nonBlockingFindings: [wireFinding('non-blocking', 'BLOCKED', 'Unavailable prerequisite')],
+      },
+      true,
+      false,
+    ],
+    [
+      'PASS with non-blocking BLOCKED finding and escalation',
+      {
+        ...structuredPass,
+        nonBlockingFindings: [wireFinding('non-blocking', 'BLOCKED', 'Unavailable prerequisite')],
+        escalationRequired: true,
+      },
+      true,
+      false,
+    ],
+    [
+      'PASS with unsupported escalation and no Human/Blocked finding',
+      { ...structuredPass, escalationRequired: true },
+      true,
+      false,
+    ],
+    [
+      'HUMAN_DECISION_REQUIRED with non-blocking Human finding and escalation',
+      {
+        ...structuredPass,
+        result: 'HUMAN_DECISION_REQUIRED',
+        nonBlockingFindings: [
+          wireFinding('non-blocking', 'HUMAN_DECISION_REQUIRED', 'A decision is required'),
+        ],
+        escalationRequired: true,
+      },
+      true,
+      true,
+    ],
+    [
+      'HUMAN_DECISION_REQUIRED with non-blocking Human finding and no escalation',
+      {
+        ...structuredPass,
+        result: 'HUMAN_DECISION_REQUIRED',
+        nonBlockingFindings: [
+          wireFinding('non-blocking', 'HUMAN_DECISION_REQUIRED', 'A decision is required'),
+        ],
+      },
+      true,
+      false,
+    ],
+  ])(
+    'cross-validates both finding arrays against the actual Schema and Parser: %s',
+    (_name, value, schemaValid, parserValid) => {
+      expect(validateReviewerSchema(value)).toBe(schemaValid);
+      expect(parseReviewResult(JSON.stringify(value)).executionStatus === 'COMPLETED').toBe(
+        parserValid,
+      );
+    },
+  );
+
   it('resolves only an open pull request with an exact head', () => {
     expect(
       resolveActivePullRequest('/repo', 'https://github.com/example/repo/pull/1', () =>
@@ -2136,6 +2197,30 @@ describe('review cycle state', () => {
       }
     },
   );
+
+  it('keeps the historical orphaned accounting state unchanged across reads and restart-like reservations', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-issue-79-orphaned-invocation-'));
+    const statePath = join(directory, 'state.json');
+    const fixture = readFileSync(
+      join(process.cwd(), 'tests/fixtures/review-accounting/issue-79-orphaned-invocation.json'),
+      'utf8',
+    );
+    writeFileSync(statePath, fixture, 'utf8');
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(() => readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toThrow(
+          'Review accounting state is invalid',
+        );
+        expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toContain(
+          'Review accounting state is invalid',
+        );
+        expect(readFileSync(statePath, 'utf8')).toBe(fixture);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));
