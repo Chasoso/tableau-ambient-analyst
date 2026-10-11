@@ -156,7 +156,8 @@ export type ReviewAccounting = {
     reviewInvocation: number;
     kind: ReviewExecutionFailureKind;
     diagnostic: string;
-    evidenceVersion?: 'reviewer-failure-v1' | undefined;
+    evidenceVersion?: 'reviewer-failure-v1' | 'reviewer-failure-v2' | undefined;
+    executionPhase?: 'REVIEW' | undefined;
     reviewEpoch?: number | undefined;
     headSha?: string | undefined;
     schemaFingerprint?: string | undefined;

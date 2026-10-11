@@ -1696,7 +1696,8 @@ describe('independent review runner control flow', () => {
           {
             reviewInvocation: 1,
             kind: expectedKind,
-            evidenceVersion: 'reviewer-failure-v1',
+            evidenceVersion: 'reviewer-failure-v2',
+            executionPhase: 'REVIEW',
             headSha: workspace.headSha,
             schemaFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
           },
@@ -1758,7 +1759,8 @@ describe('independent review runner control flow', () => {
         reviewInvocation: 1,
         kind: 'UNCERTAIN',
         diagnostic: 'Reviewer execution failed: UNCERTAIN.',
-        evidenceVersion: 'reviewer-failure-v1',
+        evidenceVersion: 'reviewer-failure-v2',
+        executionPhase: 'REVIEW',
         reviewEpoch: 1,
         headSha: workspace.headSha,
         schemaFingerprint,
@@ -2525,6 +2527,124 @@ describe('review cycle state', () => {
       }
     },
   );
+
+  it.each([undefined, 'PRE_REVIEW', 'VALIDATION', 'UNKNOWN'] as const)(
+    'rejects reviewer-failure-v2 evidence with invalid executionPhase %s without mutation',
+    (executionPhase) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-phase-'));
+      const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+      const state = {
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['REVIEWER_FAILURE'],
+        terminationReason: 'REVIEWER_FAILURE',
+        reviewEpoch: 1,
+        reviewExecutionFailures: [
+          {
+            reviewInvocation: 1,
+            kind: 'NONZERO_EXIT',
+            diagnostic: 'safe diagnostic',
+            evidenceVersion: 'reviewer-failure-v2',
+            ...(executionPhase === undefined ? {} : { executionPhase }),
+            reviewEpoch: 1,
+            headSha: workspace.headSha,
+            schemaFingerprint: workspace.schemaFingerprint,
+          },
+        ],
+      };
+      const contents = JSON.stringify(state);
+      writeFileSync(workspace.statePath, contents, 'utf8');
+
+      try {
+        expect(() =>
+          readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        ).toThrow('Review accounting state is invalid');
+        expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+          'Review accounting state is invalid',
+        );
+        expect(readFileSync(workspace.statePath, 'utf8')).toBe(contents);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('accepts reviewer-failure-v2 recovery only with REVIEW phase evidence', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-v2-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
+      reviewEpoch: 1,
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'safe diagnostic',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+    };
+    writeFileSync(workspace.statePath, JSON.stringify(state), 'utf8');
+
+    try {
+      const approval = authorizeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof approval).not.toBe('string');
+      if (typeof approval === 'string') return;
+
+      const recovered = resumeReviewerFailureRecoveryAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feature/review',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(typeof recovered).not.toBe('string');
+      if (typeof recovered === 'string') return;
+      expect(recovered.reviewExecutionFailures).toEqual([
+        expect.objectContaining({
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+        }),
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('authorizes and consumes one reviewer-failure recovery without resetting accounting', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-recovery-'));

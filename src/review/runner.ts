@@ -92,7 +92,12 @@ const reviewerSchemaUnsupportedKeywords = new Set([
   'const',
 ]);
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
-const reviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
+const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
+const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
+const reviewerFailureEvidenceVersions = [
+  legacyReviewerFailureEvidenceVersion,
+  reviewerFailureEvidenceVersion,
+] as const;
 
 function reviewerTimeoutForProcess(): number {
   if (process.env.NODE_ENV === 'test') {
@@ -2487,7 +2492,7 @@ function reviewerFailureState(accounting: ReviewAccounting):
     accounting.pendingReview !== undefined ||
     !failure ||
     failure.reviewInvocation !== accounting.reviewInvocationCount ||
-    failure.evidenceVersion !== reviewerFailureEvidenceVersion ||
+    !isReviewerFailureEvidenceForRecovery(failure) ||
     failure.reviewEpoch !== reviewEpoch ||
     typeof failure.headSha !== 'string' ||
     typeof failure.schemaFingerprint !== 'string'
@@ -3605,6 +3610,7 @@ function isReviewExecutionFailure(
         key === 'kind' ||
         key === 'diagnostic' ||
         key === 'evidenceVersion' ||
+        key === 'executionPhase' ||
         key === 'reviewEpoch' ||
         key === 'headSha' ||
         key === 'schemaFingerprint',
@@ -3617,17 +3623,43 @@ function isReviewExecutionFailure(
     typeof failure.diagnostic === 'string' &&
     failure.diagnostic.length > 0 &&
     failure.diagnostic.length <= 500 &&
-    ((failure.evidenceVersion === undefined &&
+    reviewerFailureEvidenceIsValid(failure)
+  );
+}
+
+function reviewerFailureEvidenceIsValid(failure: Record<string, unknown>): boolean {
+  const hasDurableMetadata =
+    Number.isInteger(failure.reviewEpoch) &&
+    (failure.reviewEpoch as number) >= 1 &&
+    typeof failure.headSha === 'string' &&
+    /^[a-f0-9]{40}$/.test(failure.headSha) &&
+    typeof failure.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(failure.schemaFingerprint);
+
+  if (failure.evidenceVersion === undefined) {
+    return (
+      failure.executionPhase === undefined &&
       failure.reviewEpoch === undefined &&
       failure.headSha === undefined &&
-      failure.schemaFingerprint === undefined) ||
-      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
-        Number.isInteger(failure.reviewEpoch) &&
-        (failure.reviewEpoch as number) >= 1 &&
-        typeof failure.headSha === 'string' &&
-        /^[a-f0-9]{40}$/.test(failure.headSha) &&
-        typeof failure.schemaFingerprint === 'string' &&
-        /^[a-f0-9]{64}$/.test(failure.schemaFingerprint)))
+      failure.schemaFingerprint === undefined
+    );
+  }
+  if (failure.evidenceVersion === legacyReviewerFailureEvidenceVersion) {
+    return hasDurableMetadata && failure.executionPhase === undefined;
+  }
+  if (failure.evidenceVersion === reviewerFailureEvidenceVersion) {
+    return hasDurableMetadata && failure.executionPhase === 'REVIEW';
+  }
+  return false;
+}
+
+function isReviewerFailureEvidenceForRecovery(failure: Record<string, unknown>): boolean {
+  return (
+    typeof failure.evidenceVersion === 'string' &&
+    reviewerFailureEvidenceVersions.includes(
+      failure.evidenceVersion as (typeof reviewerFailureEvidenceVersions)[number],
+    ) &&
+    reviewerFailureEvidenceIsValid(failure)
   );
 }
 
@@ -4284,7 +4316,7 @@ function reviewFailureMatchesRecovery(
     (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
     recovery.reviewEpoch === (failure.reviewEpoch ?? recovery.reviewEpoch) &&
     (failure.evidenceVersion === undefined ||
-      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+      (isReviewerFailureEvidenceForRecovery(failure) &&
         failure.reviewEpoch === recovery.reviewEpoch &&
         failure.headSha === recovery.headSha &&
         failure.schemaFingerprint === recovery.schemaFingerprint))
@@ -4320,9 +4352,8 @@ function reviewExecutionFailuresAreConsistent(state: Record<string, unknown>): b
     const isCurrentTerminal =
       currentTerminalFailure && failure.reviewInvocation === reviewInvocationCount;
     const currentFailureEvidenceIsConsistent =
-      failure.evidenceVersion === undefined ||
-      (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
-        failure.reviewEpoch === (state.reviewEpoch ?? 1));
+      reviewerFailureEvidenceIsValid(failure) &&
+      (failure.evidenceVersion === undefined || failure.reviewEpoch === (state.reviewEpoch ?? 1));
     const hasRecoveryEvidence =
       (activeRecovery !== undefined && reviewFailureMatchesRecovery(failure, activeRecovery)) ||
       archivedRecoveries.some((recovery) => reviewFailureMatchesRecovery(failure, recovery));
@@ -4344,7 +4375,7 @@ function isReviewerFailureRecoveryConsistent(state: Record<string, unknown>): bo
         failure.reviewInvocation === recovery.failedReviewInvocation &&
         (recovery.failureKind === undefined || failure.kind === recovery.failureKind) &&
         (recovery.failureKind === undefined ||
-          (failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+          (isReviewerFailureEvidenceForRecovery(failure) &&
             failure.reviewEpoch === recovery.reviewEpoch &&
             failure.headSha === recovery.headSha &&
             failure.schemaFingerprint === recovery.schemaFingerprint)),
@@ -4784,7 +4815,7 @@ function validateReviewerFailureRecoveryTransactionSemantics(
     entry.accounting.reviewExecutionFailures?.every(
       (failure) => failure.reviewInvocation !== recovery.failedReviewInvocation,
     ) ||
-    failure.evidenceVersion !== reviewerFailureEvidenceVersion ||
+    !isReviewerFailureEvidenceForRecovery(failure) ||
     failure.reviewEpoch !== recovery.reviewEpoch ||
     failure.kind !== recovery.failureKind ||
     failure.headSha !== recovery.headSha ||
@@ -4980,6 +5011,7 @@ function recordReviewFailureAccounting(
       kind,
       diagnostic: `Reviewer execution failed: ${kind}.`,
       evidenceVersion: reviewerFailureEvidenceVersion,
+      executionPhase: 'REVIEW' as const,
       reviewEpoch: accounting.reviewEpoch ?? 1,
       headSha,
       schemaFingerprint,
