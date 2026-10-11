@@ -150,6 +150,7 @@ export type ReviewResumeApproval = {
   reportedReservationHeadProvenance?: ReviewReservationReconciliationProvenance | undefined;
   executionEvidence?: ReviewReservationReconciliationEvidenceReason | undefined;
   humanDecisionUrl?: string | undefined;
+  humanDecisionVerification?: 'GITHUB_COMMENT_VERIFIED' | undefined;
   issue?: string | undefined;
 };
 
@@ -225,6 +226,7 @@ export type ReviewAccounting = {
     reportedReservationHeadProvenance: ReviewReservationReconciliationProvenance;
     executionEvidence: ReviewReservationReconciliationEvidenceReason;
     humanDecisionUrl: string;
+    humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED';
     schemaFingerprint: string;
     reconciledAt: string;
   }>;

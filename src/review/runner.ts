@@ -97,8 +97,9 @@ const reviewerSchemaUnsupportedKeywords = new Set([
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
 const reviewReservationReconciliationTransactionSuffix =
   '.review-reservation-reconciliation-transaction';
-const issue76HumanDecisionUrl =
-  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579';
+const issue76HumanDecisionUrlPattern =
+  /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
+const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
 const reviewerFailureEvidenceVersions = [
@@ -2573,6 +2574,7 @@ export function reconcileReservedReviewAtPath(
             'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' &&
           candidate.executionEvidence === 'NO_DURABLE_EXECUTION_EVIDENCE' &&
           candidate.humanDecisionUrl === humanDecisionUrl &&
+          candidate.humanDecisionVerification === verifiedHumanDecisionMarker &&
           candidate.authorizationSource === 'human-explicit' &&
           candidate.humanDecision === 'reconcile-reserved-review' &&
           !candidate.consumed,
@@ -2597,6 +2599,7 @@ export function reconcileReservedReviewAtPath(
           'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' as const,
         executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE' as const,
         humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
         schemaFingerprint,
         reconciledAt,
       };
@@ -2818,6 +2821,14 @@ export function authorizeReviewReservationReconciliationAtPath(
   ) {
     return 'Reserved-review reconciliation authorization preimages are invalid.';
   }
+  const humanDecisionError = verifyIssue76HumanDecisionComment(
+    workspaceCwd,
+    humanDecisionUrl,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+  );
+  if (humanDecisionError) return humanDecisionError;
   try {
     return withAccountingLock(statePath, () => {
       if (
@@ -2871,6 +2882,7 @@ export function authorizeReviewReservationReconciliationAtPath(
         reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
         executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
         humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
         issue: '76',
       };
       writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
@@ -4512,6 +4524,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'reportedReservationHeadProvenance',
     'executionEvidence',
     'humanDecisionUrl',
+    'humanDecisionVerification',
     'issue',
   ]);
   if (
@@ -4605,6 +4618,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       ) &&
       typeof approval.humanDecisionUrl === 'string' &&
       isIssue76HumanDecisionUrl(approval.humanDecisionUrl) &&
+      approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
       approval.reportedReservationHeadSha !== approval.headSha
     );
   }
@@ -4701,6 +4715,7 @@ function isReconciledReviewReservation(value: unknown): boolean {
     'reportedReservationHeadProvenance',
     'executionEvidence',
     'humanDecisionUrl',
+    'humanDecisionVerification',
     'schemaFingerprint',
     'reconciledAt',
   ]);
@@ -4727,6 +4742,7 @@ function isReconciledReviewReservation(value: unknown): boolean {
       record.executionEvidence as (typeof reviewReservationReconciliationEvidenceReasons)[number],
     ) &&
     isIssue76HumanDecisionUrl(record.humanDecisionUrl) &&
+    record.humanDecisionVerification === verifiedHumanDecisionMarker &&
     record.reportedReservationHeadSha !== record.headSha &&
     /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
     typeof record.reconciledAt === 'string'
@@ -4734,7 +4750,62 @@ function isReconciledReviewReservation(value: unknown): boolean {
 }
 
 function isIssue76HumanDecisionUrl(value: unknown): value is string {
-  return value === issue76HumanDecisionUrl;
+  return typeof value === 'string' && issue76HumanDecisionUrlPattern.test(value);
+}
+
+function verifyIssue76HumanDecisionComment(
+  cwd: string,
+  humanDecisionUrl: string,
+  headSha: string,
+  schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+): string | undefined {
+  const match = issue76HumanDecisionUrlPattern.exec(humanDecisionUrl);
+  if (!match)
+    return 'Reserved-review reconciliation requires the canonical Issue #76 Human Decision URL.';
+  const result = spawnSync(
+    'gh',
+    ['api', `repos/Chasoso/tableau-ambient-analyst/issues/comments/${match[1]}`],
+    {
+      cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    return 'Human Decision comment could not be verified; reconciliation authorization is unavailable.';
+  }
+  try {
+    const comment = JSON.parse(result.stdout) as {
+      html_url?: unknown;
+      user?: { login?: unknown };
+      body?: unknown;
+    };
+    if (
+      comment.html_url !== humanDecisionUrl ||
+      comment.user?.login !== 'Chasoso' ||
+      typeof comment.body !== 'string'
+    ) {
+      return 'Human Decision comment identity is invalid; reconciliation authorization is unavailable.';
+    }
+    const body = comment.body;
+    const requiredEvidence = [
+      `Current HEAD: ${headSha}`,
+      `Reported reservation HEAD: ${reportedReservationHeadSha}`,
+      'Review epoch: 1',
+      'Reserved invocation: 13',
+      `Schema fingerprint: ${schemaFingerprint}`,
+      'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+      'NO_DURABLE_EXECUTION_EVIDENCE',
+    ];
+    if (!requiredEvidence.every((value) => body.includes(value))) {
+      return 'Human Decision comment content does not match the reconciliation scope.';
+    }
+    return undefined;
+  } catch {
+    return 'Human Decision comment could not be verified; reconciliation authorization is unavailable.';
+  }
 }
 
 function reviewFailureMatchesRecovery(
@@ -4990,6 +5061,7 @@ function reviewReservationReconciliationApprovalStateIsConsistent(
         reconciliation.reportedReservationHeadProvenance ||
       approval.executionEvidence !== reconciliation.executionEvidence ||
       approval.humanDecisionUrl !== reconciliation.humanDecisionUrl ||
+      approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
       approval.authorizationSource !== 'human-explicit' ||
       approval.humanDecision !== 'reconcile-reserved-review' ||
       approval.consumed !== true ||
@@ -5375,6 +5447,7 @@ function validateReviewReservationReconciliationTransactionSemantics(
     approval.reportedReservationHeadProvenance !== record.reportedReservationHeadProvenance ||
     approval.executionEvidence !== record.executionEvidence ||
     approval.humanDecisionUrl !== record.humanDecisionUrl ||
+    approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
     approval.humanDecision !== 'reconcile-reserved-review' ||
     approval.authorizationSource !== 'human-explicit' ||
     approval.consumed !== true ||

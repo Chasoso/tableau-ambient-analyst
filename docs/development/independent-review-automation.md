@@ -438,7 +438,12 @@ Issue #76's reserved invocation 13 has a separate, one-time
 invocation 13, the canonical `feat/issue-76`/`main` workspace, the current
 HEAD, review epoch, Schema fingerprint, and the Human Decision recorded in
 [the Issue #76 comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579).
-The approval records the reported reservation HEAD as
+At issuance, the canonical comment URL is fetched through the explicit GitHub
+verification path. The verified comment must be authored by `Chasoso`, point to
+Issue #76, and contain the exact current HEAD, reported reservation HEAD,
+review epoch, invocation, Schema fingerprint, and fixed evidence codes. The
+approval records the marker `GITHUB_COMMENT_VERIFIED`; URL shape alone is not
+authorization. The approval also records the reported reservation HEAD as
 `REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE` and the execution evidence as
 `NO_DURABLE_EXECUTION_EVIDENCE`; it does not claim that the reviewer was
 definitively never started. Issuing this approval and consuming it during

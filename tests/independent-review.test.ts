@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 const childProcessTestHooks = vi.hoisted(() => ({
   throwOnCodexSpawn: false,
   exceptionMessage: '',
+  humanDecisionComment: undefined as { url: string; author: string; body: string } | undefined,
 }));
 
 vi.mock('node:child_process', async () => {
@@ -27,7 +28,26 @@ vi.mock('node:child_process', async () => {
   return {
     ...actual,
     spawnSync: ((...args: Parameters<typeof actual.spawnSync>) => {
-      const [command] = args;
+      const [command, commandArgs] = args;
+      if (
+        command === 'gh' &&
+        Array.isArray(commandArgs) &&
+        commandArgs[0] === 'api' &&
+        childProcessTestHooks.humanDecisionComment
+      ) {
+        return {
+          status: 0,
+          signal: null,
+          stdout: JSON.stringify({
+            html_url: childProcessTestHooks.humanDecisionComment.url,
+            user: { login: childProcessTestHooks.humanDecisionComment.author },
+            body: childProcessTestHooks.humanDecisionComment.body,
+          }),
+          stderr: '',
+          pid: 1,
+          output: [],
+        } as ReturnType<typeof actual.spawnSync>;
+      }
       if (childProcessTestHooks.throwOnCodexSpawn && command === 'codex') {
         throw new Error(childProcessTestHooks.exceptionMessage);
       }
@@ -53,6 +73,19 @@ describe('Issue #76 reserved-review reconciliation', () => {
       const approvalBefore = createHash('sha256')
         .update(readFileSync(workspace.approvalPath))
         .digest('hex');
+      childProcessTestHooks.humanDecisionComment = {
+        url: humanDecisionUrl,
+        author: 'Chasoso',
+        body: [
+          `Current HEAD: ${workspace.headSha}`,
+          `Reported reservation HEAD: ${reportedReservationHead}`,
+          'Review epoch: 1',
+          'Reserved invocation: 13',
+          `Schema fingerprint: ${schemaFingerprint}`,
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+          'NO_DURABLE_EXECUTION_EVIDENCE',
+        ].join('\n'),
+      };
       const issued = authorizeReviewReservationReconciliationAtPath(
         workspace.statePath,
         workspace.approvalPath,
@@ -128,6 +161,7 @@ describe('Issue #76 reserved-review reconciliation', () => {
         ]),
       );
     } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -166,6 +200,55 @@ describe('Issue #76 reserved-review reconciliation', () => {
         fixture.priorRecoveryApproval,
       ]);
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['comment retrieval failure', undefined],
+    ['comment author mismatch', { url: humanDecisionUrl, author: 'attacker', body: 'valid' }],
+    ['comment content mismatch', { url: humanDecisionUrl, author: 'Chasoso', body: 'valid' }],
+    [
+      'comment URL mismatch',
+      {
+        url: 'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-999',
+        author: 'Chasoso',
+        body: 'valid',
+      },
+    ],
+  ])('fails closed for %s during Human Decision verification', (_label, comment) => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-comment-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({ approvals: [fixture.priorRecoveryApproval] }),
+        'utf8',
+      );
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+      childProcessTestHooks.humanDecisionComment = comment ?? undefined;
+      const result = authorizeReviewReservationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        schemaFingerprint,
+        reportedReservationHead,
+        humanDecisionUrl,
+        fixture.statePreimageSha256,
+        createHash('sha256').update(readFileSync(workspace.approvalPath)).digest('hex'),
+        workspace.cwd,
+      );
+      expect(result).toBeTypeOf('string');
+      expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toEqual([
+        fixture.priorRecoveryApproval,
+      ]);
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -379,6 +462,7 @@ describe('Issue #76 reserved-review reconciliation', () => {
         reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
         executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
         humanDecisionUrl,
+        humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED',
         schemaFingerprint,
         reconciledAt: '2026-01-01T00:01:00.000Z',
       };
@@ -446,6 +530,7 @@ describe('Issue #76 reserved-review reconciliation', () => {
           reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
           executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
           humanDecisionUrl,
+          humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED',
           schemaFingerprint: secondWorkspace.schemaFingerprint,
           reconciledAt: '2026-01-01T00:02:00.000Z',
         };
@@ -807,7 +892,7 @@ const structuredAutoFix = {
 
 const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
-  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579';
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445';
 
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -879,6 +964,7 @@ function prepareReservedReviewReconciliationFixture(workspace: {
     reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
     executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
     humanDecisionUrl,
+    humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED',
   };
   const priorRecoveryApproval = {
     id: 'prior-reviewer-failure-recovery-76',
