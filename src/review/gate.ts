@@ -63,6 +63,9 @@ export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[
 export const reviewerFailureRecoveryHumanDecisions = ['retry-review'] as const;
 export type ReviewerFailureRecoveryHumanDecision =
   (typeof reviewerFailureRecoveryHumanDecisions)[number];
+export const reviewReservationReconciliationHumanDecisions = ['reconcile-reserved-review'] as const;
+export type ReviewReservationReconciliationHumanDecision =
+  (typeof reviewReservationReconciliationHumanDecisions)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
   issue?: string | undefined;
@@ -105,7 +108,11 @@ export type ReviewEpochHistory = {
 
 export type ReviewResumeApproval = {
   id: string;
-  approvalType: 'review-limit-resume' | 'review-termination-recovery' | 'reviewer-failure-recovery';
+  approvalType:
+    | 'review-limit-resume'
+    | 'review-termination-recovery'
+    | 'reviewer-failure-recovery'
+    | 'review-reservation-reconciliation';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
   base: string;
@@ -122,7 +129,13 @@ export type ReviewResumeApproval = {
   schemaFingerprint?: string | undefined;
   failedReviewInvocation?: number | undefined;
   failedReviewKind?: ReviewExecutionFailureKind | undefined;
-  humanDecision?: ReviewRecoveryHumanDecision | ReviewerFailureRecoveryHumanDecision | undefined;
+  humanDecision?:
+    | ReviewRecoveryHumanDecision
+    | ReviewerFailureRecoveryHumanDecision
+    | ReviewReservationReconciliationHumanDecision
+    | undefined;
+  reconciliationInvocation?: number | undefined;
+  reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | undefined;
   issue?: string | undefined;
 };
 
@@ -182,6 +195,20 @@ export type ReviewAccounting = {
     failureKind?: ReviewExecutionFailureKind | undefined;
     headSha: string;
     schemaFingerprint: string;
+  }>;
+  reconciledReviewReservations?: Array<{
+    reconciliationId: string;
+    approvalId: string;
+    repository: 'Chasoso/tableau-ambient-analyst';
+    branch: string;
+    base: string;
+    headSha: string;
+    reviewEpoch: number;
+    reservedInvocation: number;
+    status: 'RESERVED_NOT_STARTED';
+    reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE';
+    schemaFingerprint: string;
+    reconciledAt: string;
   }>;
 };
 

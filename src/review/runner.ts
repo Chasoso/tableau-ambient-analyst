@@ -39,6 +39,7 @@ import {
   type ReviewCycleRecord,
   type ReviewEpochHistory,
   type ReviewResumeApproval,
+  reviewReservationReconciliationHumanDecisions,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -92,6 +93,8 @@ const reviewerSchemaUnsupportedKeywords = new Set([
   'const',
 ]);
 const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
+const reviewReservationReconciliationTransactionSuffix =
+  '.review-reservation-reconciliation-transaction';
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
 const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
 const reviewerFailureEvidenceVersions = [
@@ -2469,6 +2472,141 @@ export function reserveReviewCycleAtPath(
   return reserveReviewInvocationAtPath(statePath, branch, base);
 }
 
+/**
+ * Reconcile only Issue #76's reviewer-not-started reservation. This consumes a
+ * dedicated single-use approval and never changes the invocation counter.
+ */
+export function reconcileReservedReviewAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Reserved-review reconciliation is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76')
+  ) {
+    return 'Reserved-review reconciliation paths must resolve to the canonical Issue #76 worktree.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reserved-review reconciliation HEAD does not match the current Git HEAD.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  if (
+    !/^[a-f0-9]{64}$/.test(statePreimageSha256) ||
+    !/^[a-f0-9]{64}$/.test(approvalPreimageSha256)
+  ) {
+    return 'Reserved-review reconciliation preimages are invalid.';
+  }
+  try {
+    return withAccountingLock(statePath, () => {
+      if (
+        fileFingerprint(statePath) !== statePreimageSha256 ||
+        fileFingerprint(approvalPath) !== approvalPreimageSha256
+      ) {
+        return 'Reserved-review reconciliation preimage does not match current state.';
+      }
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (
+        accounting.reviewInvocationCount !== 13 ||
+        accounting.pendingReview?.reviewInvocation !== 13 ||
+        accounting.pendingReview.status !== 'RESERVED' ||
+        accounting.terminationReason !== undefined ||
+        accounting.cycleResults.some((record) => record.reviewInvocation === 13) ||
+        accounting.reviewExecutionFailures?.some((failure) => failure.reviewInvocation === 13) ||
+        accounting.reconciledReviewReservations?.some((record) => record.reservedInvocation === 13)
+      ) {
+        return 'Reserved-review reconciliation state is not the exact expected Issue #76 reservation.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'review-reservation-reconciliation' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === 13 &&
+          candidate.reconciliationInvocation === 13 &&
+          candidate.reconciliationReason === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+          candidate.issue === '76' &&
+          candidate.headSha === headSha &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.authorizationSource === 'human-explicit' &&
+          candidate.humanDecision === 'reconcile-reserved-review' &&
+          !candidate.consumed,
+      );
+      if (!approval) {
+        return 'No matching unconsumed reserved-review reconciliation approval exists.';
+      }
+      const reconciledAt = new Date().toISOString();
+      const reconciliation = {
+        reconciliationId: randomUUID(),
+        approvalId: approval.id,
+        repository: targetRepository as 'Chasoso/tableau-ambient-analyst',
+        branch,
+        base,
+        headSha,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        reservedInvocation: 13,
+        status: 'RESERVED_NOT_STARTED' as const,
+        reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE' as const,
+        schemaFingerprint,
+        reconciledAt,
+      };
+      const next: ReviewAccounting = {
+        ...accounting,
+        pendingReview: undefined,
+        reconciledReviewReservations: [
+          ...(accounting.reconciledReviewReservations ?? []),
+          reconciliation,
+        ],
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: reconciledAt }
+          : candidate,
+      );
+      persistReviewReservationReconciliationTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+        approval.id,
+        statePreimageSha256,
+        approvalPreimageSha256,
+      );
+      return next;
+    });
+  } catch (error) {
+    void error;
+    return 'Could not persist reserved-review reconciliation; human recovery is required.';
+  }
+}
+
 type ReviewerFailureRecoveryPrerequisiteCheck = (cwd: string) => string | undefined;
 
 function reviewerFailureState(accounting: ReviewAccounting):
@@ -3368,6 +3506,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'reviewExecutionFailures',
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
+    'reconciledReviewReservations',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -3427,7 +3566,20 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
           state.reviewerFailureRecoveryHistory.map(
             (record) => (record as Record<string, unknown>).approvalId,
           ),
-        ).size !== state.reviewerFailureRecoveryHistory.length))
+        ).size !== state.reviewerFailureRecoveryHistory.length)) ||
+    (state.reconciledReviewReservations !== undefined &&
+      (!Array.isArray(state.reconciledReviewReservations) ||
+        !state.reconciledReviewReservations.every(isReconciledReviewReservation) ||
+        new Set(
+          state.reconciledReviewReservations.map(
+            (record) => (record as Record<string, unknown>).reconciliationId,
+          ),
+        ).size !== state.reconciledReviewReservations.length ||
+        new Set(
+          state.reconciledReviewReservations.map(
+            (record) => (record as Record<string, unknown>).reservedInvocation,
+          ),
+        ).size !== state.reconciledReviewReservations.length))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
@@ -3488,6 +3640,9 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     ...cycleResults.map((record) => record.reviewInvocation),
     ...parsedFailures.map((failure) => failure.reviewInvocation),
     ...(pendingReview ? [pendingReview.reviewInvocation] : []),
+    ...(state.reconciledReviewReservations ?? []).map(
+      (record) => (record as { reservedInvocation: number }).reservedInvocation,
+    ),
   ]);
   const explicitIncompleteEvidence =
     state.terminationEvidence !== undefined && isCurrentTerminationEvidenceConsistent(state);
@@ -3570,6 +3725,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       : {
           reviewerFailureRecoveryHistory: state.reviewerFailureRecoveryHistory as NonNullable<
             ReviewAccounting['reviewerFailureRecoveryHistory']
+          >,
+        }),
+    ...(state.reconciledReviewReservations === undefined
+      ? {}
+      : {
+          reconciledReviewReservations: state.reconciledReviewReservations as NonNullable<
+            ReviewAccounting['reconciledReviewReservations']
           >,
         }),
   };
@@ -4166,6 +4328,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'failedReviewInvocation',
     'failedReviewKind',
     'humanDecision',
+    'reconciliationInvocation',
+    'reconciliationReason',
     'issue',
   ]);
   if (
@@ -4174,7 +4338,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     !(
       approval.approvalType === 'review-limit-resume' ||
       approval.approvalType === 'review-termination-recovery' ||
-      approval.approvalType === 'reviewer-failure-recovery'
+      approval.approvalType === 'reviewer-failure-recovery' ||
+      approval.approvalType === 'review-reservation-reconciliation'
     ) ||
     approval.targetRepository !== targetRepository ||
     typeof approval.branch !== 'string' ||
@@ -4226,6 +4391,26 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
         approval.humanDecision as (typeof reviewerFailureRecoveryHumanDecisions)[number],
       ) &&
       approval.issue === undefined
+    );
+  }
+  if (approval.approvalType === 'review-reservation-reconciliation') {
+    return (
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      typeof approval.humanDecision === 'string' &&
+      reviewReservationReconciliationHumanDecisions.includes(
+        approval.humanDecision as (typeof reviewReservationReconciliationHumanDecisions)[number],
+      ) &&
+      approval.reconciliationInvocation === 13 &&
+      approval.reconciliationReason === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+      approval.issue === '76' &&
+      approval.branch === 'feat/issue-76' &&
+      approval.base === 'main'
     );
   }
   return (
@@ -4300,6 +4485,43 @@ function isReviewerFailureRecoveryAudit(value: unknown): boolean {
     isReviewerFailureRecovery(
       Object.fromEntries(Object.entries(audit).filter(([key]) => key !== 'archivedAt')),
     )
+  );
+}
+
+function isReconciledReviewReservation(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'reconciliationId',
+    'approvalId',
+    'repository',
+    'branch',
+    'base',
+    'headSha',
+    'reviewEpoch',
+    'reservedInvocation',
+    'status',
+    'reasonCode',
+    'schemaFingerprint',
+    'reconciledAt',
+  ]);
+  return (
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    typeof record.reconciliationId === 'string' &&
+    typeof record.approvalId === 'string' &&
+    record.repository === targetRepository &&
+    typeof record.branch === 'string' &&
+    typeof record.base === 'string' &&
+    /^[a-f0-9]{40}$/.test(record.headSha as string) &&
+    Number.isInteger(record.reviewEpoch) &&
+    (record.reviewEpoch as number) >= 1 &&
+    Number.isInteger(record.reservedInvocation) &&
+    (record.reservedInvocation as number) >= 1 &&
+    (record.reservedInvocation as number) <= maxReviewInvocations &&
+    record.status === 'RESERVED_NOT_STARTED' &&
+    record.reasonCode === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+    /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
+    typeof record.reconciledAt === 'string'
   );
 }
 
@@ -4433,6 +4655,7 @@ function readReviewAccountingAtPathUnsafe(
       base,
     );
     reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewReservationReconciliationApprovalStateIsConsistent(statePath, branch, base, accounting);
     return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
@@ -4525,6 +4748,43 @@ function reviewerFailureRecoveryApprovalStateIsConsistent(
   }
 }
 
+function reviewReservationReconciliationApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const reconciliations = accounting.reconciledReviewReservations ?? [];
+  if (reconciliations.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const reconciliation of reconciliations) {
+    const approval = approvals.find((candidate) => candidate.id === reconciliation.approvalId);
+    if (
+      !approval ||
+      approval.approvalType !== 'review-reservation-reconciliation' ||
+      approval.targetRepository !== targetRepository ||
+      approval.branch !== branch ||
+      approval.base !== base ||
+      approval.reviewEpoch !== reconciliation.reviewEpoch ||
+      approval.exhaustedReviewInvocationCount !== reconciliation.reservedInvocation ||
+      approval.reconciliationInvocation !== reconciliation.reservedInvocation ||
+      approval.reconciliationReason !== reconciliation.reasonCode ||
+      approval.issue !== '76' ||
+      approval.headSha !== reconciliation.headSha ||
+      approval.schemaFingerprint !== reconciliation.schemaFingerprint ||
+      approval.authorizationSource !== 'human-explicit' ||
+      approval.humanDecision !== 'reconcile-reserved-review' ||
+      approval.consumed !== true ||
+      approval.consumedAt !== reconciliation.reconciledAt
+    ) {
+      throw new Error(
+        'Reserved-review reconciliation approval state is inconsistent; human recovery is required.',
+      );
+    }
+  }
+}
+
 function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResumeApproval[]): void {
   approvals.forEach((approval) => {
     if (!isReviewResumeApproval(approval)) {
@@ -4558,6 +4818,18 @@ type ReviewerFailureRecoveryTransaction = {
   approvalState: unknown;
 };
 
+type ReviewReservationReconciliationTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  approvalId: string;
+  statePreimageSha256: string;
+  approvalPreimageSha256: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
 function writeJsonAtomically(path: string, value: unknown): void {
   const temporaryPath = `${path}.tmp-${process.pid}`;
   writeFileSync(temporaryPath, JSON.stringify(value), 'utf8');
@@ -4579,6 +4851,10 @@ function resumeTransactionPath(statePath: string): string {
 
 function reviewerFailureRecoveryTransactionPath(statePath: string): string {
   return `${statePath}${reviewerFailureRecoveryTransactionSuffix}`;
+}
+
+function reviewReservationReconciliationTransactionPath(statePath: string): string {
+  return `${statePath}${reviewReservationReconciliationTransactionSuffix}`;
 }
 
 function canonicalResumeApprovalPath(statePath: string): string {
@@ -4723,6 +4999,170 @@ function writeAccountingAndApprovalsAtomically(
   writeJsonAtomically(statePath, accountingState);
   writeJsonAtomically(approvalPath, approvalState);
   unlinkSync(transactionPath);
+}
+
+function persistReviewReservationReconciliationTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+  approvalId: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+): void {
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const approvalState = { approvals };
+  const transactionPath = reviewReservationReconciliationTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    accountingState,
+    approvalState,
+  } satisfies ReviewReservationReconciliationTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function recoverPendingReviewReservationReconciliationTransaction(statePath: string): void {
+  const transactionPath = reviewReservationReconciliationTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewReservationReconciliationTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    typeof transaction.branch !== 'string' ||
+    typeof transaction.base !== 'string' ||
+    typeof transaction.approvalId !== 'string' ||
+    typeof transaction.statePreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.statePreimageSha256) ||
+    typeof transaction.approvalPreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction is invalid; human recovery is required.',
+    );
+  }
+  validateReviewReservationReconciliationTransactionSemantics(
+    transaction as ReviewReservationReconciliationTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Reserved-review reconciliation encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
+  unlinkSync(transactionPath);
+}
+
+function validateReviewReservationReconciliationTransactionSemantics(
+  transaction: ReviewReservationReconciliationTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const record = entry?.accounting.reconciledReviewReservations?.find(
+    (candidate) => candidate.approvalId === transaction.approvalId,
+  );
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  if (!entry || !record || !approval) {
+    throw new Error(
+      'Reserved-review reconciliation transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    record.repository !== targetRepository ||
+    record.branch !== transaction.branch ||
+    record.base !== transaction.base ||
+    record.reservedInvocation !== 13 ||
+    record.status !== 'RESERVED_NOT_STARTED' ||
+    record.reasonCode !== 'PRE_REVIEW_ACCOUNTING_FAILURE' ||
+    approval.approvalType !== 'review-reservation-reconciliation' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== record.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== 13 ||
+    approval.reconciliationInvocation !== 13 ||
+    approval.reconciliationReason !== 'PRE_REVIEW_ACCOUNTING_FAILURE' ||
+    approval.issue !== '76' ||
+    approval.headSha !== record.headSha ||
+    approval.schemaFingerprint !== record.schemaFingerprint ||
+    approval.humanDecision !== 'reconcile-reserved-review' ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.consumed !== true ||
+    approval.consumedAt !== record.reconciledAt
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction semantics are invalid; human recovery is required.',
+    );
+  }
 }
 
 function recoverPendingReviewerFailureRecoveryTransaction(statePath: string): void {
@@ -4940,6 +5380,7 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
     }
     recoverPendingResumeTransaction(statePath);
     recoverPendingReviewerFailureRecoveryTransaction(statePath);
+    recoverPendingReviewReservationReconciliationTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {

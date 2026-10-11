@@ -36,6 +36,298 @@ vi.mock('node:child_process', async () => {
   };
 });
 
+describe('Issue #76 reserved-review reconciliation', () => {
+  it('reconciles only the exact isolated invocation 13 reservation and preserves count/history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const reconciled = reconcileReservedReviewAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        createHash('sha256')
+          .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+          .digest('hex'),
+        fixture.statePreimageSha256,
+        fixture.approvalPreimageSha256,
+        workspace.cwd,
+      );
+
+      expect(reconciled).not.toBeTypeOf('string');
+      if (typeof reconciled === 'string') return;
+      expect(reconciled.reviewInvocationCount).toBe(13);
+      expect(reconciled.pendingReview).toBeUndefined();
+      expect(reconciled.reviewExecutionFailures?.[0]).toMatchObject({
+        reviewInvocation: 1,
+        evidenceVersion: 'reviewer-failure-v1',
+      });
+      expect(reconciled.reconciledReviewReservations).toMatchObject([
+        {
+          reservedInvocation: 13,
+          status: 'RESERVED_NOT_STARTED',
+          approvalId: 'reconcile-approval-76',
+          headSha: workspace.headSha,
+        },
+      ]);
+
+      const persisted = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(persisted.reviewInvocationCount).toBe(13);
+      expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals[0]).toMatchObject({
+        id: 'reconcile-approval-76',
+        consumed: true,
+      });
+      const stateAfter = readFileSync(workspace.statePath, 'utf8');
+      const approvalAfter = readFileSync(workspace.approvalPath, 'utf8');
+
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({
+          approvals: JSON.parse(approvalAfter).approvals.map((approval: Record<string, unknown>) =>
+            approval.id === 'reconcile-approval-76'
+              ? { ...approval, consumedAt: '2026-01-01T00:04:00.000Z' }
+              : approval,
+          ),
+        }),
+        'utf8',
+      );
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toThrow(/invalid|human recovery/i);
+      writeFileSync(workspace.approvalPath, approvalAfter, 'utf8');
+
+      expect(
+        reconcileReservedReviewAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          reconciled.reconciledReviewReservations![0]!.schemaFingerprint,
+          createHash('sha256').update(stateAfter).digest('hex'),
+          createHash('sha256').update(approvalAfter).digest('hex'),
+          workspace.cwd,
+        ),
+      ).toMatch(/exact expected|approval/i);
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateAfter);
+      expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(approvalAfter);
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toBeUndefined();
+      expect(
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toMatchObject({
+        reviewInvocationCount: 14,
+        pendingReview: { reviewInvocation: 14, status: 'RESERVED' },
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['wrong branch', { branch: 'feat/other' }],
+    ['wrong base', { base: 'develop' }],
+    ['wrong HEAD', { head: '0'.repeat(40) }],
+    ['wrong schema fingerprint', { schema: '0'.repeat(64) }],
+    ['wrong state preimage', { statePreimage: '0'.repeat(64) }],
+    ['wrong approval preimage', { approvalPreimage: '0'.repeat(64) }],
+  ])('fails closed for %s without changing the isolated fixture', (_label, mismatch) => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-mismatch-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const beforeState = readFileSync(workspace.statePath, 'utf8');
+      const beforeApproval = readFileSync(workspace.approvalPath, 'utf8');
+      const schema =
+        'schema' in mismatch
+          ? mismatch.schema
+          : createHash('sha256')
+              .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+              .digest('hex');
+      const result = reconcileReservedReviewAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'branch' in mismatch ? mismatch.branch : 'feat/issue-76',
+        'base' in mismatch ? mismatch.base : 'main',
+        'head' in mismatch ? mismatch.head : workspace.headSha,
+        schema,
+        'statePreimage' in mismatch ? mismatch.statePreimage : fixture.statePreimageSha256,
+        'approvalPreimage' in mismatch ? mismatch.approvalPreimage : fixture.approvalPreimageSha256,
+        workspace.cwd,
+      );
+      expect(result).toBeTypeOf('string');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(beforeState);
+      expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(beforeApproval);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing approval', []],
+    ['already consumed approval', [{ consumed: true, consumedAt: '2026-01-01T00:03:00.000Z' }]],
+  ])('rejects %s without mutating the reservation', (_label, approvalChange) => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-approval-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const approvals =
+        approvalChange.length === 0
+          ? []
+          : [{ ...fixture.approval, ...approvalChange[0] }, fixture.priorRecoveryApproval];
+      writeFileSync(workspace.approvalPath, JSON.stringify({ approvals }), 'utf8');
+      const beforeState = readFileSync(workspace.statePath, 'utf8');
+      const beforeApproval = readFileSync(workspace.approvalPath, 'utf8');
+      expect(
+        reconcileReservedReviewAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          fixture.statePreimageSha256,
+          createHash('sha256').update(beforeApproval).digest('hex'),
+          workspace.cwd,
+        ),
+      ).toBeTypeOf('string');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(beforeState);
+      expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(beforeApproval);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers an isolated partial transaction on reload and rejects an external change', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-restart-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+      const reconciliation = {
+        reconciliationId: 'reconciliation-restart-76',
+        approvalId: fixture.approval.id,
+        repository: 'Chasoso/tableau-ambient-analyst',
+        branch: 'feat/issue-76',
+        base: 'main',
+        headSha: workspace.headSha,
+        reviewEpoch: 1,
+        reservedInvocation: 13,
+        status: 'RESERVED_NOT_STARTED',
+        reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+        schemaFingerprint,
+        reconciledAt: '2026-01-01T00:01:00.000Z',
+      };
+      const postAccounting = {
+        ...fixture.accounting,
+        pendingReview: undefined,
+        reconciledReviewReservations: [reconciliation],
+      };
+      const postApproval = {
+        ...fixture.approval,
+        consumed: true,
+        consumedAt: reconciliation.reconciledAt,
+      };
+      const transactionPath = `${workspace.statePath}.review-reservation-reconciliation-transaction`;
+      writeFileSync(
+        transactionPath,
+        JSON.stringify({
+          statePath: workspace.statePath,
+          approvalPath: workspace.approvalPath,
+          branch: 'feat/issue-76',
+          base: 'main',
+          approvalId: fixture.approval.id,
+          statePreimageSha256: fixture.statePreimageSha256,
+          approvalPreimageSha256: fixture.approvalPreimageSha256,
+          accountingState: {
+            entries: [{ branch: 'feat/issue-76', base: 'main', ...postAccounting }],
+          },
+          approvalState: {
+            approvals: [postApproval, fixture.priorRecoveryApproval],
+          },
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({ entries: [{ branch: 'feat/issue-76', base: 'main', ...postAccounting }] }),
+        'utf8',
+      );
+      const recovered = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(recovered.pendingReview).toBeUndefined();
+      expect(recovered.reconciledReviewReservations?.[0]?.reconciliationId).toBe(
+        'reconciliation-restart-76',
+      );
+      expect(existsSync(transactionPath)).toBe(false);
+
+      const secondDirectory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-external-'));
+      try {
+        const secondWorkspace = createCanonicalIndependentReviewWorkspace(
+          secondDirectory,
+          'exit 0',
+        );
+        const secondFixture = prepareReservedReviewReconciliationFixture(secondWorkspace);
+        const secondReconciliation = {
+          reconciliationId: 'reconciliation-external-76',
+          approvalId: secondFixture.approval.id,
+          repository: 'Chasoso/tableau-ambient-analyst',
+          branch: 'feat/issue-76',
+          base: 'main',
+          headSha: secondWorkspace.headSha,
+          reviewEpoch: 1,
+          reservedInvocation: 13,
+          status: 'RESERVED_NOT_STARTED',
+          reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+          schemaFingerprint: secondWorkspace.schemaFingerprint,
+          reconciledAt: '2026-01-01T00:02:00.000Z',
+        };
+        const secondPostAccounting = {
+          ...secondFixture.accounting,
+          pendingReview: undefined,
+          reconciledReviewReservations: [secondReconciliation],
+        };
+        const secondPostApproval = {
+          ...secondFixture.approval,
+          consumed: true,
+          consumedAt: secondReconciliation.reconciledAt,
+        };
+        writeFileSync(
+          `${secondWorkspace.statePath}.review-reservation-reconciliation-transaction`,
+          JSON.stringify({
+            statePath: secondWorkspace.statePath,
+            approvalPath: secondWorkspace.approvalPath,
+            branch: 'feat/issue-76',
+            base: 'main',
+            approvalId: secondFixture.approval.id,
+            statePreimageSha256: secondFixture.statePreimageSha256,
+            approvalPreimageSha256: secondFixture.approvalPreimageSha256,
+            accountingState: {
+              entries: [{ branch: 'feat/issue-76', base: 'main', ...secondPostAccounting }],
+            },
+            approvalState: {
+              approvals: [secondPostApproval, secondFixture.priorRecoveryApproval],
+            },
+          }),
+          'utf8',
+        );
+        writeFileSync(secondWorkspace.statePath, 'external-change', 'utf8');
+        expect(() =>
+          readReviewAccountingAtPath(secondWorkspace.statePath, 'feat/issue-76', 'main'),
+        ).toThrow(/invalid|human recovery/i);
+      } finally {
+        rmSync(secondDirectory, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 import {
   canOpenPullRequest,
   canContinueAutoFix,
@@ -61,6 +353,7 @@ import {
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
+  reconcileReservedReviewAtPath,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
@@ -160,6 +453,8 @@ function createCanonicalIndependentReviewWorkspace(
   binDirectory: string;
   headSha: string;
   promptPath: string;
+  approvalPath: string;
+  schemaFingerprint: string;
 } {
   const worktreePath = join(directory, '.worktrees', 'issue-76');
   const binDirectory = join(directory, 'bin');
@@ -230,7 +525,25 @@ function createCanonicalIndependentReviewWorkspace(
       encoding: 'utf8',
     }).trim(),
   );
-  return { cwd: realWorktreePath, statePath, binDirectory, headSha, promptPath };
+  const approvalPath = resolve(
+    realWorktreePath,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  const schemaFingerprint = createHash('sha256')
+    .update(readFileSync(join(realWorktreePath, 'src/review/review-result.schema.json')))
+    .digest('hex');
+  return {
+    cwd: realWorktreePath,
+    statePath,
+    binDirectory,
+    headSha,
+    promptPath,
+    approvalPath,
+    schemaFingerprint,
+  };
 }
 
 type JsonSchemaNode = {
@@ -337,6 +650,117 @@ function completedReviewCycles(count: number) {
     generalizedRules: [],
     repositoryChanged: false,
   }));
+}
+
+function prepareReservedReviewReconciliationFixture(workspace: {
+  statePath: string;
+  approvalPath: string;
+  headSha: string;
+  schemaFingerprint: string;
+}) {
+  const accounting: ReviewAccounting = {
+    legacyReviewInvocations: 0,
+    legacyAutoFixCycles: 0,
+    accountingEpochStart: 'issue-29-accounting-v2',
+    reviewInvocationCount: 13,
+    autoFixCycleCount: 0,
+    generalizedRuleHistory: [],
+    consecutiveRepeatCount: 0,
+    lastFixChangedRepository: null,
+    cycleResults: Array.from({ length: 11 }, (_, index) => ({
+      reviewInvocation: index + 2,
+      result: 'PASS',
+      maintainability: 'NO_DRIFT',
+      classifications: [],
+      generalizedRules: [],
+      repositoryChanged: false,
+    })),
+    terminationHistory: [],
+    reviewEpoch: 1,
+    pendingReview: { reviewInvocation: 13, status: 'RESERVED' },
+    reviewExecutionFailures: [
+      {
+        reviewInvocation: 1,
+        kind: 'NONZERO_EXIT',
+        diagnostic: 'reviewer subprocess exited with a non-zero status',
+        evidenceVersion: 'reviewer-failure-v1',
+        reviewEpoch: 1,
+        headSha: workspace.headSha,
+        schemaFingerprint: workspace.schemaFingerprint,
+      },
+    ],
+  };
+  const approval = {
+    id: 'reconcile-approval-76',
+    approvalType: 'review-reservation-reconciliation',
+    targetRepository: 'Chasoso/tableau-ambient-analyst',
+    branch: 'feat/issue-76',
+    base: 'main',
+    reviewEpoch: 1,
+    exhaustedReviewInvocationCount: 13,
+    approvedAt: '2026-01-01T00:00:00.000Z',
+    authorizationSource: 'human-explicit',
+    consumed: false,
+    headSha: workspace.headSha,
+    schemaFingerprint: workspace.schemaFingerprint,
+    humanDecision: 'reconcile-reserved-review',
+    reconciliationInvocation: 13,
+    reconciliationReason: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+    issue: '76',
+  };
+  const priorRecoveryApproval = {
+    id: 'prior-reviewer-failure-recovery-76',
+    approvalType: 'reviewer-failure-recovery',
+    targetRepository: 'Chasoso/tableau-ambient-analyst',
+    branch: 'feat/issue-76',
+    base: 'main',
+    reviewEpoch: 1,
+    exhaustedReviewInvocationCount: 1,
+    approvedAt: '2026-01-01T00:00:00.000Z',
+    authorizationSource: 'human-explicit',
+    consumed: true,
+    consumedAt: '2026-01-01T00:00:01.000Z',
+    headSha: workspace.headSha,
+    schemaFingerprint: workspace.schemaFingerprint,
+    originalTerminationReason: 'REVIEWER_FAILURE',
+    failedReviewInvocation: 1,
+    failedReviewKind: 'NONZERO_EXIT',
+    humanDecision: 'retry-review',
+  };
+  accounting.reviewerFailureRecoveryHistory = [
+    {
+      approvalId: priorRecoveryApproval.id,
+      authorizedAt: priorRecoveryApproval.consumedAt,
+      archivedAt: '2026-01-01T00:00:02.000Z',
+      authorizationSource: 'human-explicit',
+      reviewEpoch: 1,
+      failedReviewInvocation: 1,
+      failureKind: 'NONZERO_EXIT',
+      headSha: workspace.headSha,
+      schemaFingerprint: workspace.schemaFingerprint,
+    },
+  ];
+  writeFileSync(
+    workspace.statePath,
+    JSON.stringify({ entries: [{ branch: 'feat/issue-76', base: 'main', ...accounting }] }),
+    'utf8',
+  );
+  writeFileSync(
+    workspace.approvalPath,
+    JSON.stringify({ approvals: [approval, priorRecoveryApproval] }),
+    'utf8',
+  );
+  return {
+    accounting,
+    approval,
+    priorRecoveryApproval,
+    statePreimageSha256: createHash('sha256')
+      .update(readFileSync(workspace.statePath))
+      .digest('hex'),
+    approvalPreimageSha256: createHash('sha256')
+      .update(readFileSync(workspace.approvalPath))
+      .digest('hex'),
+  };
 }
 
 describe('independent review gate contract', () => {
