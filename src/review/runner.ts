@@ -2761,6 +2761,159 @@ export function authorizeReviewerFailureRecoveryAtPath(
   }
 }
 
+/** Create the dedicated single-use approval for Issue #76 reservation reconciliation. */
+export function authorizeReviewReservationReconciliationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Reserved-review reconciliation authorization is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76')
+  ) {
+    return 'Reserved-review reconciliation authorization paths must resolve to the canonical Issue #76 worktree.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reserved-review reconciliation authorization HEAD does not match the current Git HEAD.';
+  }
+  if (
+    !/^[a-f0-9]{40}$/.test(reportedReservationHeadSha) ||
+    reportedReservationHeadSha === headSha
+  ) {
+    return 'Reserved-review reconciliation authorization must record a distinct reported reservation HEAD.';
+  }
+  if (!isIssue76HumanDecisionUrl(humanDecisionUrl)) {
+    return 'Reserved-review reconciliation authorization requires the canonical Issue #76 Human Decision URL.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  if (
+    !/^[a-f0-9]{64}$/.test(statePreimageSha256) ||
+    !/^[a-f0-9]{64}$/.test(approvalPreimageSha256)
+  ) {
+    return 'Reserved-review reconciliation authorization preimages are invalid.';
+  }
+  try {
+    return withAccountingLock(statePath, () => {
+      if (
+        fileFingerprint(statePath) !== statePreimageSha256 ||
+        fileFingerprint(approvalPath) !== approvalPreimageSha256
+      ) {
+        return 'Reserved-review reconciliation authorization preimage does not match current state.';
+      }
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (
+        accounting.reviewInvocationCount !== 13 ||
+        accounting.pendingReview?.reviewInvocation !== 13 ||
+        accounting.pendingReview.status !== 'RESERVED' ||
+        accounting.terminationReason !== undefined ||
+        accounting.cycleResults.some((record) => record.reviewInvocation === 13) ||
+        accounting.reviewExecutionFailures?.some((failure) => failure.reviewInvocation === 13) ||
+        accounting.reconciledReviewReservations?.some((record) => record.reservedInvocation === 13)
+      ) {
+        return 'Reserved-review reconciliation authorization requires the exact Issue #76 reservation state.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.targetRepository === targetRepository &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review approval already exists for this epoch.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'review-reservation-reconciliation',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: 13,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        schemaFingerprint,
+        humanDecision: 'reconcile-reserved-review',
+        reconciliationInvocation: 13,
+        reconciliationReason: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+        reportedReservationHeadSha,
+        reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+        humanDecisionUrl,
+        issue: '76',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch {
+    return 'Could not persist reserved-review reconciliation approval; human recovery is required.';
+  }
+}
+
+export function authorizeReviewReservationReconciliation(
+  cwd: string,
+  base: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reserved-review reconciliation.';
+  }
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  const headSha = readHeadSha(cwd);
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!statePreimageSha256 || !approvalPreimageSha256) {
+    return 'Could not fingerprint the canonical review state files.';
+  }
+  return authorizeReviewReservationReconciliationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+    humanDecisionUrl,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    cwd,
+  );
+}
+
 /** Consume a matching reviewer-failure approval without resetting accounting. */
 export function resumeReviewerFailureRecoveryAtPath(
   statePath: string,

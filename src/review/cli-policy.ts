@@ -2,6 +2,7 @@ const authorizationFlags = [
   '--authorize-resume-after-limit',
   '--authorize-termination-recovery',
   '--authorize-reviewer-failure-recovery',
+  '--authorize-reservation-reconciliation',
 ] as const;
 
 const resumeFlags = [

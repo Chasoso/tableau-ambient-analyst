@@ -433,6 +433,34 @@ Codex must not create or consume this approval without a separate explicit
 Human Decision. Missing approval, changed HEAD or Schema, failed deterministic
 validation, malformed evidence, and approval reuse remain fail-closed.
 
+Issue #76's reserved invocation 13 has a separate, one-time
+`review-reservation-reconciliation` approval. Its scope is fixed to Issue #76,
+invocation 13, the canonical `feat/issue-76`/`main` workspace, the current
+HEAD, review epoch, Schema fingerprint, and the Human Decision recorded in
+[the Issue #76 comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579).
+The approval records the reported reservation HEAD as
+`REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE` and the execution evidence as
+`NO_DURABLE_EXECUTION_EVIDENCE`; it does not claim that the reviewer was
+definitively never started. Issuing this approval and consuming it during
+reconciliation are separate operations. The dedicated command is:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-reservation-reconciliation \
+  --confirm-human-authorization \
+  --reported-reservation-head <reported-sha> \
+  --human-decision-url <issue-76-comment-url> \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The command only issues an unconsumed approval; it does not reconcile the
+reservation or reserve invocation 14. Missing or changed accounting preimages,
+an existing unconsumed approval, changed HEAD or Schema, an invalid Human
+Decision URL, and any non-exact invocation-13 reservation fail closed. The
+existing reviewer-failure approval type is never reused, and the accounting
+counter and prior history are preserved.
+
 If a future human-authorized recovery is applicable to the Issue #73 shape, the
 merged runner fix must first be made available in the canonical
 `.worktrees/issue-73` checkout through safe branch/base reconciliation. The

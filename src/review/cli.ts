@@ -9,6 +9,7 @@ import {
   resumeReviewTerminationRecovery,
   authorizeReviewerFailureRecovery,
   resumeReviewerFailureRecovery,
+  authorizeReviewReservationReconciliation,
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
@@ -43,6 +44,9 @@ const resumeAfterReviewerFailure = rawArguments.includes('--resume-reviewer-fail
 const authorizeAfterReviewerFailure = rawArguments.includes(
   '--authorize-reviewer-failure-recovery',
 );
+const authorizeReservationReconciliation = rawArguments.includes(
+  '--authorize-reservation-reconciliation',
+);
 const existingPullRequest = argumentsByName.get('update-pr');
 if (hasAuthorizationResumeConflict(rawArguments)) {
   console.error('Authorization and resume are separate commands.');
@@ -65,6 +69,10 @@ if (hasAuthorizationResumeConflict(rawArguments)) {
   if (typeof resumeResult === 'string') process.exitCode = 1;
 } else if (authorizeAfterReviewerFailure) {
   const authorizationResult = authorizeReviewerFailure(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (authorizeReservationReconciliation) {
+  const authorizationResult = authorizeReservation(input);
   console.log(JSON.stringify(authorizationResult, null, 2));
   if (typeof authorizationResult === 'string') process.exitCode = 1;
 } else if (resumeAfterReviewerFailure) {
@@ -168,6 +176,25 @@ function resumeReviewerFailure(reviewInput: IndependentReviewInput) {
   const branchError = validateIssueBranch(reviewInput);
   if (branchError) return branchError;
   return resumeReviewerFailureRecovery(reviewInput.cwd, reviewInput.base);
+}
+
+function authorizeReservation(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  const reportedHead = argumentsByName.get('reported-reservation-head');
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!reportedHead || !decisionUrl) {
+    return 'Reserved-review reconciliation requires --reported-reservation-head and --human-decision-url.';
+  }
+  return authorizeReviewReservationReconciliation(
+    reviewInput.cwd,
+    reviewInput.base,
+    reportedHead,
+    decisionUrl,
+  );
 }
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {

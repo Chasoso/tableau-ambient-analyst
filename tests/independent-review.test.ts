@@ -37,6 +37,139 @@ vi.mock('node:child_process', async () => {
 });
 
 describe('Issue #76 reserved-review reconciliation', () => {
+  it('issues the dedicated approval and completes reconciliation through isolated files', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-approval-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({ approvals: [fixture.priorRecoveryApproval] }),
+        'utf8',
+      );
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+      const approvalBefore = createHash('sha256')
+        .update(readFileSync(workspace.approvalPath))
+        .digest('hex');
+      const issued = authorizeReviewReservationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        schemaFingerprint,
+        reportedReservationHead,
+        humanDecisionUrl,
+        fixture.statePreimageSha256,
+        approvalBefore,
+        workspace.cwd,
+      );
+
+      expect(issued).toMatchObject({
+        approvalType: 'review-reservation-reconciliation',
+        consumed: false,
+        exhaustedReviewInvocationCount: 13,
+        reconciliationInvocation: 13,
+        headSha: workspace.headSha,
+        schemaFingerprint,
+        humanDecisionUrl,
+      });
+      expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toHaveLength(2);
+
+      const duplicate = authorizeReviewReservationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        schemaFingerprint,
+        reportedReservationHead,
+        humanDecisionUrl,
+        fixture.statePreimageSha256,
+        createHash('sha256').update(readFileSync(workspace.approvalPath)).digest('hex'),
+        workspace.cwd,
+      );
+      expect(duplicate).toMatch(/unconsumed review approval already exists/i);
+
+      const approvalPreimage = createHash('sha256')
+        .update(readFileSync(workspace.approvalPath))
+        .digest('hex');
+      const reconciled = reconcileReservedReviewAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        schemaFingerprint,
+        reportedReservationHead,
+        humanDecisionUrl,
+        fixture.statePreimageSha256,
+        approvalPreimage,
+        workspace.cwd,
+      );
+      expect(reconciled).not.toBeTypeOf('string');
+      if (typeof reconciled === 'string') return;
+      expect(reconciled.reviewInvocationCount).toBe(13);
+      expect(reconciled.pendingReview).toBeUndefined();
+      expect(reconciled.reconciledReviewReservations).toHaveLength(1);
+      const approvals = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals;
+      expect(approvals).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: fixture.priorRecoveryApproval.id,
+            consumed: true,
+          }),
+          expect.objectContaining({
+            approvalType: 'review-reservation-reconciliation',
+            consumed: true,
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects issuance when the Human Decision binding changes', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-approval-reject-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({ approvals: [fixture.priorRecoveryApproval] }),
+        'utf8',
+      );
+      const schemaFingerprint = createHash('sha256')
+        .update(readFileSync(join(workspace.cwd, 'src/review/review-result.schema.json')))
+        .digest('hex');
+      const approvalPreimage = createHash('sha256')
+        .update(readFileSync(workspace.approvalPath))
+        .digest('hex');
+      const result = authorizeReviewReservationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        schemaFingerprint,
+        reportedReservationHead,
+        'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-not-canonical',
+        fixture.statePreimageSha256,
+        approvalPreimage,
+        workspace.cwd,
+      );
+      expect(result).toMatch(/canonical Issue #76 Human Decision URL/i);
+      expect(JSON.parse(readFileSync(workspace.approvalPath, 'utf8')).approvals).toEqual([
+        fixture.priorRecoveryApproval,
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reconciles only the exact isolated invocation 13 reservation and preserves count/history', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-76-reconciliation-'));
     try {
@@ -383,6 +516,7 @@ import {
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
+  authorizeReviewReservationReconciliationAtPath,
   reconcileReservedReviewAtPath,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
@@ -811,6 +945,11 @@ describe('independent review gate contract', () => {
     [
       'cross-family authorization and resume modes',
       ['--authorize-reviewer-failure-recovery', '--resume-after-limit'],
+      true,
+    ],
+    [
+      'reservation reconciliation authorization and resume modes',
+      ['--authorize-reservation-reconciliation', '--resume-reviewer-failure-recovery'],
       true,
     ],
     ['authorization only', ['--authorize-reviewer-failure-recovery'], false],
