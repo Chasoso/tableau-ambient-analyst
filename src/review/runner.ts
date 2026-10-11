@@ -5986,7 +5986,7 @@ function runDeterministicValidation(cwd: string): { passed: boolean } {
   const result = spawnSync('npm', ['run', 'validate'], {
     cwd,
     env: reviewerEnvironment(),
-    stdio: 'inherit',
+    stdio: 'ignore',
   });
 
   return { passed: result.status === 0 };
