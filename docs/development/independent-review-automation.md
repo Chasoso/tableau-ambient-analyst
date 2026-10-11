@@ -442,6 +442,10 @@ compatibility-read format under its existing contract. Legitimate legacy
 records without an `evidenceVersion` are read only when the existing explicit
 compatibility conditions accept them. Old records are never automatically
 migrated, completed, or rewritten. States with
+an invocation count at or above `MAX_REVIEW_INVOCATIONS` are also not eligible
+for this recovery, because no authorized continuation can reserve another
+invocation within the current epoch; review-limit terminal handling remains a
+separate operation. States with
 `pendingReview`, incomplete failure evidence, legacy accounting shapes, or
 inferred history are not recoverable; they remain fail-closed for explicit
 human handling. Existing consumed approval and recovery records remain readable

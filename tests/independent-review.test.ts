@@ -4784,6 +4784,131 @@ describe('review cycle state', () => {
     }
   });
 
+  it('keeps reviewer-failure recovery reachable below the limit and rejects it at the limit', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-limit-'));
+    const makeState = (
+      workspace: ReturnType<typeof createReviewerRecoveryWorkspace>,
+      count: number,
+    ) => ({
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: count,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: completedReviewCycles(count - 1),
+      terminationHistory: ['REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
+      reviewEpoch: 1,
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: count,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'redacted',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+    });
+
+    try {
+      const belowLimit = createReviewerRecoveryWorkspace(join(directory, 'below-limit'));
+      writeFileSync(belowLimit.statePath, JSON.stringify(makeState(belowLimit, 15)), 'utf8');
+      const belowLimitApproval = authorizeReviewerFailureRecoveryAtPath(
+        belowLimit.statePath,
+        belowLimit.approvalPath,
+        'feature/review',
+        'main',
+        belowLimit.headSha,
+        belowLimit.schemaFingerprint,
+        belowLimit.cwd,
+      );
+      expect(typeof belowLimitApproval).not.toBe('string');
+      if (typeof belowLimitApproval === 'string') return;
+      expect(belowLimitApproval.exhaustedReviewInvocationCount).toBe(15);
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          belowLimit.statePath,
+          belowLimit.approvalPath,
+          'feature/review',
+          'main',
+          belowLimit.headSha,
+          belowLimit.schemaFingerprint,
+          belowLimit.cwd,
+        ),
+      ).not.toBeTypeOf('string');
+
+      const atLimit = createReviewerRecoveryWorkspace(join(directory, 'at-limit'));
+      writeFileSync(atLimit.statePath, JSON.stringify(makeState(atLimit, 16)), 'utf8');
+      writeFileSync(atLimit.approvalPath, JSON.stringify({ approvals: [] }), 'utf8');
+      const stateBefore = readFileSync(atLimit.statePath, 'utf8');
+      const approvalsBefore = readFileSync(atLimit.approvalPath, 'utf8');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          atLimit.statePath,
+          atLimit.approvalPath,
+          'feature/review',
+          'main',
+          atLimit.headSha,
+          atLimit.schemaFingerprint,
+          atLimit.cwd,
+        ),
+      ).toContain('invocation limit');
+      expect(readFileSync(atLimit.statePath, 'utf8')).toBe(stateBefore);
+      expect(readFileSync(atLimit.approvalPath, 'utf8')).toBe(approvalsBefore);
+
+      writeFileSync(
+        atLimit.approvalPath,
+        JSON.stringify({
+          approvals: [
+            {
+              id: 'limit-reviewer-failure-approval',
+              approvalType: 'reviewer-failure-recovery',
+              targetRepository: 'Chasoso/tableau-ambient-analyst',
+              branch: 'feature/review',
+              base: 'main',
+              reviewEpoch: 1,
+              exhaustedReviewInvocationCount: 16,
+              approvedAt: '2026-01-01T00:00:00.000Z',
+              authorizationSource: 'human-explicit',
+              consumed: false,
+              headSha: atLimit.headSha,
+              originalTerminationReason: 'REVIEWER_FAILURE',
+              schemaFingerprint: atLimit.schemaFingerprint,
+              failedReviewInvocation: 16,
+              failedReviewKind: 'NONZERO_EXIT',
+              humanDecision: 'retry-review',
+            },
+          ],
+        }),
+        'utf8',
+      );
+      const approvalBeforeConsume = readFileSync(atLimit.approvalPath, 'utf8');
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          atLimit.statePath,
+          atLimit.approvalPath,
+          'feature/review',
+          'main',
+          atLimit.headSha,
+          atLimit.schemaFingerprint,
+          atLimit.cwd,
+        ),
+      ).toContain('invocation limit');
+      expect(readFileSync(atLimit.statePath, 'utf8')).toBe(stateBefore);
+      expect(readFileSync(atLimit.approvalPath, 'utf8')).toBe(approvalBeforeConsume);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(['short-head', 'A'.repeat(40), 'g'.repeat(40), undefined] as const)(
     'rejects reviewer recovery evidence with invalid HEAD %s without mutation',
     (headSha) => {

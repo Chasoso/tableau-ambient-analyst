@@ -2804,6 +2804,9 @@ export function authorizeReviewerFailureRecoveryAtPath(
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       const failureState = reviewerFailureState(accounting);
       if (typeof failureState === 'string') return failureState;
+      if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+        return 'Reviewer-failure recovery is unavailable after the review invocation limit.';
+      }
       if (
         failureState.headSha !== headSha ||
         failureState.schemaFingerprint !== schemaFingerprint ||
@@ -3088,6 +3091,9 @@ export function resumeReviewerFailureRecoveryAtPath(
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
       const failureState = reviewerFailureState(accounting);
       if (typeof failureState === 'string') return failureState;
+      if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+        return 'Reviewer-failure recovery is unavailable after the review invocation limit.';
+      }
       if (
         failureState.headSha !== headSha ||
         failureState.schemaFingerprint !== schemaFingerprint ||
