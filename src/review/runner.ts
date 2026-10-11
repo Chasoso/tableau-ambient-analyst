@@ -1471,7 +1471,7 @@ export function runReviewControlFlow(
   }
 
   const startError = dependencies.markReviewStarted(input.cwd, input.base);
-  if (startError) return reviewerInvocationFailure(startError, 'REVIEW', 'UNCERTAIN');
+  if (startError) return reviewerInvocationFailure(startError, 'PRE_REVIEW');
 
   const branch = dependencies.currentBranch(input.cwd);
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
@@ -3790,6 +3790,8 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     !isCurrentTerminationEvidenceConsistent(state) ||
     !isReviewEpochMetadataConsistent(state) ||
     (state.pendingReview !== undefined && !isPendingReview(state.pendingReview)) ||
+    (state.pendingReview !== undefined && state.terminationReason !== undefined) ||
+    (state.pendingReview !== undefined && state.reviewerFailureRecovery !== undefined) ||
     (state.reviewExecutionFailures !== undefined &&
       (!Array.isArray(state.reviewExecutionFailures) ||
         !state.reviewExecutionFailures.every(isReviewExecutionFailure) ||
@@ -4628,6 +4630,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.recoveryEvidence === undefined &&
       typeof approval.schemaFingerprint === 'string' &&
       /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      /^[a-f0-9]{40}$/.test(approval.headSha) &&
       Number.isInteger(approval.failedReviewInvocation) &&
       (approval.failedReviewInvocation as number) >= 1 &&
       (approval.failedReviewInvocation as number) <= maxReviewInvocations &&
@@ -4674,7 +4677,8 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       typeof approval.humanDecisionUrl === 'string' &&
       isIssue76HumanDecisionUrl(approval.humanDecisionUrl) &&
       approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
-      approval.reportedReservationHeadSha !== approval.headSha
+      approval.reportedReservationHeadSha !== approval.headSha &&
+      /^[a-f0-9]{40}$/.test(approval.headSha)
     );
   }
   return (
@@ -4721,9 +4725,10 @@ function isReviewerFailureRecovery(value: unknown): boolean {
     Number.isInteger(recovery.failedReviewInvocation) &&
     (recovery.failedReviewInvocation as number) >= 1 &&
     (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
-    (recovery.failureKind === undefined ||
-      reviewExecutionFailureKinds.includes(recovery.failureKind as ReviewExecutionFailureKind)) &&
+    typeof recovery.failureKind === 'string' &&
+    reviewExecutionFailureKinds.includes(recovery.failureKind as ReviewExecutionFailureKind) &&
     typeof recovery.headSha === 'string' &&
+    /^[a-f0-9]{40}$/.test(recovery.headSha) &&
     typeof recovery.schemaFingerprint === 'string' &&
     /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
   );
@@ -4746,9 +4751,44 @@ function isReviewerFailureRecoveryAudit(value: unknown): boolean {
   return (
     Object.keys(audit).every((key) => allowedKeys.has(key)) &&
     typeof audit.archivedAt === 'string' &&
-    isReviewerFailureRecovery(
+    isHistoricalReviewerFailureRecovery(
       Object.fromEntries(Object.entries(audit).filter(([key]) => key !== 'archivedAt')),
     )
+  );
+}
+
+function isHistoricalReviewerFailureRecovery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const recovery = value as Record<string, unknown>;
+  return (
+    Object.keys(recovery).every(
+      (key) =>
+        key === 'approvalId' ||
+        key === 'authorizedAt' ||
+        key === 'authorizationSource' ||
+        key === 'reviewEpoch' ||
+        key === 'failedReviewInvocation' ||
+        key === 'failureKind' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
+    ) &&
+    typeof recovery.approvalId === 'string' &&
+    typeof recovery.authorizedAt === 'string' &&
+    recovery.authorizationSource === 'human-explicit' &&
+    Number.isInteger(recovery.reviewEpoch) &&
+    (recovery.reviewEpoch as number) >= 1 &&
+    Number.isInteger(recovery.failedReviewInvocation) &&
+    (recovery.failedReviewInvocation as number) >= 1 &&
+    (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
+    (recovery.failureKind === undefined ||
+      (typeof recovery.failureKind === 'string' &&
+        reviewExecutionFailureKinds.includes(
+          recovery.failureKind as ReviewExecutionFailureKind,
+        ))) &&
+    typeof recovery.headSha === 'string' &&
+    /^[a-f0-9]{40}$/.test(recovery.headSha) &&
+    typeof recovery.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
   );
 }
 
@@ -5828,7 +5868,11 @@ function recordReviewFailureAccounting(
       accounting.pendingReview?.reviewInvocation ?? accounting.reviewInvocationCount;
     if (
       !accounting.pendingReview ||
-      accounting.pendingReview.reviewInvocation !== reviewInvocation
+      accounting.pendingReview.status !== 'STARTED' ||
+      accounting.pendingReview.reviewInvocation !== reviewInvocation ||
+      review.executionPhase !== 'REVIEW' ||
+      !review.executionFailureKind ||
+      !reviewExecutionFailureKinds.includes(review.executionFailureKind)
     ) {
       throw new Error('Review accounting reservation is missing; human recovery is required.');
     }

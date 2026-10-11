@@ -407,11 +407,11 @@ and [the current-HEAD comment](https://github.com/Chasoso/tableau-ambient-analys
 Together these Human Decisions explicitly authorize the following bounded
 Issue #76 scope:
 
-| Approved capability | Implementation boundary | Not authorized |
-| --- | --- | --- |
-| Single-use recovery of a durable `REVIEWER_FAILURE` | `reviewer-failure-recovery` approval, `REVIEWER_FAILURE` evidence checks, and the existing CLI authorization/consumption commands | Generic retry/resume, automatic approval, counter refund/reset, or recovery of incomplete/legacy evidence |
-| One-time reconciliation of the reserved Issue #76 invocation 13 | `review-reservation-reconciliation` approval, the exact `feat/issue-76`/`main` workspace, invocation 13, current HEAD, epoch, Schema fingerprint, and transaction checks | Reconciliation for another Issue or invocation, inferred reviewer execution, or invocation 14+ execution |
-| Audit-compatible state handling | Existing accounting validation, append-only recovery history, single-use approval consumption, and legacy read-only compatibility | History fabrication, deletion, rewriting, or reuse of consumed approvals |
+| Approved capability                                             | Implementation boundary                                                                                                                                                  | Not authorized                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Single-use recovery of a durable `REVIEWER_FAILURE`             | `reviewer-failure-recovery` approval, `REVIEWER_FAILURE` evidence checks, and the existing CLI authorization/consumption commands                                        | Generic retry/resume, automatic approval, counter refund/reset, or recovery of incomplete/legacy evidence |
+| One-time reconciliation of the reserved Issue #76 invocation 13 | `review-reservation-reconciliation` approval, the exact `feat/issue-76`/`main` workspace, invocation 13, current HEAD, epoch, Schema fingerprint, and transaction checks | Reconciliation for another Issue or invocation, inferred reviewer execution, or invocation 14+ execution  |
+| Audit-compatible state handling                                 | Existing accounting validation, append-only recovery history, single-use approval consumption, and legacy read-only compatibility                                        | History fabrication, deletion, rewriting, or reuse of consumed approvals                                  |
 
 These are bounded continuation mechanisms approved for this Issue's concrete
 failure states; they are not a general recovery framework or autonomous review
@@ -533,8 +533,8 @@ boundary. After safe reconciliation, verify the bounded evidence and exact
 dirty snapshot, run deterministic validation, obtain a fresh Independent
 Review, and only then use the existing-PR update path for PR #74. Required CI
 for the exact latest head must pass before the update is ready. This sequence
-does not authorize recovery by itself, and Issue #75 performs none of these
-PR #74 operations.
+does not authorize recovery by itself and is separate from Issue #76's bounded
+reviewer-failure recovery and invocation-13 reconciliation.
 The known older Issue #55 shape may be recovered only through the separate
 human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
 Human Decision record. The old implementer blocking report is not persisted, so

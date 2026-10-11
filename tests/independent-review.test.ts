@@ -1090,6 +1090,31 @@ function prepareReservedReviewReconciliationFixture(workspace: {
 }
 
 describe('built independent-review CLI integration', () => {
+  it('rejects missing issue arguments without touching isolated state', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-arguments-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const stateBefore = existsSync(workspace.statePath)
+        ? readFileSync(workspace.statePath, 'utf8')
+        : undefined;
+      const cli = runBuiltReviewCli(workspace.cwd, workspace.binDirectory, [
+        '--review-only',
+        '--base',
+        'main',
+        '--cwd',
+        workspace.cwd,
+      ]);
+      expect(cli.exitCode).toBe(2);
+      expect(cli.stdout).toBe('');
+      expect(cli.stderr).toContain('Missing required argument: --issue');
+      expect(
+        existsSync(workspace.statePath) ? readFileSync(workspace.statePath, 'utf8') : undefined,
+      ).toBe(stateBefore);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('runs reservation reconciliation through the built CLI and preserves durable evidence', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-reconciliation-'));
     try {
@@ -1496,6 +1521,21 @@ describe('independent review gate contract', () => {
       ['--reconcile-reserved-review', '--resume-reviewer-failure-recovery'],
       true,
     ],
+    [
+      'review-only and update-pr',
+      ['--review-only', '--update-pr', 'https://example.test/pr/1'],
+      true,
+    ],
+    [
+      'review-only and reviewer-failure recovery',
+      ['--review-only', '--resume-reviewer-failure-recovery'],
+      true,
+    ],
+    [
+      'update-pr and reservation reconciliation',
+      ['--update-pr', 'https://example.test/pr/1', '--reconcile-reserved-review'],
+      true,
+    ],
     ['authorization only', ['--authorize-reviewer-failure-recovery'], false],
     ['resume only', ['--resume-reviewer-failure-recovery'], false],
     ['reservation reconciliation consumption only', ['--reconcile-reserved-review'], false],
@@ -1690,6 +1730,48 @@ describe('independent review gate contract', () => {
       );
     },
   );
+
+  it('keeps the concrete Schema finding fields synchronized with Parser acceptance', () => {
+    const schema = JSON.parse(
+      readFileSync(join(process.cwd(), 'src/review/review-result.schema.json'), 'utf8'),
+    ) as {
+      $defs: {
+        blockingFinding: { required: string[]; properties: Record<string, unknown> };
+        nonBlockingFinding: { required: string[]; properties: Record<string, unknown> };
+      };
+    };
+    const expectedFields = [
+      'severity',
+      'classification',
+      'finding',
+      'generalized_rule',
+      'affected_locations',
+      'recommended_fix',
+    ];
+    expect(schema.$defs.blockingFinding.required).toEqual(expectedFields);
+    expect(Object.keys(schema.$defs.blockingFinding.properties).sort()).toEqual(
+      [...expectedFields].sort(),
+    );
+    expect(schema.$defs.nonBlockingFinding.required).toEqual(expectedFields);
+    expect(Object.keys(schema.$defs.nonBlockingFinding.properties).sort()).toEqual(
+      [...expectedFields].sort(),
+    );
+
+    const value = {
+      result: 'CHANGES_REQUIRED',
+      blockingFindings: [wireFinding('blocking', 'AUTO_FIX', 'Blocking contract finding')],
+      nonBlockingFindings: [
+        wireFinding('non-blocking', 'HUMAN_DECISION_REQUIRED', 'Non-blocking decision finding'),
+      ],
+      escalationRequired: true,
+      maintainability: 'LOCAL_CLEANUP',
+    };
+    expect(validateReviewerSchema(value)).toBe(true);
+    expect(parseReviewResult(JSON.stringify(value))).toMatchObject({
+      result: 'CHANGES_REQUIRED',
+      executionStatus: 'COMPLETED',
+    });
+  });
 
   it('resolves only an open pull request with an exact head', () => {
     expect(
@@ -3102,6 +3184,38 @@ describe('independent review runner control flow', () => {
     });
   });
 
+  it('keeps a reservation incomplete when STARTED persistence fails before reviewer launch', () => {
+    let reviewerLaunched = false;
+    let failureRecorded = false;
+    const result = runReadOnlyReview(
+      input,
+      dependencies(
+        {
+          markReviewStarted: () => 'Could not persist the reviewer execution start state.',
+          invokeReviewer: () => {
+            reviewerLaunched = true;
+            return parseReviewResult(JSON.stringify(structuredPass));
+          },
+          recordReviewFailure: () => {
+            failureRecorded = true;
+            throw new Error('pre-review failure must not be recorded as reviewer execution');
+          },
+        },
+        {
+          reviewInvocationCount: 1,
+          pendingReview: { reviewInvocation: 1, status: 'RESERVED' },
+        },
+      ),
+    );
+
+    expect(result.result).toBe('HUMAN_DECISION_REQUIRED');
+    expect(result.executionStatus).toBe('FAILED');
+    expect(result.executionPhase).toBe('PRE_REVIEW');
+    expect(result.executionFailureKind).toBeUndefined();
+    expect(reviewerLaunched).toBe(false);
+    expect(failureRecorded).toBe(false);
+  });
+
   it('fails closed when durable failure recording itself is unavailable', () => {
     const result = runReadOnlyReview(
       input,
@@ -3948,6 +4062,101 @@ describe('review cycle state', () => {
           executionPhase: 'REVIEW',
         }),
       ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['short-head', 'A'.repeat(40), 'g'.repeat(40), undefined] as const)(
+    'rejects reviewer recovery evidence with invalid HEAD %s without mutation',
+    (headSha) => {
+      const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-head-'));
+      const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+      const state = {
+        branch: 'feature/review',
+        base: 'main',
+        legacyReviewInvocations: 0,
+        legacyAutoFixCycles: 0,
+        accountingEpochStart: 'issue-29-accounting-v2',
+        reviewInvocationCount: 1,
+        autoFixCycleCount: 0,
+        generalizedRuleHistory: [],
+        consecutiveRepeatCount: 0,
+        lastFixChangedRepository: null,
+        cycleResults: [],
+        terminationHistory: ['REVIEWER_FAILURE'],
+        terminationReason: 'REVIEWER_FAILURE',
+        reviewEpoch: 1,
+        reviewExecutionFailures: [
+          {
+            reviewInvocation: 1,
+            kind: 'NONZERO_EXIT',
+            diagnostic: 'safe diagnostic',
+            evidenceVersion: 'reviewer-failure-v2',
+            executionPhase: 'REVIEW',
+            reviewEpoch: 1,
+            headSha,
+            schemaFingerprint: workspace.schemaFingerprint,
+          },
+        ],
+      };
+      const contents = JSON.stringify(state);
+      writeFileSync(workspace.statePath, contents, 'utf8');
+
+      try {
+        expect(() =>
+          readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        ).toThrow('Review accounting state is invalid');
+        expect(readFileSync(workspace.statePath, 'utf8')).toBe(contents);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ['pending plus terminal failure', { terminationReason: 'REVIEWER_FAILURE' }],
+    ['pending plus active recovery', { reviewerFailureRecovery: { invalid: true } }],
+  ] as const)('rejects contradictory pending accounting: %s', (_label, extraState) => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-pending-contradiction-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const state = {
+      branch: 'feature/review',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      reviewEpoch: 1,
+      pendingReview: { reviewInvocation: 1, status: 'STARTED' },
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'safe diagnostic',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+      ...extraState,
+    };
+    const contents = JSON.stringify(state);
+    writeFileSync(workspace.statePath, contents, 'utf8');
+
+    try {
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(contents);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

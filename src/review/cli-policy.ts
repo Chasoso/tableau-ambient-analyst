@@ -13,7 +13,13 @@ const resumeFlags = [
 ] as const;
 
 export function hasAuthorizationResumeConflict(rawArguments: readonly string[]): boolean {
+  const recoveryModeCount = [...authorizationFlags, ...resumeFlags].filter((flag) =>
+    rawArguments.includes(flag),
+  ).length;
+  const reviewModeCount = ['--review-only', '--update-pr'].filter((flag) =>
+    rawArguments.includes(flag),
+  ).length;
   return (
-    [...authorizationFlags, ...resumeFlags].filter((flag) => rawArguments.includes(flag)).length > 1
+    recoveryModeCount > 1 || reviewModeCount > 1 || (recoveryModeCount > 0 && reviewModeCount > 0)
   );
 }
