@@ -392,8 +392,9 @@ marker; a later reviewer failure can therefore set a new terminal
 `REVIEWER_FAILURE` without overwriting the consumed approval or making failure
 persistence impossible. Invalid or incomplete history remains fail-closed.
 
-This dedicated mechanism was added for Issue #76 after an explicit Human
-Decision to preserve the invocation and failure audit trail when the reviewer
+This dedicated mechanism was added for Issue #76 after the explicit Human
+Decision recorded in [Issue #76 comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431)
+to preserve the invocation and failure audit trail when the reviewer
 subprocess terminates unsuccessfully. It is deliberately a narrow exception to
 the ordinary review loop, not a new general resume facility. Recovery is
 possible only for a current `REVIEWER_FAILURE` with a durable

@@ -248,7 +248,10 @@ keywords. Treat Schema validation and semantic parsing as two required gates:
 Schema-valid output is still rejected if it violates the parser contract,
 including empty CHANGES_REQUIRED, PASS with blocking findings or escalation,
 or escalation without a human/blocked finding. Return only structured finding
-objects; legacy string findings are not valid reviewer output.
+objects; legacy string findings are not valid reviewer output. Use the
+canonical result decision table in
+docs/development/independent-review-gate.md as the shared contract for result,
+finding-array, classification, severity, and escalation combinations.
 
 For every finding, classify it as exactly one of AUTO_FIX,
 HUMAN_DECISION_REQUIRED, or BLOCKED. For each finding, record severity,
