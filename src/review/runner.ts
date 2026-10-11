@@ -3230,11 +3230,11 @@ export function validateReviewerSchemaCompatibility(cwd: string): string | undef
 }
 
 export function reviewerSchemaFingerprint(cwd: string): string | undefined {
-  if (validateReviewerSchemaCompatibility(cwd)) return undefined;
+  const compatibilityError = validateReviewerSchemaCompatibility(cwd);
+  if (compatibilityError !== undefined) return undefined;
   try {
-    return createHash('sha256')
-      .update(readFileSync(resolve(cwd, 'src/review/review-result.schema.json')))
-      .digest('hex');
+    const schemaBytes = readFileSync(resolve(cwd, 'src/review/review-result.schema.json'));
+    return createHash('sha256').update(schemaBytes).digest('hex');
   } catch {
     return undefined;
   }

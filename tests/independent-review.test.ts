@@ -52,6 +52,8 @@ import {
   runReadOnlyReview,
   runReviewControlFlow,
   reviewerNonzeroExitResult,
+  reviewerSchemaFingerprint,
+  validateReviewerSchemaCompatibility,
   authorizeReviewerFailureRecoveryAtPath,
   resumeReviewerFailureRecoveryAtPath,
   resolveActivePullRequest,
@@ -1491,6 +1493,35 @@ describe('independent review runner control flow', () => {
         diagnostic: 'Reviewer execution failed: LAUNCH_FAILURE.',
       },
     ]);
+  });
+
+  it('returns the actual SHA-256 fingerprint only for a compatible reviewer schema', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-schema-fingerprint-'));
+    const schemaDirectory = join(directory, 'src/review');
+    mkdirSync(schemaDirectory, { recursive: true });
+    const schemaPath = join(schemaDirectory, 'review-result.schema.json');
+    const schema = readFileSync(
+      join(process.cwd(), 'src/review/review-result.schema.json'),
+      'utf8',
+    );
+    writeFileSync(schemaPath, schema, 'utf8');
+
+    try {
+      const expected = createHash('sha256').update(schema).digest('hex');
+      expect(validateReviewerSchemaCompatibility(directory)).toBeUndefined();
+      expect(reviewerSchemaFingerprint(directory)).toBe(expected);
+
+      const incompatible = JSON.parse(schema) as Record<string, unknown>;
+      incompatible.allOf = [];
+      writeFileSync(schemaPath, JSON.stringify(incompatible), 'utf8');
+      expect(validateReviewerSchemaCompatibility(directory)).toContain('unsupported');
+      expect(reviewerSchemaFingerprint(directory)).toBeUndefined();
+
+      rmSync(schemaPath);
+      expect(reviewerSchemaFingerprint(directory)).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('keeps nonzero-exit diagnostics numeric and excludes arbitrary stderr', () => {
