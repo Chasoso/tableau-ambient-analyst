@@ -2286,7 +2286,8 @@ function reviewerFailureResult(
   );
 }
 
-function invokeCodexReviewer(
+/** Exported for deterministic subprocess-boundary tests; production callers use the default runner. */
+export function invokeCodexReviewer(
   input: IndependentReviewInput,
   issue: IssueContext,
   validationEvidence: string[],

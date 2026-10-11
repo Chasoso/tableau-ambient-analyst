@@ -41,6 +41,7 @@ import {
   buildImplementerPrompt,
   buildReviewerPrompt,
   extractFinalReviewerMessage,
+  invokeCodexReviewer,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
@@ -1466,13 +1467,20 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.reviewInvocationCount).toBe(1);
   });
 
-  it('durably records reviewer execution failure without refunding or creating a cycle', () => {
+  it.each([
+    'LAUNCH_FAILURE',
+    'TIMEOUT',
+    'NONZERO_EXIT',
+    'MALFORMED_OUTPUT',
+    'INTERRUPTED',
+    'UNCERTAIN',
+  ] as const)('durably records %s without refunding or creating a cycle', (failureKind) => {
     const result = runReadOnlyReview(
       input,
       dependencies(
         {
           invokeReviewer: () =>
-            reviewerInvocationFailure('reviewer launch failed', 'REVIEW', 'LAUNCH_FAILURE'),
+            reviewerInvocationFailure('reviewer execution failed', 'REVIEW', failureKind),
         },
         {
           reviewInvocationCount: 1,
@@ -1489,8 +1497,8 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.reviewExecutionFailures).toEqual([
       {
         reviewInvocation: 1,
-        kind: 'LAUNCH_FAILURE',
-        diagnostic: 'Reviewer execution failed: LAUNCH_FAILURE.',
+        kind: failureKind,
+        diagnostic: `Reviewer execution failed: ${failureKind}.`,
       },
     ]);
   });
@@ -1541,6 +1549,61 @@ describe('independent review runner control flow', () => {
     expect(JSON.stringify(reviewerNonzeroExitResult(null, secretStderr))).not.toContain(
       secretStderr,
     );
+  });
+
+  it.each([
+    ['non-zero exit', 'exit 17', 'NONZERO_EXIT'],
+    [
+      'malformed output',
+      `printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"not-json"}}'`,
+      'MALFORMED_OUTPUT',
+    ],
+  ] as const)('keeps subprocess diagnostics bounded for %s', (_name, behavior, expectedKind) => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-subprocess-'));
+    const binDirectory = join(directory, 'bin');
+    const codexPath = join(binDirectory, 'codex');
+    mkdirSync(binDirectory, { recursive: true });
+    const secret = 'token=ephemeral-secret prompt=private-evidence';
+    writeFileSync(codexPath, `#!/bin/sh\nprintf '%s\\n' '${secret}' >&2\n${behavior}\n`, 'utf8');
+    chmodSync(codexPath, 0o755);
+
+    const previousPath = process.env.PATH;
+    process.env.PATH = binDirectory;
+    try {
+      const result = invokeCodexReviewer(
+        { cwd: directory, base: 'main', issue: '76' },
+        { title: 'fixture', body: 'fixture', url: 'https://example.invalid/76' },
+        ['npm run validate: passed'],
+        'feature/review',
+      );
+      const serialized = JSON.stringify(result);
+      expect(result.executionFailureKind).toBe(expectedKind);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain('ephemeral-secret');
+      expect(serialized).not.toContain('private-evidence');
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('maps a missing reviewer executable to a bounded launch failure', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-launch-'));
+    const previousPath = process.env.PATH;
+    process.env.PATH = directory;
+    try {
+      const result = invokeCodexReviewer(
+        { cwd: directory, base: 'main', issue: '76' },
+        { title: 'fixture', body: 'fixture', url: 'https://example.invalid/76' },
+        [],
+        'feature/review',
+      );
+      expect(result.executionFailureKind).toBe('LAUNCH_FAILURE');
+      expect(JSON.stringify(result)).not.toContain('ENOENT');
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('converts reviewer exceptions after reservation into a durable fail-closed failure', () => {
