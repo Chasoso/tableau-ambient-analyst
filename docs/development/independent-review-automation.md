@@ -366,6 +366,15 @@ The two commands are intentionally separate and must be run only after a
 separate Human Decision has authorized this exact state; they are not a
 generic resume or retry path:
 
+When a review-limit resume creates the next accounting epoch, the prior epoch
+snapshot includes the complete durable evidence owned by that epoch: cycle and
+termination records, terminal-finalization evidence, reviewer execution
+failures, reviewer-failure recovery history, and reservation-reconciliation
+evidence. The snapshot is validated again after reload, so a present but
+malformed evidence record keeps the gate closed. Older historical snapshots
+that predate one of these optional evidence fields remain read-only compatible;
+the reader does not infer, migrate, or silently reconstruct missing evidence.
+
 ```bash
 npm run build
 node dist/review/cli.js \

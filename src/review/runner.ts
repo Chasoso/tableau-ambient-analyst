@@ -3582,6 +3582,11 @@ export function resumeReviewAfterLimitAtPath(
         resumeAfterPolicyChange: accounting.resumeAfterPolicyChange,
         migrationCompatibility: accounting.migrationCompatibility,
         terminationEvidence: accounting.terminationEvidence,
+        reviewLimitTerminalEvidence: accounting.reviewLimitTerminalEvidence,
+        reviewExecutionFailures: accounting.reviewExecutionFailures,
+        reviewerFailureRecovery: accounting.reviewerFailureRecovery,
+        reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
+        reconciledReviewReservations: accounting.reconciledReviewReservations,
         recoveryReason: approval.recoveryReason,
         recoveryEvidence: approval.recoveryEvidence,
       };
@@ -3987,12 +3992,12 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'resumeAuthorizationSource',
     'resumedFromEpoch',
     'terminationEvidence',
+    'reviewLimitTerminalEvidence',
     'pendingReview',
     'reviewExecutionFailures',
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
-    'reviewLimitTerminalEvidence',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -4507,6 +4512,11 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'resumeAfterPolicyChange',
     'migrationCompatibility',
     'terminationEvidence',
+    'reviewLimitTerminalEvidence',
+    'reviewExecutionFailures',
+    'reviewerFailureRecovery',
+    'reviewerFailureRecoveryHistory',
+    'reconciledReviewReservations',
     'recoveryReason',
     'recoveryEvidence',
   ]);
@@ -4552,7 +4562,33 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     (history.migrationCompatibility === undefined ||
       typeof history.migrationCompatibility === 'string') &&
     (history.terminationEvidence === undefined ||
-      isReviewTerminationEvidence(history.terminationEvidence))
+      isReviewTerminationEvidence(history.terminationEvidence)) &&
+    (history.reviewLimitTerminalEvidence === undefined ||
+      isReviewLimitTerminalEvidenceForEpochHistory(history)) &&
+    (history.reviewExecutionFailures === undefined ||
+      (Array.isArray(history.reviewExecutionFailures) &&
+        history.reviewExecutionFailures.every(isReviewExecutionFailure))) &&
+    (history.reviewerFailureRecovery === undefined ||
+      isHistoricalReviewerFailureRecovery(history.reviewerFailureRecovery)) &&
+    (history.reviewerFailureRecoveryHistory === undefined ||
+      (Array.isArray(history.reviewerFailureRecoveryHistory) &&
+        history.reviewerFailureRecoveryHistory.every(isReviewerFailureRecoveryAudit))) &&
+    (history.reconciledReviewReservations === undefined ||
+      (Array.isArray(history.reconciledReviewReservations) &&
+        history.reconciledReviewReservations.every(isReconciledReviewReservation)))
+  );
+}
+
+function isReviewLimitTerminalEvidenceForEpochHistory(history: Record<string, unknown>): boolean {
+  const evidence = history.reviewLimitTerminalEvidence;
+  return (
+    isReviewLimitTerminalEvidence(evidence) &&
+    history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+    history.reviewInvocationCount === maxReviewInvocations &&
+    Array.isArray(history.cycleResults) &&
+    history.cycleResults.at(-1)?.reviewInvocation === maxReviewInvocations &&
+    history.cycleResults.at(-1)?.result === 'CHANGES_REQUIRED' &&
+    evidence.reviewEpoch === history.reviewEpoch
   );
 }
 

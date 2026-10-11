@@ -890,6 +890,209 @@ describe('Issue #76 review-limit terminal finalization', () => {
     }
   });
 
+  it('preserves MAX terminal evidence across an epoch transition and reload', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'terminal-finalization-resume-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const cycleResults = completedReviewCycles(16).map((cycle, index) =>
+        index === 15 ? { ...cycle, result: 'CHANGES_REQUIRED' as const } : cycle,
+      );
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-76',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: 16,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: null,
+              cycleResults,
+              terminationHistory: [],
+              reviewEpoch: 1,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(workspace.approvalPath, JSON.stringify({ approvals: [] }), 'utf8');
+      const issued = authorizeReviewLimitTerminalFinalizationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(issued).not.toBeTypeOf('string');
+      const finalized = finalizeReviewLimitTerminalAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(finalized).not.toBeTypeOf('string');
+      if (typeof finalized === 'string') return;
+      const evidence = finalized.reviewLimitTerminalEvidence;
+      expect(evidence).toBeDefined();
+      const authorized = authorizeReviewResumeAfterLimitAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+      );
+      expect(authorized).toMatchObject({ approvalType: 'review-limit-resume', consumed: false });
+      const resumed = resumeReviewAfterLimitAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+      );
+      expect(resumed).toMatchObject({ reviewEpoch: 2, reviewInvocationCount: 0 });
+      if (typeof resumed === 'string') return;
+      expect(resumed.reviewHistory?.[0]?.reviewLimitTerminalEvidence).toEqual(evidence);
+      expect(
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
+      ).toMatchObject({ reviewEpoch: 2, reviewInvocationCount: 0 });
+      const reloaded = JSON.parse(readFileSync(workspace.statePath, 'utf8'));
+      expect(reloaded.entries[0].reviewHistory[0].reviewLimitTerminalEvidence).toEqual(evidence);
+      delete reloaded.entries[0].reviewHistory[0].reviewLimitTerminalEvidence;
+      writeFileSync(workspace.statePath, JSON.stringify(reloaded), 'utf8');
+      const legacyReload = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(legacyReload.reviewHistory?.[0]?.reviewLimitTerminalEvidence).toBeUndefined();
+      expect(
+        JSON.parse(readFileSync(workspace.statePath, 'utf8')).entries[0].reviewHistory[0]
+          .reviewLimitTerminalEvidence,
+      ).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves failure, recovery, and reconciliation evidence across an epoch transition', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'epoch-evidence-preservation-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0');
+      const fixture = prepareReservedReviewReconciliationFixture(workspace);
+      const reconciledAt = '2026-01-01T00:00:03.000Z';
+      const reconciliation = {
+        reconciliationId: 'reconciliation-76',
+        approvalId: fixture.approval.id,
+        repository: 'Chasoso/tableau-ambient-analyst' as const,
+        branch: 'feat/issue-76',
+        base: 'main',
+        headSha: workspace.headSha,
+        reviewEpoch: 1,
+        reservedInvocation: 13,
+        status: 'RESERVED_NOT_STARTED' as const,
+        reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE' as const,
+        reportedReservationHeadSha: reportedReservationHead,
+        reportedReservationHeadProvenance:
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' as const,
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE' as const,
+        humanDecisionUrl,
+        humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED' as const,
+        schemaFingerprint: workspace.schemaFingerprint,
+        reconciledAt,
+      };
+      const accounting: ReviewAccounting = {
+        ...fixture.accounting,
+        reviewInvocationCount: 16,
+        pendingReview: undefined,
+        cycleResults: completedReviewCycles(16).map((cycle, index) =>
+          index === 15 ? { ...cycle, result: 'CHANGES_REQUIRED' as const } : cycle,
+        ),
+        reconciledReviewReservations: [reconciliation],
+      };
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({ entries: [{ branch: 'feat/issue-76', base: 'main', ...accounting }] }),
+        'utf8',
+      );
+      writeFileSync(
+        workspace.approvalPath,
+        JSON.stringify({
+          approvals: [
+            { ...fixture.approval, consumed: true, consumedAt: reconciledAt },
+            fixture.priorRecoveryApproval,
+          ],
+        }),
+        'utf8',
+      );
+
+      const beforeFinalization = readReviewAccountingAtPath(
+        workspace.statePath,
+        'feat/issue-76',
+        'main',
+      );
+      expect(beforeFinalization.reviewExecutionFailures).toHaveLength(1);
+      expect(beforeFinalization.reviewerFailureRecoveryHistory).toHaveLength(1);
+      expect(beforeFinalization.reconciledReviewReservations).toHaveLength(1);
+
+      const issued = authorizeReviewLimitTerminalFinalizationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(issued).not.toBeTypeOf('string');
+      const finalized = finalizeReviewLimitTerminalAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+      );
+      expect(finalized).not.toBeTypeOf('string');
+      const authorized = authorizeReviewResumeAfterLimitAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+      );
+      expect(authorized).toMatchObject({ approvalType: 'review-limit-resume', consumed: false });
+      const resumed = resumeReviewAfterLimitAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-76',
+        'main',
+        workspace.headSha,
+      );
+      expect(resumed).not.toBeTypeOf('string');
+      if (typeof resumed === 'string') return;
+      expect(resumed.reviewHistory?.[0]).toMatchObject({
+        reviewExecutionFailures: accounting.reviewExecutionFailures,
+        reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
+        reconciledReviewReservations: [reconciliation],
+      });
+      const reloaded = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(reloaded.reviewHistory?.[0]).toMatchObject({
+        reviewExecutionFailures: accounting.reviewExecutionFailures,
+        reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
+        reconciledReviewReservations: [reconciliation],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a malformed pending finalization marker without changing fixture files', () => {
     const directory = mkdtempSync(join(tmpdir(), 'terminal-finalization-marker-'));
     try {

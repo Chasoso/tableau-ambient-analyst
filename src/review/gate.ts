@@ -115,6 +115,11 @@ export type ReviewEpochHistory = {
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
   terminationEvidence?: ReviewTerminationEvidence | undefined;
+  reviewLimitTerminalEvidence?: ReviewAccounting['reviewLimitTerminalEvidence'] | undefined;
+  reviewExecutionFailures?: ReviewAccounting['reviewExecutionFailures'] | undefined;
+  reviewerFailureRecovery?: ReviewAccounting['reviewerFailureRecovery'] | undefined;
+  reviewerFailureRecoveryHistory?: ReviewAccounting['reviewerFailureRecoveryHistory'] | undefined;
+  reconciledReviewReservations?: ReviewAccounting['reconciledReviewReservations'] | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
 };
