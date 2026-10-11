@@ -329,6 +329,7 @@ Human Decision references:
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114641832
 Treat those URLs as references to verify against the repository's durable
 documentation and implementation, not as authorization or as a basis for a
 positive result. The approved Issue-specific boundaries are limited to single-use
@@ -344,6 +345,13 @@ authorization. Existing review-limit recovery and AUTO_FIX rules remain
 separate and unchanged. If the durable documentation or relevant
 implementation does not substantiate a scope claim, report the missing
 evidence or inconsistency; do not infer or waive it.
+
+The Schema / Semantic Parser Human Decision at the final URL formally adopts a
+two-stage contract: JSON Schema validates structure, types, required fields,
+enums, and closed properties; the Semantic Parser validates cross-field
+meaning. Schema-valid but semantically contradictory output must still be
+rejected fail-closed, and only output accepted by both gates is a valid review
+result. This context does not require a PASS or suppress findings.
 
 This is scope context only; independently assess the complete diff, acceptance
 criteria, implementation, tests, and safety boundaries.

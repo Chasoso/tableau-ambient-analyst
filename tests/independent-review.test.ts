@@ -4471,8 +4471,12 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('issuecomment-6106685579');
     expect(prompt).toContain('issuecomment-6107011445');
     expect(prompt).toContain('issuecomment-6107122567');
+    expect(prompt).toContain('issuecomment-6114641832');
     expect(prompt).toContain('reviewer-failure-v2');
     expect(prompt).toContain('reserved invocation 13');
+    expect(prompt).toContain('two-stage contract');
+    expect(prompt).toContain('Schema-valid but semantically contradictory output');
+    expect(prompt).toMatch(/only output accepted by both gates is a valid review\s+result/);
     expect(prompt).toContain('Generic retry/resume');
     expect(prompt).toContain('direct invocation 17 or later within epoch 1');
     expect(prompt).toMatch(
