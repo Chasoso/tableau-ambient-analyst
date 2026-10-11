@@ -4472,6 +4472,7 @@ describe('independent review scope context', () => {
     expect(prompt).toContain('issuecomment-6107011445');
     expect(prompt).toContain('issuecomment-6107122567');
     expect(prompt).toContain('issuecomment-6114641832');
+    expect(prompt).toContain('issuecomment-6114863696');
     expect(prompt).toContain('reviewer-failure-v2');
     expect(prompt).toContain('reserved invocation 13');
     expect(prompt).toContain('two-stage contract');
@@ -4483,6 +4484,12 @@ describe('independent review scope context', () => {
       /Review execution in a new epoch is governed\s+separately by the existing review-limit-resume rules/,
     );
     expect(prompt).toContain('report the missing');
+    expect(prompt).toContain('review-limit-terminal-finalization');
+    expect(prompt).toContain('epoch 1');
+    expect(prompt).toContain('invocation 16');
+    expect(prompt).toContain('already executed');
+    expect(prompt).toContain('historical evidence gap remains unresolved');
+    expect(prompt).toContain('does not authorize a rerun');
     expect(prompt).not.toContain('invocation 17+');
     expect(prompt).not.toContain('return PASS');
   });

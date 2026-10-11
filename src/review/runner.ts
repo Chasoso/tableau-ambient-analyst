@@ -323,13 +323,14 @@ abstraction solely for hypothetical future flexibility.
 function issueScopeContext(issue: string): string {
   if (issue === '76') {
     return `Review scope context for Issue #76:
-The repository's durable Issue #76 decision record documents four explicit
+The repository's durable Issue #76 decision record documents the following
 Human Decision references:
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567
 - https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114641832
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
 Treat those URLs as references to verify against the repository's durable
 documentation and implementation, not as authorization or as a basis for a
 positive result. The approved Issue-specific boundaries are limited to single-use
@@ -352,6 +353,21 @@ enums, and closed properties; the Semantic Parser validates cross-field
 meaning. Schema-valid but semantically contradictory output must still be
 rejected fail-closed, and only output accepted by both gates is a valid review
 result. This context does not require a PASS or suppress findings.
+
+The Human Decision at
+https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
+approves the design scope of a separate
+review-limit-terminal-finalization operation limited to Issue #76, epoch 1,
+and invocation 16, when its explicit state preconditions hold. It is distinct
+from reviewer-failure recovery, invocation 13 reconciliation, and
+review-limit-resume; it only records the bounded MAX_REVIEW_INVOCATIONS
+terminal evidence and does not authorize another review. This is a design and
+scope approval, not approval to execute a specific state. The terminal
+finalization was already executed, so this decision does not authorize a rerun.
+The epoch 1 historical evidence gap remains unresolved and must not be
+inferred, reconstructed, or treated as a complete history. Independently
+assess whether the implementation satisfies the approved scope and report any
+findings.
 
 This is scope context only; independently assess the complete diff, acceptance
 criteria, implementation, tests, and safety boundaries.
