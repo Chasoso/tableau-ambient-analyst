@@ -15,6 +15,8 @@ import {
   reconcileIssue79OrphanedInvocation,
   authorizeReviewLimitTerminalFinalization,
   finalizeReviewLimitTerminal,
+  authorizeIssue69ReviewLimitTerminalFinalization,
+  finalizeIssue69ReviewLimitTerminal,
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
@@ -61,6 +63,12 @@ const reconcileIssue79OrphanedInvocationMode = rawArguments.includes(
 );
 const authorizeReviewLimitTerminal = rawArguments.includes('--authorize-review-limit-terminal');
 const finalizeReviewLimitTerminalMode = rawArguments.includes('--finalize-review-limit-terminal');
+const authorizeIssue69ReviewLimitTerminal = rawArguments.includes(
+  '--authorize-issue-69-review-limit-terminal',
+);
+const finalizeIssue69ReviewLimitTerminalMode = rawArguments.includes(
+  '--finalize-issue-69-review-limit-terminal',
+);
 const existingPullRequest = argumentsByName.get('update-pr');
 if (hasAuthorizationResumeConflict(rawArguments)) {
   console.error('Authorization and resume are separate commands.');
@@ -95,6 +103,14 @@ if (hasAuthorizationResumeConflict(rawArguments)) {
   if (typeof authorizationResult === 'string') process.exitCode = 1;
 } else if (finalizeReviewLimitTerminalMode) {
   const finalizationResult = finalizeReviewLimitTerminalFromCli(input);
+  console.log(JSON.stringify(finalizationResult, null, 2));
+  if (typeof finalizationResult === 'string') process.exitCode = 1;
+} else if (authorizeIssue69ReviewLimitTerminal) {
+  const authorizationResult = authorizeIssue69ReviewLimitTerminalFromCli(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (finalizeIssue69ReviewLimitTerminalMode) {
+  const finalizationResult = finalizeIssue69ReviewLimitTerminalFromCli(input);
   console.log(JSON.stringify(finalizationResult, null, 2));
   if (typeof finalizationResult === 'string') process.exitCode = 1;
 } else if (reconcileReservation) {
@@ -254,6 +270,25 @@ function finalizeReviewLimitTerminalFromCli(reviewInput: IndependentReviewInput)
   if (reviewInput.issue !== '76')
     return 'Review-limit terminal finalization is limited to Issue #76.';
   return finalizeReviewLimitTerminal(reviewInput.cwd, reviewInput.base);
+}
+
+function authorizeIssue69ReviewLimitTerminalFromCli(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (reviewInput.issue !== '69')
+    return 'Issue #69 review-limit terminal finalization is limited to Issue #69.';
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  return authorizeIssue69ReviewLimitTerminalFinalization(reviewInput.cwd, reviewInput.base);
+}
+
+function finalizeIssue69ReviewLimitTerminalFromCli(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (reviewInput.issue !== '69')
+    return 'Issue #69 review-limit terminal finalization is limited to Issue #69.';
+  return finalizeIssue69ReviewLimitTerminal(reviewInput.cwd, reviewInput.base);
 }
 
 function reconcileReservationFromApproval(reviewInput: IndependentReviewInput) {

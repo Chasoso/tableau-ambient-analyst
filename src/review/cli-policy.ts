@@ -4,6 +4,7 @@ const authorizationFlags = [
   '--authorize-reviewer-failure-recovery',
   '--authorize-reservation-reconciliation',
   '--authorize-review-limit-terminal',
+  '--authorize-issue-69-review-limit-terminal',
 ] as const;
 
 const resumeFlags = [
@@ -12,6 +13,7 @@ const resumeFlags = [
   '--resume-reviewer-failure-recovery',
   '--reconcile-reserved-review',
   '--finalize-review-limit-terminal',
+  '--finalize-issue-69-review-limit-terminal',
 ] as const;
 
 export function hasAuthorizationResumeConflict(rawArguments: readonly string[]): boolean {
