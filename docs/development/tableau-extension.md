@@ -72,7 +72,9 @@ Human Decision.
 
 ## Compatibility boundary
 
-The manifest declares Extensions API minimum version `1.7`. The project does
-not claim a tested Tableau Desktop version matrix yet. The required browser and
-CI checks cover Ubuntu/Chromium and do not cover Tableau Desktop, Windows, or
-the real Extensions API runtime.
+Tableau's Dashboard Extensions API support baseline is Tableau Desktop 2018.2
+and later. The manifest declares Extensions API minimum version `1.7`, but the
+project does not claim a tested Tableau Desktop version matrix yet. The required
+browser and CI checks cover Ubuntu/Chromium and do not cover Tableau Desktop,
+Windows, or the real Extensions API runtime; the embedded smoke test remains
+**UNVERIFIED** until the planned Windows check.
