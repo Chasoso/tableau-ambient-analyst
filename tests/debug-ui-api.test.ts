@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { createDebugUiRequestHandler } from '../src/debug-ui/server.js';
-import { FixtureAnalysisClient, type AnalysisClient } from '../src/debug-ui/model.js';
+import { FixtureAnalysisClient, scenarioById, type AnalysisClient } from '../src/debug-ui/model.js';
 
 async function withServer(client?: AnalysisClient) {
   const server = createServer(createDebugUiRequestHandler(client));
@@ -70,6 +70,43 @@ describe('debug UI analysis API', () => {
       expect(await failed.text()).not.toContain('secret');
     } finally {
       await closeServer(server);
+    }
+  });
+
+  it('sanitizes replaceable client data and bounds hanging runs', async () => {
+    const unsafeClient: AnalysisClient = {
+      replay: async (scenario) => ({
+        status: 'completed',
+        scenario: {
+          ...scenario,
+          evidence: [{ source: 'secret-provider-token', detail: 'x'.repeat(10_000), provenance: 'secret' }],
+          audit: ['secret-audit'],
+        },
+        audit: ['secret-audit'],
+      }),
+    };
+    const unsafe = await withServer(unsafeClient);
+    try {
+      const response = await fetch(`${unsafe.base}/api/analysis-runs`, {
+        method: 'POST', body: JSON.stringify({ scenarioId: 'ignored' }),
+      });
+      const body = await response.json();
+      expect(body.scenario.evidence[0].source).toBe('local-analysis');
+      expect(body.scenario.evidence[0].detail).toBe('Evidence detail unavailable.');
+      expect(body.scenario.utterances).toEqual(scenarioById('ignored').utterances);
+    } finally {
+      await closeServer(unsafe.server);
+    }
+
+    const timeoutClient: AnalysisClient = { replay: () => new Promise(() => {}) };
+    const timed = await withServer(timeoutClient);
+    try {
+      const response = await fetch(`${timed.base}/api/analysis-runs`, {
+        method: 'POST', body: JSON.stringify({ scenarioId: 'ignored' }),
+      });
+      expect(response.status).toBe(502);
+    } finally {
+      await closeServer(timed.server);
     }
   });
 });

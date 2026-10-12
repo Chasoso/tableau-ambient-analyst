@@ -10,6 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '../../ui');
 const browserRoot = dirname(fileURLToPath(import.meta.url));
 const maxBodyBytes = 16_384;
 const maxStoredRuns = 32;
+const runTimeoutMs = 3_000;
 
 function send(response: ServerResponse, status: number, body: unknown): void {
   response.statusCode = status;
@@ -48,14 +49,62 @@ function createRunId(): string {
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function isSafeRun(value: AnalysisRunEnvelope): boolean {
-  return (
-    value.runId.length <= 100 &&
-    value.audit.length <= 64 &&
-    value.audit.every((item) => item.length <= 200) &&
-    value.scenario.utterances.length <= 100 &&
-    value.scenario.evidence.length <= 20
-  );
+function boundedText(value: unknown, max: number, fallback: string): string {
+  return typeof value === 'string' && value.length <= max ? value : fallback;
+}
+
+function sanitizeRun(
+  runId: string,
+  requestedId: string,
+  result: Awaited<ReturnType<AnalysisClient['replay']>>,
+): AnalysisRunEnvelope {
+  const base = scenarioById(requestedId);
+  const source = result.scenario;
+  const scenario = {
+    ...base,
+    questions: source.questions
+      .slice(0, 8)
+      .map((item) => boundedText(item, 300, 'Bounded analysis question.')),
+    evidence: source.evidence.slice(0, 20).map((item, index) => ({
+      source: 'local-analysis',
+      detail: boundedText(item.detail, 500, 'Evidence detail unavailable.'),
+      provenance: boundedText(item.provenance, 100, `evidence-${index + 1}`),
+    })),
+    verifier: {
+      status: ['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(source.verifier.status)
+        ? source.verifier.status
+        : 'NOT_RUN',
+      detail: boundedText(source.verifier.detail, 500, 'Verification detail unavailable.'),
+    },
+    intervention:
+      source.intervention && ['HOLD', 'INTERVENE'].includes(source.intervention.decision)
+        ? {
+            decision: source.intervention.decision,
+            reason: boundedText(
+              source.intervention.reason,
+              500,
+              'Intervention detail unavailable.',
+            ),
+          }
+        : null,
+    ...(result.status === 'failed' ? { error: 'The application flow failed closed.' } : {}),
+  };
+  const audit = result.audit.slice(0, 64).map((item) => boundedText(item, 200, 'audit.event'));
+  return { runId, status: result.status, scenario, audit };
+}
+
+async function withTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('RUN_TIMEOUT')), runTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function createDebugUiRequestHandler(
@@ -72,12 +121,8 @@ export function createDebugUiRequestHandler(
           send(response, 400, { error: 'Invalid analysis run request.' });
           return;
         }
-        const runResult = await client.replay(scenarioById(body.scenarioId));
-        const run: AnalysisRunEnvelope = { runId: createRunId(), ...runResult };
-        if (!isSafeRun(run)) {
-          send(response, 502, { error: 'Analysis run failed safely.' });
-          return;
-        }
+        const runResult = await withTimeout(client.replay(scenarioById(body.scenarioId)));
+        const run = sanitizeRun(createRunId(), body.scenarioId, runResult);
         runs.set(run.runId, run);
         while (runs.size > maxStoredRuns) runs.delete(runs.keys().next().value as string);
         send(response, 200, run);
