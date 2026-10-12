@@ -311,7 +311,7 @@ export class HttpAnalysisClient implements AnalysisClient {
     } catch {
       throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
     }
-    if (!isAnalysisRunEnvelope(value)) {
+    if (!isAnalysisRunEnvelope(value) || value.scenario.id !== scenario.id) {
       throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
     }
     return value;

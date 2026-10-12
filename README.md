@@ -198,10 +198,10 @@ and the current **UNVERIFIED** Desktop status.
 
 - If the page does not load, check that `npm run debug:ui` is listening on the
   manifest URL and that the browser console has no static asset error.
-- A `400` is a malformed request, `429` means the two-run active capacity or
-  32-run in-memory retention bound was reached, and `502` means the application
-  flow failed closed or exceeded its bounded timeout. Refreshing does not
-  recover old in-memory runs.
+- A `400` is a malformed request, `429` means the two-run active capacity was
+  reached, and `502` means the application flow failed closed or exceeded its
+  bounded timeout. Retention evicts the oldest run; a later GET for that run
+  returns `404`. Refreshing does not recover old in-memory runs.
 - A visible `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` result is an
   application-flow outcome; inspect its stages and audit timeline rather than
   treating it as a frontend transport failure.

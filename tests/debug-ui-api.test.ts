@@ -165,22 +165,27 @@ describe('debug UI analysis API', () => {
       await closeServer(unsafe.server);
     }
 
-    const timeoutClient: AnalysisClient = { replay: () => new Promise(() => {}) };
+    let timeoutCalls = 0;
+    const timeoutClient: AnalysisClient = {
+      replay: (scenario) => {
+        timeoutCalls += 1;
+        return timeoutCalls === 1
+          ? new Promise(() => {})
+          : new FixtureAnalysisClient().replay(scenario);
+      },
+    };
     const timed = await withServer(timeoutClient);
     try {
-      const requests = [1, 2].map(() =>
-        fetch(`${timed.base}/api/analysis-runs`, {
-          method: 'POST',
-          body: JSON.stringify({ scenarioId: 'ignored' }),
-        }),
-      );
-      const responses = await Promise.all(requests);
-      expect(responses.map((response) => response.status)).toEqual([502, 502]);
-      const capacity = await fetch(`${timed.base}/api/analysis-runs`, {
+      const timedOut = await fetch(`${timed.base}/api/analysis-runs`, {
         method: 'POST',
         body: JSON.stringify({ scenarioId: 'ignored' }),
       });
-      expect(capacity.status).toBe(429);
+      expect(timedOut.status).toBe(502);
+      const recovered = await fetch(`${timed.base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'ignored' }),
+      });
+      expect(recovered.status).toBe(200);
     } finally {
       await closeServer(timed.server);
     }
@@ -292,6 +297,13 @@ describe('HttpAnalysisClient response boundary', () => {
         (
           (value.scenario as Record<string, unknown>).intervention as Record<string, unknown>
         ).decision = 'INTERVENE';
+      },
+    ],
+    [
+      'mismatched scenario identity',
+      (value: Record<string, unknown>) => {
+        value.status = 'ignored';
+        value.scenario = structuredClone(scenarioById('ignored'));
       },
     ],
   ])('fails closed for %s', async (_label, mutate) => {

@@ -86,7 +86,8 @@ Use the first failing boundary as the diagnosis boundary:
 - Local API failure: inspect the POST response. `400` indicates request
   validation, `429` indicates bounded active-run capacity, and `502` indicates
   a timeout or application flow that failed closed. The API stores at most 32
-  runs in memory and does not persist them across process restarts.
+  runs in memory, evicts the oldest run beyond that bound (`GET` then returns
+  `404`), and does not persist runs across process restarts.
 - Application-flow result: `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` with
   stages and audit events means transport succeeded; inspect those events and
   the sanitized result for the failing boundary.
