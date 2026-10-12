@@ -2078,6 +2078,18 @@ describe('built independent-review CLI integration', () => {
       expect(existsSync(`${workspace.statePath}.reviewer-failure-recovery-transaction`)).toBe(
         false,
       );
+      const otherIssue = runBuiltReviewCli(workspace.cwd, workspace.binDirectory, [
+        '--authorize-reviewer-failure-recovery',
+        '--confirm-human-authorization',
+        '--issue',
+        '77',
+        '--base',
+        'main',
+        '--cwd',
+        workspace.cwd,
+      ]);
+      expect(otherIssue.exitCode).toBe(1);
+      expect(otherIssue.stdout).toContain('limited to Issue #76');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

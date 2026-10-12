@@ -182,6 +182,9 @@ function resumeRecovery(reviewInput: IndependentReviewInput) {
 }
 
 function authorizeReviewerFailure(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
   const branchError = validateIssueBranch(reviewInput);
   if (branchError) return branchError;
   if (!rawArguments.includes('--confirm-human-authorization')) {
@@ -191,6 +194,9 @@ function authorizeReviewerFailure(reviewInput: IndependentReviewInput) {
 }
 
 function resumeReviewerFailure(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
   const branchError = validateIssueBranch(reviewInput);
   if (branchError) return branchError;
   return resumeReviewerFailureRecovery(reviewInput.cwd, reviewInput.base);

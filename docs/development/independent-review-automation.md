@@ -524,11 +524,15 @@ npm run build
 node dist/review/cli.js \
   --authorize-reviewer-failure-recovery \
   --confirm-human-authorization \
-  --issue <N> --base main --cwd .worktrees/issue-<N>
+  --issue 76 --base main --cwd .worktrees/issue-76
 node dist/review/cli.js \
   --resume-reviewer-failure-recovery \
-  --issue <N> --base main --cwd .worktrees/issue-<N>
+  --issue 76 --base main --cwd .worktrees/issue-76
 ```
+
+The reviewer-failure recovery CLI is intentionally limited to Issue #76. It
+does not provide a generic retry or resume command for other Issues; those
+states remain fail-closed pending their own explicit authorization boundary.
 
 Codex must not create or consume this approval without a separate explicit
 Human Decision. Missing approval, changed HEAD or Schema, failed deterministic
