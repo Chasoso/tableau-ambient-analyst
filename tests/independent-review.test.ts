@@ -1275,6 +1275,10 @@ function createReviewerRecoveryWorkspace(
     'utf8',
   );
   execFileSync('git', ['init'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['add', 'package.json', 'src/review/review-result.schema.json'], {
+    cwd: directory,
+    stdio: 'ignore',
+  });
   execFileSync(
     'git',
     [
@@ -1283,36 +1287,41 @@ function createReviewerRecoveryWorkspace(
       '-c',
       'user.email=review-fixture@example.invalid',
       'commit',
-      '--allow-empty',
       '-m',
       'review fixture',
     ],
     { cwd: directory, stdio: 'ignore' },
   );
-  execFileSync('git', ['branch', 'main'], { cwd: directory, stdio: 'ignore' });
-  execFileSync('git', ['branch', '-M', 'feature/review'], { cwd: directory, stdio: 'ignore' });
-  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+  execFileSync('git', ['branch', '-M', 'main'], { cwd: directory, stdio: 'ignore' });
+  const worktreePath = join(directory, '.worktrees', 'issue-76');
+  mkdirSync(join(directory, '.worktrees'), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/issue-76', worktreePath, 'main'], {
     cwd: directory,
+    stdio: 'ignore',
+  });
+  const cwd = realpathSync(worktreePath);
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd,
     encoding: 'utf8',
   }).trim();
   const schemaFingerprint = createHash('sha256')
-    .update(readFileSync(join(directory, 'src/review/review-result.schema.json')))
+    .update(readFileSync(join(cwd, 'src/review/review-result.schema.json')))
     .digest('hex');
   const statePath = resolve(
-    directory,
+    cwd,
     execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
-      cwd: directory,
+      cwd,
       encoding: 'utf8',
     }).trim(),
   );
   const approvalPath = resolve(
-    directory,
+    cwd,
     execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
-      cwd: directory,
+      cwd,
       encoding: 'utf8',
     }).trim(),
   );
-  return { cwd: directory, headSha, schemaFingerprint, statePath, approvalPath };
+  return { cwd, headSha, schemaFingerprint, statePath, approvalPath };
 }
 
 function createCanonicalIndependentReviewWorkspace(
@@ -4800,7 +4809,7 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-v2-'));
     const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const state = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -4833,7 +4842,7 @@ describe('review cycle state', () => {
       const approval = authorizeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -4845,7 +4854,7 @@ describe('review cycle state', () => {
       const recovered = resumeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -4870,7 +4879,7 @@ describe('review cycle state', () => {
       workspace: ReturnType<typeof createReviewerRecoveryWorkspace>,
       count: number,
     ) => ({
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -4904,7 +4913,7 @@ describe('review cycle state', () => {
       const belowLimitApproval = authorizeReviewerFailureRecoveryAtPath(
         belowLimit.statePath,
         belowLimit.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         belowLimit.headSha,
         belowLimit.schemaFingerprint,
@@ -4917,7 +4926,7 @@ describe('review cycle state', () => {
         resumeReviewerFailureRecoveryAtPath(
           belowLimit.statePath,
           belowLimit.approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           belowLimit.headSha,
           belowLimit.schemaFingerprint,
@@ -4934,7 +4943,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           atLimit.statePath,
           atLimit.approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           atLimit.headSha,
           atLimit.schemaFingerprint,
@@ -4952,7 +4961,7 @@ describe('review cycle state', () => {
               id: 'limit-reviewer-failure-approval',
               approvalType: 'reviewer-failure-recovery',
               targetRepository: 'Chasoso/tableau-ambient-analyst',
-              branch: 'feature/review',
+              branch: 'feat/issue-76',
               base: 'main',
               reviewEpoch: 1,
               exhaustedReviewInvocationCount: 16,
@@ -4975,7 +4984,7 @@ describe('review cycle state', () => {
         resumeReviewerFailureRecoveryAtPath(
           atLimit.statePath,
           atLimit.approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           atLimit.headSha,
           atLimit.schemaFingerprint,
@@ -4995,7 +5004,7 @@ describe('review cycle state', () => {
       const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-failure-head-'));
       const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
       const state = {
-        branch: 'feature/review',
+        branch: 'feat/issue-76',
         base: 'main',
         legacyReviewInvocations: 0,
         legacyAutoFixCycles: 0,
@@ -5027,7 +5036,7 @@ describe('review cycle state', () => {
 
       try {
         expect(() =>
-          readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+          readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
         ).toThrow('Review accounting state is invalid');
         expect(readFileSync(workspace.statePath, 'utf8')).toBe(contents);
       } finally {
@@ -5043,7 +5052,7 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-pending-contradiction-'));
     const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const state = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -5076,7 +5085,7 @@ describe('review cycle state', () => {
 
     try {
       expect(() =>
-        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toThrow('Review accounting state is invalid');
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(contents);
     } finally {
@@ -5091,7 +5100,7 @@ describe('review cycle state', () => {
     writeFileSync(
       statePath,
       JSON.stringify({
-        branch: 'feature/review',
+        branch: 'feat/issue-76',
         base: 'main',
         legacyReviewInvocations: 0,
         legacyAutoFixCycles: 0,
@@ -5121,7 +5130,7 @@ describe('review cycle state', () => {
 
     try {
       const accountingBefore = readFileSync(statePath, 'utf8');
-      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+      expect(readReviewAccountingAtPath(statePath, 'feat/issue-76', 'main')).toMatchObject({
         reviewInvocationCount: 1,
         terminationReason: 'REVIEWER_FAILURE',
         reviewExecutionFailures: [{ reviewInvocation: 1, kind: 'NONZERO_EXIT' }],
@@ -5130,7 +5139,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           schemaFingerprint,
@@ -5151,7 +5160,7 @@ describe('review cycle state', () => {
     writeFileSync(
       statePath,
       JSON.stringify({
-        branch: 'feature/review',
+        branch: 'feat/issue-76',
         base: 'main',
         legacyReviewInvocations: 0,
         legacyAutoFixCycles: 0,
@@ -5184,7 +5193,7 @@ describe('review cycle state', () => {
       const approval = authorizeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         headSha,
         schemaFingerprint,
@@ -5205,7 +5214,7 @@ describe('review cycle state', () => {
       const recovered = resumeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         headSha,
         schemaFingerprint,
@@ -5243,8 +5252,8 @@ describe('review cycle state', () => {
         consumed: true,
         consumedAt: expect.any(String),
       });
-      expect(reserveReviewCycleAtPath(statePath, 'feature/review', 'main')).toBeUndefined();
-      expect(readReviewAccountingAtPath(statePath, 'feature/review', 'main')).toMatchObject({
+      expect(reserveReviewCycleAtPath(statePath, 'feat/issue-76', 'main')).toBeUndefined();
+      expect(readReviewAccountingAtPath(statePath, 'feat/issue-76', 'main')).toMatchObject({
         reviewInvocationCount: 2,
         pendingReview: { reviewInvocation: 2, status: 'RESERVED' },
         reviewerFailureRecoveryHistory: [
@@ -5256,8 +5265,85 @@ describe('review cycle state', () => {
         ],
       });
       expect(
-        readReviewAccountingAtPath(statePath, 'feature/review', 'main').reviewerFailureRecovery,
+        readReviewAccountingAtPath(statePath, 'feat/issue-76', 'main').reviewerFailureRecovery,
       ).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects direct reviewer-failure recovery outside the canonical Issue #76 worktree', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-recovery-scope-'));
+    const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
+    const state = {
+      branch: 'feat/issue-76',
+      base: 'main',
+      legacyReviewInvocations: 0,
+      legacyAutoFixCycles: 0,
+      accountingEpochStart: 'issue-29-accounting-v2',
+      reviewInvocationCount: 1,
+      autoFixCycleCount: 0,
+      generalizedRuleHistory: [],
+      consecutiveRepeatCount: 0,
+      lastFixChangedRepository: null,
+      cycleResults: [],
+      terminationHistory: ['REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
+      reviewEpoch: 1,
+      reviewExecutionFailures: [
+        {
+          reviewInvocation: 1,
+          kind: 'NONZERO_EXIT',
+          diagnostic: 'safe diagnostic',
+          evidenceVersion: 'reviewer-failure-v2',
+          executionPhase: 'REVIEW',
+          reviewEpoch: 1,
+          headSha: workspace.headSha,
+          schemaFingerprint: workspace.schemaFingerprint,
+        },
+      ],
+    };
+    writeFileSync(workspace.statePath, JSON.stringify(state), 'utf8');
+    writeFileSync(workspace.approvalPath, JSON.stringify({ approvals: [] }), 'utf8');
+
+    try {
+      const stateBefore = readFileSync(workspace.statePath, 'utf8');
+      const approvalsBefore = readFileSync(workspace.approvalPath, 'utf8');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-77',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          workspace.cwd,
+        ),
+      ).toContain('limited to Issue #76');
+      expect(
+        authorizeReviewerFailureRecoveryAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          join(directory, 'workspace'),
+        ),
+      ).toContain('canonical Issue #76 worktree');
+      expect(
+        resumeReviewerFailureRecoveryAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          join(directory, 'workspace'),
+        ),
+      ).toContain('canonical Issue #76 worktree');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBefore);
+      expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(approvalsBefore);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -5267,7 +5353,7 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-legacy-reviewer-failure-'));
     const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const legacyState = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -5291,7 +5377,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           workspace.statePath,
           workspace.approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           workspace.headSha,
           workspace.schemaFingerprint,
@@ -5307,7 +5393,7 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-recovery-approval-integrity-'));
     const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const state = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -5340,7 +5426,7 @@ describe('review cycle state', () => {
       const approval = authorizeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -5351,7 +5437,7 @@ describe('review cycle state', () => {
       const recovered = resumeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -5363,9 +5449,9 @@ describe('review cycle state', () => {
 
       rmSync(workspace.approvalPath);
       expect(() =>
-        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toThrow('Review accounting state is invalid');
-      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
         'Review accounting state is invalid',
       );
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
@@ -5385,9 +5471,9 @@ describe('review cycle state', () => {
         'utf8',
       );
       expect(() =>
-        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toThrow('Review accounting state is invalid');
-      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
         'Review accounting state is invalid',
       );
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
@@ -5400,7 +5486,7 @@ describe('review cycle state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-reviewer-archived-approval-integrity-'));
     const workspace = createReviewerRecoveryWorkspace(join(directory, 'workspace'));
     const state = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -5433,7 +5519,7 @@ describe('review cycle state', () => {
       const approval = authorizeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -5444,7 +5530,7 @@ describe('review cycle state', () => {
       const recovered = resumeReviewerFailureRecoveryAtPath(
         workspace.statePath,
         workspace.approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         workspace.headSha,
         workspace.schemaFingerprint,
@@ -5453,7 +5539,7 @@ describe('review cycle state', () => {
       expect(typeof recovered).not.toBe('string');
       if (typeof recovered === 'string') return;
       expect(
-        reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main'),
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toBeUndefined();
       const accountingBeforeTamper = readFileSync(workspace.statePath, 'utf8');
       const approvalState = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')) as {
@@ -5463,9 +5549,9 @@ describe('review cycle state', () => {
       writeFileSync(workspace.approvalPath, JSON.stringify(approvalState), 'utf8');
 
       expect(() =>
-        readReviewAccountingAtPath(workspace.statePath, 'feature/review', 'main'),
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main'),
       ).toThrow('Review accounting state is invalid');
-      expect(reserveReviewCycleAtPath(workspace.statePath, 'feature/review', 'main')).toContain(
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-76', 'main')).toContain(
         'Review accounting state is invalid',
       );
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(accountingBeforeTamper);
@@ -5483,7 +5569,7 @@ describe('review cycle state', () => {
     );
     const { cwd, headSha, schemaFingerprint, statePath, approvalPath } = reviewerWorkspace;
     const state = {
-      branch: 'feature/review',
+      branch: 'feat/issue-76',
       base: 'main',
       legacyReviewInvocations: 0,
       legacyAutoFixCycles: 0,
@@ -5516,7 +5602,7 @@ describe('review cycle state', () => {
         resumeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           schemaFingerprint,
@@ -5527,7 +5613,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           join(directory, 'non-canonical-state.json'),
           join(directory, 'non-canonical-approval.json'),
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           schemaFingerprint,
@@ -5544,12 +5630,12 @@ describe('review cycle state', () => {
           schemaFingerprint,
           cwd,
         ),
-      ).toContain('branch does not match');
+      ).toContain('limited to Issue #76');
       expect(
         authorizeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'develop',
           headSha,
           schemaFingerprint,
@@ -5560,7 +5646,7 @@ describe('review cycle state', () => {
         authorizeReviewResumeAfterLimitAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
         ),
@@ -5569,7 +5655,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           '0'.repeat(64),
@@ -5581,7 +5667,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           failingWorkspace.statePath,
           failingWorkspace.approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           failingWorkspace.headSha,
           schemaFingerprint,
@@ -5592,7 +5678,7 @@ describe('review cycle state', () => {
         authorizeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           schemaFingerprint,
@@ -5603,7 +5689,7 @@ describe('review cycle state', () => {
         resumeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           'different-head',
           schemaFingerprint,
@@ -5613,7 +5699,7 @@ describe('review cycle state', () => {
       const recovered = resumeReviewerFailureRecoveryAtPath(
         statePath,
         approvalPath,
-        'feature/review',
+        'feat/issue-76',
         'main',
         headSha,
         schemaFingerprint,
@@ -5624,7 +5710,7 @@ describe('review cycle state', () => {
         resumeReviewerFailureRecoveryAtPath(
           statePath,
           approvalPath,
-          'feature/review',
+          'feat/issue-76',
           'main',
           headSha,
           schemaFingerprint,

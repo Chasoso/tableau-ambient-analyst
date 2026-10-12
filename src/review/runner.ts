@@ -3223,6 +3223,12 @@ function validateReviewerFailureRecoveryScope(
   branch: string,
   base: string,
 ): string | undefined {
+  if (branch !== 'feat/issue-76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
+  if (resolve(cwd) !== canonicalIssueWorktreePath(cwd, '76')) {
+    return 'Reviewer-failure recovery requires the canonical Issue #76 worktree.';
+  }
   const actualBranch = currentBranch(cwd);
   if (!actualBranch || actualBranch === 'unknown-branch' || actualBranch !== branch) {
     return 'Reviewer-failure recovery branch does not match the current Git branch.';

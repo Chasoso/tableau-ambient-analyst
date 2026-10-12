@@ -530,9 +530,11 @@ node dist/review/cli.js \
   --issue 76 --base main --cwd .worktrees/issue-76
 ```
 
-The reviewer-failure recovery CLI is intentionally limited to Issue #76. It
-does not provide a generic retry or resume command for other Issues; those
-states remain fail-closed pending their own explicit authorization boundary.
+The reviewer-failure recovery CLI and the exported Runner authorization and
+consumption APIs are intentionally limited to Issue #76 and its canonical
+`.worktrees/issue-76` worktree. They do not provide a generic retry or resume
+command for other Issues or worktrees; those states remain fail-closed pending
+their own explicit authorization boundary.
 
 Codex must not create or consume this approval without a separate explicit
 Human Decision. Missing approval, changed HEAD or Schema, failed deterministic
