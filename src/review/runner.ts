@@ -6812,6 +6812,7 @@ function recordReviewAccounting(
 ): ReviewAccounting {
   return updateAccounting(cwd, base, (accounting) => {
     if (
+      accounting.pendingReview?.status !== 'STARTED' ||
       !accounting.pendingReview?.headSha ||
       readHeadSha(cwd) !== accounting.pendingReview.headSha
     ) {

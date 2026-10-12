@@ -1828,6 +1828,36 @@ describe('built independent-review CLI integration', () => {
     }
   });
 
+  it('does not commit a completed cycle if the reservation is still RESERVED', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-reserved-success-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(
+        directory,
+        'STATE=$(git rev-parse --git-path tableau-ambient-review-state.json); node -e "const fs=require(\'fs\'); const p=process.argv[1]; const s=JSON.parse(fs.readFileSync(p, \'utf8\')); s.entries[0].pendingReview.status=\'RESERVED\'; fs.writeFileSync(p, JSON.stringify(s));" "$STATE"; printf \'%s\\n\' \'{\\"type\\":\\"item.completed\\",\\"item\\":{\\"type\\":\\"agent_message\\",\\"text\\":\\"{\\"result\\":\\"PASS\\",\\"blockingFindings\\":[],\\"nonBlockingFindings\\":[],\\"escalationRequired\\":false,\\"maintainability\\":\\"NO_DRIFT\\"}"}}\'; exit 0',
+      );
+      const cli = runBuiltReviewCli(workspace.cwd, workspace.binDirectory, [
+        '--review-only',
+        '--issue',
+        '76',
+        '--base',
+        'main',
+        '--cwd',
+        workspace.cwd,
+      ]);
+
+      expect(cli.exitCode).toBe(1);
+      const accounting = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(accounting).toMatchObject({
+        reviewInvocationCount: 1,
+        pendingReview: { reviewInvocation: 1, status: 'RESERVED', headSha: workspace.headSha },
+      });
+      expect(accounting.cycleResults).toHaveLength(0);
+      expect(accounting.terminationReason).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('runs reservation reconciliation through the built CLI and preserves durable evidence', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-reconciliation-'));
     try {
