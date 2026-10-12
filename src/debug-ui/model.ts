@@ -164,6 +164,95 @@ export class FixtureAnalysisClient implements AnalysisClient {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max;
+}
+
+function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.runId, 100) || !isBoundedString(value.status, 32)) return false;
+  if (!['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status))
+    return false;
+  if (!Array.isArray(value.audit) || value.audit.length > 64) return false;
+  if (!value.audit.every((item) => isBoundedString(item, 200))) return false;
+
+  const scenario = value.scenario;
+  if (!isRecord(scenario)) return false;
+  if (
+    !isBoundedString(scenario.id, 100) ||
+    !scenarios.some(({ id }) => id === scenario.id) ||
+    !isBoundedString(scenario.name, 200) ||
+    !isBoundedString(scenario.description, 500)
+  )
+    return false;
+
+  if (!Array.isArray(scenario.utterances) || scenario.utterances.length > 100) return false;
+  if (
+    !scenario.utterances.every(
+      (item) =>
+        isRecord(item) && isBoundedString(item.speaker, 100) && isBoundedString(item.text, 500),
+    )
+  )
+    return false;
+
+  const trigger = scenario.trigger;
+  if (
+    !isRecord(trigger) ||
+    !['ANALYZE', 'IGNORE'].includes(trigger.decision as string) ||
+    !isBoundedString(trigger.reason, 100) ||
+    (trigger.claim !== undefined && !isBoundedString(trigger.claim, 300))
+  )
+    return false;
+
+  if (!Array.isArray(scenario.questions) || scenario.questions.length > 8) return false;
+  if (!scenario.questions.every((item) => isBoundedString(item, 300))) return false;
+
+  if (!Array.isArray(scenario.evidence) || scenario.evidence.length > 20) return false;
+  if (
+    !scenario.evidence.every(
+      (item) =>
+        isRecord(item) &&
+        isBoundedString(item.source, 100) &&
+        isBoundedString(item.detail, 500) &&
+        isBoundedString(item.provenance, 100),
+    )
+  )
+    return false;
+
+  if (!isRecord(scenario.verifier)) return false;
+  if (
+    !['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(scenario.verifier.status as string) ||
+    !isBoundedString(scenario.verifier.detail, 500)
+  )
+    return false;
+
+  if (!Array.isArray(scenario.stages) || scenario.stages.length > 16) return false;
+  if (
+    !scenario.stages.every(
+      (item) =>
+        isRecord(item) &&
+        isBoundedString(item.name, 100) &&
+        ['pending', 'active', 'complete', 'failed', 'skipped'].includes(item.status as string) &&
+        isBoundedString(item.detail, 500),
+    )
+  )
+    return false;
+
+  if (scenario.intervention !== null) {
+    if (!isRecord(scenario.intervention)) return false;
+    if (
+      !['HOLD', 'INTERVENE'].includes(scenario.intervention.decision as string) ||
+      !isBoundedString(scenario.intervention.reason, 500)
+    )
+      return false;
+  }
+  return scenario.error === undefined || isBoundedString(scenario.error, 200);
+}
+
 export class HttpAnalysisClient implements AnalysisClient {
   constructor(private readonly baseUrl = '') {}
 
@@ -174,33 +263,16 @@ export class HttpAnalysisClient implements AnalysisClient {
       body: JSON.stringify({ scenarioId: scenario.id }),
     });
     if (!response.ok) throw new Error('ANALYSIS_RUN_REQUEST_FAILED');
-    const value = (await response.json()) as Partial<AnalysisRunEnvelope>;
-    if (
-      typeof value.runId !== 'string' ||
-      value.runId.length > 100 ||
-      !value.scenario ||
-      !Array.isArray(value.audit) ||
-      value.audit.length > 64 ||
-      value.audit.some((item) => typeof item !== 'string' || item.length > 200) ||
-      !['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status ?? '') ||
-      !['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(value.scenario.verifier?.status ?? '') ||
-      !Array.isArray(value.scenario.questions) ||
-      value.scenario.questions.length > 8 ||
-      value.scenario.questions.some((item) => typeof item !== 'string' || item.length > 300) ||
-      !Array.isArray(value.scenario.evidence) ||
-      value.scenario.evidence.length > 20 ||
-      value.scenario.evidence.some(
-        (item) =>
-          typeof item?.source !== 'string' ||
-          typeof item?.detail !== 'string' ||
-          typeof item?.provenance !== 'string',
-      ) ||
-      !Array.isArray(value.scenario.stages) ||
-      value.scenario.stages.length > 16
-    ) {
+    let value: unknown;
+    try {
+      value = await response.json();
+    } catch {
       throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
     }
-    return value as AnalysisRunEnvelope;
+    if (!isAnalysisRunEnvelope(value)) {
+      throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
+    }
+    return value;
   }
 }
 

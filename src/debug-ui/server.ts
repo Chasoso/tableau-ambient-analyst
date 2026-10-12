@@ -19,6 +19,14 @@ function send(response: ServerResponse, status: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
+function isAllowedOrigin(request: IncomingMessage): boolean {
+  const origin = request.headers.origin;
+  if (origin === undefined) return true;
+  const host = request.headers.host;
+  if (!host) return false;
+  return origin === `http://${host}`;
+}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -167,6 +175,15 @@ export function createDebugUiRequestHandler(
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    if (pathname.startsWith('/api/')) {
+      response.setHeader('vary', 'Origin');
+      if (!isAllowedOrigin(request)) {
+        send(response, 403, { error: 'Origin is not allowed.' });
+        return;
+      }
+      const origin = request.headers.origin;
+      if (origin) response.setHeader('access-control-allow-origin', origin);
+    }
     if (pathname === '/api/analysis-runs' && request.method === 'POST') {
       try {
         const body = await readJson(request);
@@ -246,8 +263,9 @@ export function createDebugUiRequestHandler(
 }
 
 export function startDebugUiServer(): ReturnType<typeof createServer> {
+  const handler = createDebugUiRequestHandler();
   const server = createServer((request, response) => {
-    void createDebugUiRequestHandler()(request, response);
+    void handler(request, response);
   });
   server.listen(port, 'localhost', () => {
     console.log(`Ambient Analyst debug UI: http://localhost:${port}`);
