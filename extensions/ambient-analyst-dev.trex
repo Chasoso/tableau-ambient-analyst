@@ -14,7 +14,7 @@
     <source-location>
       <url>http://localhost:4173/</url>
     </source-location>
-    <icon>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=</icon>
+    <icon>iVBORw0KGgoAAAANSUhEUgAAAEYAAABGCAYAAABxLuKEAAAAKklEQVR4nO3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAAAAAAAAAAAAAAAeA0zWAAH2RkHnAAAAAElFTkSuQmCC</icon>
   </dashboard-extension>
   <resources>
     <resource id="name">
