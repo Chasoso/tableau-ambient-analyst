@@ -126,6 +126,16 @@ export function deterministicDependencies(scenarioId: string) {
 
 function sourceFor(scenario: DebugScenario): string {
   if (scenario.id === 'failed') return '{malformed fixture';
+  if (scenario.id === 'verified-intervention') {
+    return JSON.stringify([
+      {
+        sequence: 0,
+        speaker: 'Aki',
+        text: 'Assuming the conversion rate will remain high.',
+      },
+      { sequence: 1, speaker: 'Morgan', text: "Let's decide whether to launch the campaign." },
+    ]);
+  }
   return JSON.stringify(
     scenario.utterances.map((utterance, sequence) => ({ ...utterance, sequence })),
   );
@@ -151,7 +161,51 @@ function project(
   const intervention = flow.intervention
     ? { decision: flow.intervention.decision, reason: flow.intervention.reason.slice(0, 500) }
     : null;
-  const stages = scenario.stages.map((stage) => ({ ...stage }));
+  const types = new Set(flow.events.map(({ type }) => type));
+  const failedStage = flow.events.find((event) => event.type === 'flow-failed')?.stage;
+  const stage = (name: string, complete: boolean, failed: boolean, detail: string) => ({
+    name,
+    status: failed ? ('failed' as const) : complete ? ('complete' as const) : ('skipped' as const),
+    detail,
+  });
+  const stages = [
+    stage(
+      'Trigger',
+      types.has('trigger-detected') || types.has('trigger-ignored'),
+      failedStage === 'trigger' || failedStage === 'fixture',
+      'Derived from the trigger detector event.',
+    ),
+    stage(
+      'Analysis Contract',
+      types.has('analysis-contract-created'),
+      false,
+      'Derived from the application analysis contract.',
+    ),
+    stage(
+      'Analysis',
+      types.has('tableau-analysis-started') && !failedStage,
+      failedStage === 'analysis',
+      'Derived from the agentic analysis boundary.',
+    ),
+    stage(
+      'Evidence',
+      types.has('evidence-collected'),
+      failedStage === 'evidence',
+      'Derived from bounded evidence interpretation.',
+    ),
+    stage(
+      'Verifier',
+      types.has('verification-complete') || types.has('verification-insufficient'),
+      failedStage === 'verification',
+      'Derived from the evidence verifier event.',
+    ),
+    stage(
+      'Intervention',
+      types.has('intervention-hold') || types.has('intervention-recommended'),
+      false,
+      'Derived from the intervention policy event.',
+    ),
+  ];
   const projectedScenario: DebugScenario = {
     ...scenario,
     questions: flow.contract?.requiredEvidence.map(({ question }) => question) ?? [],

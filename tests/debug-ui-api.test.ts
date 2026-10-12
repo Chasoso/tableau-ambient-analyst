@@ -133,4 +133,26 @@ describe('debug UI analysis API', () => {
       await closeServer(server);
     }
   });
+
+  it('fails closed when the real replay boundary receives malformed provider output', async () => {
+    const malformed = new ApplicationAnalysisClient((scenarioId) => {
+      const dependencies = deterministicDependencies(scenarioId);
+      return {
+        ...dependencies,
+        model: { respond: async () => ({ status: 'completed', output: [{ type: 'message', content: [] }] }) },
+      };
+    });
+    const { server, base } = await withServer(malformed);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST', body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.status).toBe('failed');
+      expect(JSON.stringify(body)).not.toContain('provider');
+    } finally {
+      await closeServer(server);
+    }
+  });
 });

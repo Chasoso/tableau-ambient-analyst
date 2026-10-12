@@ -162,8 +162,15 @@ export function createDebugUiRequestHandler(
         runs.set(run.runId, run);
         while (runs.size > maxStoredRuns) runs.delete(runs.keys().next().value as string);
         send(response, 200, run);
-      } catch {
-        send(response, 502, { error: 'Analysis run failed safely.' });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          ['INVALID_JSON', 'REQUEST_TOO_LARGE'].includes(error.message)
+        ) {
+          send(response, 400, { error: 'Invalid analysis run request.' });
+        } else {
+          send(response, 502, { error: 'Analysis run failed safely.' });
+        }
       }
       return;
     }
