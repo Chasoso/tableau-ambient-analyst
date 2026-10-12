@@ -222,13 +222,7 @@ export function createDebugUiRequestHandler(
           client.replay(scenarioById(body.scenarioId)),
         );
         void runPromise.then(release, release);
-        let runResult: Awaited<ReturnType<AnalysisClient['replay']>>;
-        try {
-          runResult = await withTimeout(runPromise);
-        } catch (error) {
-          if (error instanceof Error && error.message === 'RUN_TIMEOUT') release();
-          throw error;
-        }
+        const runResult = await withTimeout(runPromise);
         if (!validClientResult(runResult, body.scenarioId)) {
           send(response, 502, { error: 'Analysis run failed safely.' });
           return;

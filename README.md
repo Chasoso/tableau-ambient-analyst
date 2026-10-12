@@ -202,6 +202,11 @@ and the current **UNVERIFIED** Desktop status.
   reached, and `502` means the application flow failed closed or exceeded its
   bounded timeout. Retention evicts the oldest run; a later GET for that run
   returns `404`. Refreshing does not recover old in-memory runs.
+- A timeout response does not release an active-run slot while the underlying
+  analysis is still pending. If both slots remain pending, new POST requests
+  receive `429`; a slot becomes available only after its underlying promise
+  settles. A permanently pending operation therefore fails closed until it
+  settles or the local service is restarted.
 - A visible `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` result is an
   application-flow outcome; inspect its stages and audit timeline rather than
   treating it as a frontend transport failure.

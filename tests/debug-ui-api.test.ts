@@ -166,26 +166,42 @@ describe('debug UI analysis API', () => {
     }
 
     let timeoutCalls = 0;
+    const pendingResolvers: Array<(state: Awaited<ReturnType<AnalysisClient['replay']>>) => void> =
+      [];
     const timeoutClient: AnalysisClient = {
       replay: (scenario) => {
         timeoutCalls += 1;
-        return timeoutCalls === 1
-          ? new Promise(() => {})
-          : new FixtureAnalysisClient().replay(scenario);
+        if (timeoutCalls <= 2) {
+          return new Promise((resolve) => pendingResolvers.push(resolve));
+        }
+        return new FixtureAnalysisClient().replay(scenario);
       },
     };
     const timed = await withServer(timeoutClient);
     try {
-      const timedOut = await fetch(`${timed.base}/api/analysis-runs`, {
+      const timedOut = await Promise.all(
+        [1, 2].map(() =>
+          fetch(`${timed.base}/api/analysis-runs`, {
+            method: 'POST',
+            body: JSON.stringify({ scenarioId: 'ignored' }),
+          }),
+        ),
+      );
+      expect(timedOut.map((response) => response.status)).toEqual([502, 502]);
+      expect(timeoutCalls).toBe(2);
+      const rejected = await fetch(`${timed.base}/api/analysis-runs`, {
         method: 'POST',
         body: JSON.stringify({ scenarioId: 'ignored' }),
       });
-      expect(timedOut.status).toBe(502);
+      expect(rejected.status).toBe(429);
+      pendingResolvers[0]!(await new FixtureAnalysisClient().replay(scenarioById('ignored')));
+      await Promise.resolve();
       const recovered = await fetch(`${timed.base}/api/analysis-runs`, {
         method: 'POST',
         body: JSON.stringify({ scenarioId: 'ignored' }),
       });
       expect(recovered.status).toBe(200);
+      expect(timeoutCalls).toBe(3);
     } finally {
       await closeServer(timed.server);
     }

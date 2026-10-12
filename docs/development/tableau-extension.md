@@ -88,6 +88,11 @@ Use the first failing boundary as the diagnosis boundary:
   a timeout or application flow that failed closed. The API stores at most 32
   runs in memory, evicts the oldest run beyond that bound (`GET` then returns
   `404`), and does not persist runs across process restarts.
+- A timeout response does not release an active-run slot while its underlying
+  analysis remains pending. With both slots occupied, new POST requests receive
+  `429`; capacity recovers only after the underlying promise settles. A
+  permanently pending operation therefore remains fail-closed until it settles
+  or the local service is restarted.
 - Application-flow result: `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` with
   stages and audit events means transport succeeded; inspect those events and
   the sanitized result for the failing boundary.
