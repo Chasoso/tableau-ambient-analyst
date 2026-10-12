@@ -79,6 +79,11 @@ export const reviewReservationReconciliationEvidenceReasons = [
 ] as const;
 export type ReviewReservationReconciliationEvidenceReason =
   (typeof reviewReservationReconciliationEvidenceReasons)[number];
+export const orphanedInvocationReconciliationHumanDecisions = [
+  'reconcile-orphaned-invocation',
+] as const;
+export type OrphanedInvocationReconciliationHumanDecision =
+  (typeof orphanedInvocationReconciliationHumanDecisions)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
   issue?: string | undefined;
@@ -99,6 +104,7 @@ export const reviewEpochEvidenceKinds = [
   'CYCLE_RESULT',
   'REVIEWER_EXECUTION_FAILURE',
   'RESERVATION_RECONCILIATION',
+  'ORPHANED_INVOCATION_RECONCILIATION',
 ] as const;
 export type ReviewEpochEvidenceKind = (typeof reviewEpochEvidenceKinds)[number];
 export type ReviewEpochEvidenceCoverageEntry = {
@@ -136,6 +142,8 @@ export type ReviewEpochHistory = {
   reviewerFailureRecovery?: ReviewAccounting['reviewerFailureRecovery'] | undefined;
   reviewerFailureRecoveryHistory?: ReviewAccounting['reviewerFailureRecoveryHistory'] | undefined;
   reconciledReviewReservations?: ReviewAccounting['reconciledReviewReservations'] | undefined;
+  orphanedInvocationReconciliations?:
+    ReviewAccounting['orphanedInvocationReconciliations'] | undefined;
   invocationEvidenceCoverage?: ReviewEpochEvidenceCoverage | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
@@ -148,6 +156,7 @@ export type ReviewResumeApproval = {
     | 'review-termination-recovery'
     | 'reviewer-failure-recovery'
     | 'review-reservation-reconciliation'
+    | 'issue-79-orphaned-invocation-reconciliation'
     | 'review-limit-terminal-finalization';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
@@ -169,16 +178,24 @@ export type ReviewResumeApproval = {
     | ReviewRecoveryHumanDecision
     | ReviewerFailureRecoveryHumanDecision
     | ReviewReservationReconciliationHumanDecision
+    | OrphanedInvocationReconciliationHumanDecision
     | ReviewLimitTerminalFinalizationHumanDecision
     | undefined;
   reconciliationInvocation?: number | undefined;
-  reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | undefined;
+  reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | 'ORPHANED_INVOCATION' | undefined;
   reportedReservationHeadSha?: string | undefined;
   reportedReservationHeadProvenance?: ReviewReservationReconciliationProvenance | undefined;
   executionEvidence?: ReviewReservationReconciliationEvidenceReason | undefined;
   humanDecisionUrl?: string | undefined;
   humanDecisionVerification?: 'GITHUB_COMMENT_VERIFIED' | undefined;
+  humanDecisionCommentId?: number | undefined;
+  humanDecisionNonce?: string | undefined;
+  humanDecisionIdentity?: string | undefined;
   issue?: string | undefined;
+  statePreimageSha256?: string | undefined;
+  approvalPreimageSha256?: string | null | undefined;
+  transactionId?: string | undefined;
+  canonicalWorktreePath?: string | undefined;
   finalizationReviewInvocation?: number | undefined;
   finalizationResult?: 'CHANGES_REQUIRED' | undefined;
 };
@@ -259,6 +276,31 @@ export type ReviewAccounting = {
     humanDecisionUrl: string;
     humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED';
     schemaFingerprint: string;
+    reconciledAt: string;
+  }>;
+  orphanedInvocationReconciliations?: Array<{
+    reconciliationId: string;
+    approvalId: string;
+    repository: 'Chasoso/tableau-ambient-analyst';
+    issue: '79';
+    branch: 'feat/issue-79';
+    base: 'main';
+    canonicalWorktreePath: string;
+    headSha: string;
+    reviewEpoch: 1;
+    reviewInvocation: 1;
+    status: 'UNRESOLVED_NO_DURABLE_EVIDENCE';
+    reasonCode: 'ORPHANED_INVOCATION';
+    evidenceKind: 'ORPHANED_INVOCATION_RECONCILIATION';
+    statePreimageSha256: string;
+    approvalPreimageSha256: string | null;
+    schemaFingerprint: string;
+    humanDecisionUrl: string;
+    humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED';
+    humanDecisionCommentId: number;
+    humanDecisionNonce: string;
+    humanDecisionIdentity: string;
+    transactionId: string;
     reconciledAt: string;
   }>;
   reviewLimitTerminalEvidence?: {

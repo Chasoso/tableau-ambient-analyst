@@ -21,7 +21,17 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 const childProcessTestHooks = vi.hoisted(() => ({
   throwOnCodexSpawn: false,
   exceptionMessage: '',
-  humanDecisionComment: undefined as { url: string; author: string; body: string } | undefined,
+  humanDecisionApiFailure: false,
+  humanDecisionComment: undefined as
+    | {
+        url: string;
+        author: string;
+        body: string;
+        commentId?: number;
+        issueUrl?: string;
+        apiUrl?: string;
+      }
+    | undefined,
 }));
 
 const validTestHead = 'a'.repeat(40);
@@ -38,11 +48,31 @@ vi.mock('node:child_process', async () => {
         commandArgs[0] === 'api' &&
         childProcessTestHooks.humanDecisionComment
       ) {
+        if (childProcessTestHooks.humanDecisionApiFailure) {
+          return {
+            status: 1,
+            signal: null,
+            stdout: '',
+            stderr: 'fixture GitHub API failure',
+            pid: 1,
+            output: [],
+          } as ReturnType<typeof actual.spawnSync>;
+        }
+        const commentId =
+          childProcessTestHooks.humanDecisionComment.commentId ??
+          Number(String(commandArgs[1]).match(/comments\/(\d+)$/)?.[1]);
         return {
           status: 0,
           signal: null,
           stdout: JSON.stringify({
+            id: commentId,
+            url:
+              childProcessTestHooks.humanDecisionComment.apiUrl ??
+              `https://api.github.com/repos/Chasoso/tableau-ambient-analyst/issues/comments/${commentId}`,
             html_url: childProcessTestHooks.humanDecisionComment.url,
+            issue_url:
+              childProcessTestHooks.humanDecisionComment.issueUrl ??
+              'https://api.github.com/repos/Chasoso/tableau-ambient-analyst/issues/79',
             user: { login: childProcessTestHooks.humanDecisionComment.author },
             body: childProcessTestHooks.humanDecisionComment.body,
           }),
@@ -1220,11 +1250,14 @@ import {
   buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
+  formatIssue79ChromiumE2eEvidence,
   extractFinalReviewerMessage,
   authorizeReviewReservationReconciliation,
   authorizeReviewReservationReconciliationAtPath,
   reconcileReservedReviewAtPath,
   reconcileReservedReview,
+  authorizeIssue79OrphanedInvocationReconciliationAtPath,
+  reconcileIssue79OrphanedInvocationAtPath,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
@@ -1427,6 +1460,126 @@ function createCanonicalIndependentReviewWorkspace(
   };
 }
 
+function createIssue79OrphanedWorkspace(directory: string): {
+  cwd: string;
+  statePath: string;
+  approvalPath: string;
+  headSha: string;
+  schemaFingerprint: string;
+} {
+  const worktreePath = join(directory, '.worktrees', 'issue-79');
+  mkdirSync(join(directory, 'src/review'), { recursive: true });
+  mkdirSync(join(directory, '.worktrees'), { recursive: true });
+  copyFileSync(
+    join(process.cwd(), 'src/review/review-result.schema.json'),
+    join(directory, 'src/review/review-result.schema.json'),
+  );
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ private: true }), 'utf8');
+  execFileSync('git', ['init'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'review-fixture'], { cwd: directory });
+  execFileSync('git', ['config', 'user.email', 'review-fixture@example.invalid'], {
+    cwd: directory,
+  });
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/Chasoso/tableau-ambient-analyst.git'],
+    {
+      cwd: directory,
+    },
+  );
+  execFileSync('git', ['add', 'package.json', 'src/review/review-result.schema.json'], {
+    cwd: directory,
+  });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['branch', '-M', 'main'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/issue-79', worktreePath, 'main'], {
+    cwd: directory,
+    stdio: 'ignore',
+  });
+  const cwd = realpathSync(worktreePath);
+  writeFileSync(join(cwd, 'changed.txt'), 'fixture\n', 'utf8');
+  execFileSync('git', ['add', 'changed.txt'], { cwd });
+  execFileSync('git', ['commit', '-m', 'issue 79 fixture'], { cwd, stdio: 'ignore' });
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  const statePath = resolve(
+    cwd,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  const approvalPath = resolve(
+    cwd,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      entries: [
+        {
+          branch: 'feat/issue-79',
+          base: 'main',
+          legacyReviewInvocations: 0,
+          legacyAutoFixCycles: 0,
+          accountingEpochStart: 'issue-29-accounting-v2',
+          reviewInvocationCount: 1,
+          autoFixCycleCount: 0,
+          generalizedRuleHistory: [],
+          consecutiveRepeatCount: 0,
+          lastFixChangedRepository: null,
+          cycleResults: [],
+          terminationHistory: [],
+        },
+      ],
+    }),
+    'utf8',
+  );
+  const schemaFingerprint = createHash('sha256')
+    .update(readFileSync(join(cwd, 'src/review/review-result.schema.json')))
+    .digest('hex');
+  return { cwd, statePath, approvalPath, headSha, schemaFingerprint };
+}
+
+function issue79HumanDecisionBody(workspace: {
+  headSha: string;
+  statePath: string;
+  schemaFingerprint: string;
+}): string {
+  const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+  return [
+    '## Human Decision: Issue #79 Orphaned Invocation Reconciliation — Execution Authorization',
+    'この承認は対象状態に限定した単回復旧実行のみ',
+    '- Repository: `Chasoso/tableau-ambient-analyst`',
+    '- Issue: `79`',
+    '- Branch: `feat/issue-79` / Base: `main`',
+    '- Canonical worktree: `.worktrees/issue-79` の実Git identity',
+    `- Implementation HEAD: \`${workspace.headSha}\``,
+    '- Effective review epoch: `1`',
+    '- Consumed invocation: `1`',
+    '- `reviewInvocationCount: 1` / `autoFixCycleCount: 0`',
+    '- `accountingEpochStart: issue-29-accounting-v2`',
+    '- `cycleResults: []` / `terminationHistory: []`',
+    '- `pendingReview` / `terminationReason`: なし',
+    `- Accounting preimage SHA-256: \`${statePreimage}\``,
+    `- Reviewer Schema fingerprint: \`${workspace.schemaFingerprint}\``,
+    '- 既存approval・transaction/lock: なし',
+    `- Human Decision URL: ${issue79OrphanedHumanDecisionUrl}`,
+    `- Execution Authorization comment ID: \`${issue79ExecutionCommentId}\``,
+    `- Execution Authorization nonce: \`${issue79ExecutionNonce}\``,
+    `- Execution Authorization identity: \`issue-79-orphaned-invocation-reconciliation:${issue79ExecutionCommentId}:${issue79ExecutionNonce}\``,
+    '### 明示的に承認する操作',
+    '`issue-79-orphaned-invocation-reconciliation` approvalを**対象に対して一度だけ**発行する',
+    '正規の専用CLI/APIから`ORPHANED_INVOCATION_RECONCILIATION`を**一度だけ**実行',
+    '`reviewInvocationCount: 1`、effective epoch `1`を維持',
+    '### 禁止事項',
+    'Count reset/refund',
+    '本決定は**実装HEAD',
+  ].join('\n');
+}
+
 let builtCliReady = false;
 
 function runBuiltReviewCli(
@@ -1516,6 +1669,12 @@ const structuredAutoFix = {
 const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445';
+const issue79OrphanedHumanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6117990001';
+const issue79ImplementationHumanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116633116';
+const issue79ExecutionCommentId = 6117990001;
+const issue79ExecutionNonce = 'issue79-exec-nonce-20261012';
 
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -1647,6 +1806,421 @@ function prepareReservedReviewReconciliationFixture(workspace: {
       .digest('hex'),
   };
 }
+
+describe('Issue #79 orphaned invocation reconciliation', () => {
+  it('accepts only the three exact canonical repository remote forms', () => {
+    const acceptedRemotes = [
+      'https://github.com/Chasoso/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/tableau-ambient-analyst',
+      'git@github.com:Chasoso/tableau-ambient-analyst.git',
+    ];
+    const rejectedRemotes = [
+      'git@github.com:Chasoso/tableau-ambient-analyst',
+      'https://github.com/OtherOwner/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/other-repository.git',
+      'https://github.com.evil/Chasoso/tableau-ambient-analyst.git',
+      'https://user:password@github.com/Chasoso/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git?mirror=1',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git#mirror',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git/extra',
+      'ssh://git@github.com/Chasoso/tableau-ambient-analyst.git',
+    ];
+    try {
+      for (const remote of acceptedRemotes) {
+        const directory = mkdtempSync(join(tmpdir(), 'issue-79-remote-accepted-'));
+        try {
+          const workspace = createIssue79OrphanedWorkspace(directory);
+          execFileSync('git', ['remote', 'set-url', 'origin', remote], { cwd: directory });
+          childProcessTestHooks.humanDecisionComment = {
+            url: issue79OrphanedHumanDecisionUrl,
+            author: 'Chasoso',
+            body: issue79HumanDecisionBody(workspace),
+          };
+          const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+          const result = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+            workspace.statePath,
+            workspace.approvalPath,
+            'feat/issue-79',
+            'main',
+            workspace.headSha,
+            workspace.schemaFingerprint,
+            statePreimage,
+            null,
+            issue79OrphanedHumanDecisionUrl,
+            workspace.cwd,
+          );
+          expect(result).not.toBeTypeOf('string');
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+
+      for (const remote of rejectedRemotes) {
+        const directory = mkdtempSync(join(tmpdir(), 'issue-79-remote-rejected-'));
+        try {
+          const workspace = createIssue79OrphanedWorkspace(directory);
+          execFileSync('git', ['remote', 'set-url', 'origin', remote], { cwd: directory });
+          const before = readFileSync(workspace.statePath, 'utf8');
+          const result = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+            workspace.statePath,
+            workspace.approvalPath,
+            'feat/issue-79',
+            'main',
+            workspace.headSha,
+            workspace.schemaFingerprint,
+            testSha256(before),
+            null,
+            issue79OrphanedHumanDecisionUrl,
+            workspace.cwd,
+          );
+          expect(result).toContain('repository');
+          expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+          expect(existsSync(workspace.approvalPath)).toBe(false);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+    }
+  });
+
+  it('rejects the orphaned state through normal read and reservation without mutation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-normal-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const before = readFileSync(workspace.statePath, 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-79', 'main')).toContain(
+        'Review accounting state is invalid',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reconciles once, preserves invocation 1, and permits the next reservation as invocation 2', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-success-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+      const issued = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        statePreimage,
+        null,
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(issued).not.toBeTypeOf('string');
+      const approvalPreimage = testSha256(readFileSync(workspace.approvalPath, 'utf8'));
+      expect(
+        reconcileIssue79OrphanedInvocationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          '0'.repeat(64),
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('approval preimage');
+      const reconciled = reconcileIssue79OrphanedInvocationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        approvalPreimage,
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(reconciled).not.toBeTypeOf('string');
+      if (typeof reconciled === 'string') return;
+      expect(reconciled.reviewInvocationCount).toBe(1);
+      expect(reconciled.orphanedInvocationReconciliations).toHaveLength(1);
+      expect(reconciled.orphanedInvocationReconciliations?.[0]).toMatchObject({
+        reviewInvocation: 1,
+        status: 'UNRESOLVED_NO_DURABLE_EVIDENCE',
+        evidenceKind: 'ORPHANED_INVOCATION_RECONCILIATION',
+        humanDecisionCommentId: issue79ExecutionCommentId,
+        humanDecisionNonce: issue79ExecutionNonce,
+        humanDecisionIdentity: `issue-79-orphaned-invocation-reconciliation:${issue79ExecutionCommentId}:${issue79ExecutionNonce}`,
+      });
+      const approvals = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')) as {
+        approvals: Array<Record<string, unknown>>;
+      };
+      expect(approvals.approvals).toHaveLength(1);
+      expect(approvals.approvals[0]?.consumed).toBe(true);
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).not.toThrow();
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toBeUndefined();
+      const next = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main');
+      expect(next.reviewInvocationCount).toBe(2);
+      expect(next.pendingReview?.reviewInvocation).toBe(2);
+      const replay = reconcileIssue79OrphanedInvocationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        testSha256(readFileSync(workspace.approvalPath, 'utf8')),
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(replay).toMatch(/invalid|orphaned|pending|matching/i);
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects wrong scope, stale preimages, and malformed transaction markers without mutation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-reject-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const before = readFileSync(workspace.statePath, 'utf8');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('limited to Issue #79');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          'a'.repeat(40),
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('HEAD');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          '0'.repeat(64),
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('prerequisites');
+      writeFileSync(workspace.statePath, `${before}\n`, 'utf8');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('preimage');
+      writeFileSync(workspace.statePath, before, 'utf8');
+      const marker = `${workspace.statePath}.issue-79-orphaned-invocation-reconciliation-transaction`;
+      writeFileSync(marker, '{}', 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toThrow('Issue #79 reconciliation transaction is invalid');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the execution authorization contract and comment identity', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-execution-authorization-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const stateBefore = readFileSync(workspace.statePath, 'utf8');
+      const statePreimage = testSha256(stateBefore);
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: [
+          'Issue #79 Orphaned Invocation Reconciliation',
+          '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
+          `Current HEAD: ${workspace.headSha}`,
+          'Effective review epoch: 1',
+          `Accounting state preimage SHA-256: ${statePreimage}`,
+          `Reviewer Schema fingerprint: ${workspace.schemaFingerprint}`,
+          '実accountingへの監査記録追加・改変',
+        ].join('\n'),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'not-the-owner',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBefore);
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79ImplementationHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79ImplementationHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace).replace(
+          workspace.headSha,
+          '4c4a35544a3aff514c6a2522674074950a5bdb53',
+        ),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('content');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+        issueUrl: 'https://api.github.com/repos/OtherOwner/other-repo/issues/79',
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionApiFailure = true;
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('unavailable');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+      childProcessTestHooks.humanDecisionApiFailure = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('built independent-review CLI integration', () => {
   it('rejects missing issue arguments without touching isolated state', () => {
@@ -3544,6 +4118,65 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.reviewInvocationCount).toBe(1);
   });
 
+  it('supplies Issue #79 Chromium E2E evidence to the reviewer before reservation', () => {
+    const issue79Input = { ...input, issue: '79' };
+    let suppliedValidation: string[] = [];
+    const result = runReviewControlFlow(
+      issue79Input,
+      dependencies({
+        runBrowserE2e: () =>
+          'npm run test:e2e: passed; head=' +
+          'a'.repeat(40) +
+          '; browser=Playwright Chromium; os=darwin/arm64; tests=5/5; exitStatus=0; result=PASS; startedAt=start; completedAt=finish',
+        invokeReviewer: (_input, _issue, validation) => {
+          suppliedValidation = validation;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          );
+        },
+      }),
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(suppliedValidation).toEqual([
+      'npm run validate: passed (executed by review runner)',
+      expect.stringContaining('npm run test:e2e: passed; head='),
+    ]);
+  });
+
+  it('fails closed before reservation when Issue #79 E2E evidence is unavailable', () => {
+    let reviewerInvocations = 0;
+    const result = runReviewControlFlow(
+      { ...input, issue: '79' },
+      dependencies({
+        runBrowserE2e: () => undefined,
+        invokeReviewer: () => {
+          reviewerInvocations += 1;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          );
+        },
+      }),
+    );
+
+    expect(result.executionPhase).toBe('VALIDATION');
+    expect(result.result).not.toBe('PASS');
+    expect(reviewerInvocations).toBe(0);
+    expect(result.accounting).toBeUndefined();
+  });
+
   it('review-only returns AUTO_FIX findings without applying them', () => {
     let reviews = 0;
     const result = runReadOnlyReview(
@@ -4624,6 +5257,65 @@ describe('independent review scope context', () => {
     expect(prompt).toMatch(/new\s+contract\s+violations/);
     expect(prompt).not.toContain('invocation 17+');
     expect(prompt).not.toContain('return PASS');
+  });
+
+  it('provides Issue #79 decisions without treating them as authorization or PASS', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '79' },
+      {
+        title: 'Playwright E2E',
+        body: 'Acceptance criteria and non-goals',
+        url: 'https://example.test/issues/79',
+      },
+      ['npm run validate: passed'],
+      'feat/issue-79',
+    );
+
+    expect(prompt).toContain('issuecomment-6116633116');
+    expect(prompt).toContain('issuecomment-6117284006');
+    expect(prompt).toContain('issuecomment-6118154748');
+    expect(prompt).toContain('Issue #79-specific');
+    expect(prompt).toContain('non-goals');
+    expect(prompt).toContain('not authorization');
+    expect(prompt).toContain('do not suppress findings or force');
+    expect(prompt).toContain('HUMAN_DECISION_REQUIRED');
+    expect(prompt).not.toContain('return PASS');
+  });
+
+  it('formats only complete current-head Chromium E2E evidence', () => {
+    const head = 'a'.repeat(40);
+    const valid = formatIssue79ChromiumE2eEvidence(
+      head,
+      0,
+      'Running 5 tests using 5 workers\n5 passed (4.1s)',
+      '',
+      '2026-10-12T00:00:00.000Z',
+      '2026-10-12T00:00:04.100Z',
+    );
+    expect(valid).toContain(`head=${head}`);
+    expect(valid).toContain('browser=Playwright Chromium');
+    expect(valid).toContain('tests=5/5');
+    expect(valid).toContain('result=PASS');
+    expect(
+      formatIssue79ChromiumE2eEvidence(
+        head,
+        1,
+        'Running 5 tests using 5 workers\n4 passed (4.1s)',
+        '',
+        'start',
+        'finish',
+      ),
+    ).toBeUndefined();
+    expect(
+      formatIssue79ChromiumE2eEvidence(
+        head,
+        0,
+        'Running 5 tests using 5 workers',
+        '',
+        'start',
+        'finish',
+      ),
+    ).toBeUndefined();
   });
 
   it('requires bounded integration-boundary and adversarial seam review', () => {

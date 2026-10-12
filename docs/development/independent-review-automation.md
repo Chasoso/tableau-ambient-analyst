@@ -213,7 +213,47 @@ result, termination evidence, execution-failure evidence, or pending marker.
 This is not a supported legacy format. A read of the state, a new reservation,
 and the same checks after a process restart must all fail closed without
 rewriting the file, guessing the missing reason, or resetting or refunding the
-counter.
+counter. Issue #79 now has a separate, Issue-specific reconciliation design
+for this exact shape. Its implementation is limited to isolated fixtures
+until a later Human Decision authorizes execution against the real accounting.
+
+The dedicated `issue-79-orphaned-invocation-reconciliation` approval and
+`ORPHANED_INVOCATION_RECONCILIATION` audit record preserve invocation 1 as
+consumed and record only `UNRESOLVED_NO_DURABLE_EVIDENCE`; they never create a
+cycle result, failure evidence, or inferred reservation. The API binds the
+repository, Issue 79 branch/base, canonical worktree, exact HEAD, effective
+epoch 1, invocation count 1, state and approval preimages, Schema fingerprint,
+Human Decision URL, approval ID, and transaction identity. The dedicated
+operation does not reserve or execute a review; after a successful isolated
+reconciliation, the ordinary next reservation is invocation 2. Approval
+issuance and consumption are single-use and transaction-backed, and stale,
+cross-Issue, cross-worktree, duplicate, or partially modified states remain
+fail-closed.
+
+Issue #79 Execution Authorization identity
+------------------------------------------
+
+The Issue #79 execution approval is identified by the exact GitHub comment
+returned by the trusted GitHub API, not by a comment URL or copied body alone.
+The API response must bind the supplied comment ID to its canonical API URL,
+HTML URL, Issue 79 API URL, and the `Chasoso` author. The comment body must
+include the final implementation HEAD, epoch 1, invocation 1, state preimage,
+Schema fingerprint, Human Decision URL, and the following self-binding fields:
+
+```text
+- Execution Authorization comment ID: `<comment-id>`
+- Execution Authorization nonce: `<nonce>`
+- Execution Authorization identity: `issue-79-orphaned-invocation-reconciliation:<comment-id>:<nonce>`
+```
+
+The nonce is an identity binding and is never treated as authentication by
+itself. A copied body, a mismatched comment ID, another Issue or repository,
+another author, stale target state, or a GitHub API failure is rejected before
+approval state changes. The identity fields are persisted in the dedicated
+approval and audit record and must match through single-use consumption and
+transaction recovery. The comment ID is supplied at runtime, so a new
+Execution Authorization for the post-implementation HEAD does not require
+hard-coding a new ID in source code.
 
 This is distinct from the explicitly supported Issue #29 migration shape. That
 shape is recognized only by its exact repository, branch, base, legacy counter,

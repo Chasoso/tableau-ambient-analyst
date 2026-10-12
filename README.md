@@ -121,6 +121,33 @@ Run the default local validation path:
 npm run validate
 ```
 
+Run the standalone UI browser E2E gate separately after installing the pinned
+Playwright Chromium binary:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+The E2E command starts the built-in localhost server through Playwright's
+`webServer` configuration and covers real Chromium rendering, replay, the
+mock intervention badge, negative/error fixtures, and repeated scenario
+runs. It uses no Tableau, credentials, LLM, MCP service, or remote API. On a
+failure, Playwright keeps traces/screenshots and the HTML report under
+`test-results/` and `playwright-report/`; do not commit those directories.
+
+The normal `npm run validate` remains local/no-network and does not download
+browser binaries. CI provisions Chromium in the existing mandatory
+`validation` job and runs this E2E command after `npm run validate`, so an E2E
+failure fails that required job. `secret-scan` remains a separate required
+check.
+
+Validation reports must identify the browser and OS actually exercised. The
+repository gate covers Ubuntu + Chromium in CI; macOS and Windows are local
+setup targets but are unverified unless explicitly run and reported. Firefox,
+Safari, Tableau Desktop, and real Tableau Extension APIs are not covered by
+this Playwright suite.
+
 This covers formatting, linting, type checking, deterministic tests, and the
 build. Individual checks are also available:
 
@@ -154,10 +181,11 @@ invokes Tableau APIs or mutates a dashboard.
 
 ## Validation and CI
 
-GitHub Actions installs with `npm ci`, runs `npm run validate`, and runs
-Gitleaks. The `validation` and `secret-scan` jobs are required for `main`.
-Baseline CI does not call live LLM, MCP, Tableau, cloud, database, tunnel, or
-paid services, and it requires no application credentials.
+GitHub Actions installs with `npm ci`, runs `npm run validate`, provisions
+Chromium, runs `npm run test:e2e`, and runs Gitleaks. The `validation` and
+`secret-scan` jobs are required for `main`. CI does not call live LLM, MCP,
+Tableau, cloud, database, tunnel, or paid services, and it requires no
+application credentials.
 
 See the [validation policy](docs/development/validation-policy.md) for the
 validation layers and evidence rules.
