@@ -167,7 +167,7 @@ npm ci
 npm run debug:ui
 ```
 
-Open the printed `http://127.0.0.1:4173` URL. Select a fixture scenario and
+Open the printed `http://localhost:4173` URL. Select a fixture scenario and
 choose `Replay` to inspect transcript, trigger, Analysis Contract questions,
 progress, evidence/provenance, verifier state, intervention, errors, and the
 audit timeline. The console uses a fixture-driven mock client only: it does
@@ -178,6 +178,13 @@ The browser-facing model is host-independent and keeps the future Tableau
 adapter behind the small `AnalysisClient` boundary. The `INTERVENE` fixture
 shows a deterministic `!` badge; it records a mock debug event only and never
 invokes Tableau APIs or mutates a dashboard.
+
+The same page can be loaded as a Tableau Dashboard Extension with the
+development manifest at [`extensions/ambient-analyst-dev.trex`](extensions/ambient-analyst-dev.trex).
+Tableau-specific initialization is isolated in the host adapter and is skipped
+for standalone pages. See the [Tableau Desktop extension guide](docs/development/tableau-extension.md)
+for the localhost manifest, manual smoke-test steps, configuration boundary,
+and the current **UNVERIFIED** Desktop status.
 
 ## Validation and CI
 

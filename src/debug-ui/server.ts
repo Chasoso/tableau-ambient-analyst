@@ -30,6 +30,6 @@ const server = createServer(async (request, response) => {
   response.end('Not found');
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Ambient Analyst debug UI: http://127.0.0.1:${port}`);
+server.listen(port, 'localhost', () => {
+  console.log(`Ambient Analyst debug UI: http://localhost:${port}`);
 });

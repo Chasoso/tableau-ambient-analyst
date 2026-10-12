@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest manifest-version="0.1" xmlns="http://www.tableau.com/xml/extension_manifest">
+  <dashboard-extension id="com.tableau.ambient-analyst" extension-version="0.1.0">
+    <default-locale>en_US</default-locale>
+    <name resource-id="name" />
+    <description>Ambient Analyst standalone debug console.</description>
+    <author
+      name="Tableau Ambient Analyst"
+      email="not-configured@example.invalid"
+      organization="Tableau Ambient Analyst"
+      website="https://github.com/Chasoso/tableau-ambient-analyst"
+    />
+    <min-api-version>1.7</min-api-version>
+    <source-location>
+      <url>http://localhost:4173/</url>
+    </source-location>
+    <icon>iVBORw0KGgoAAAANSUhEUgAAAEYAAABGCAYAAABxLuKEAAAAKklEQVR4nO3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAAAAAAAAAAAAAAAeA0zWAAH2RkHnAAAAAElFTkSuQmCC</icon>
+  </dashboard-extension>
+  <resources>
+    <resource id="name">
+      <text locale="en_US">Ambient Analyst</text>
+    </resource>
+  </resources>
+</manifest>
