@@ -48,6 +48,22 @@ On a supported Tableau Desktop installation:
    behavior match the standalone browser.
 6. Remove the extension or restore the original dashboard state after testing.
 
+If Tableau refuses the extension, shows a blank zone, or reports a trust or
+security error:
+
+- Confirm that `npm run debug:ui` is still listening and that the manifest URL
+  exactly matches the local server URL. Do not silently switch to a different
+  host or port.
+- Remove and re-add the extension after changing the manifest. Tableau loads
+  manifest changes when the extension is added again; a browser refresh alone
+  is not sufficient.
+- Inspect Tableau Desktop diagnostics for the manifest or load error. On
+  Windows, start with `%USERPROFILE%\\Documents\\My Tableau Repository\\Logs\\log.txt`;
+  on macOS, start with `~/Documents/My Tableau Repository/Logs/log.txt`.
+- Stop and record the exact error if the extension still cannot load. Do not
+  broaden organization trust, network allowlists, or data permissions to make
+  the smoke test pass; escalate those changes for Human Decision.
+
 If Desktop or the safe test workbook is unavailable, record `UNVERIFIED`; do
 not infer a successful embedded smoke test from browser or CI evidence. Any
 request to change organization trust, security, or permission policy remains a
