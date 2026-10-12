@@ -130,7 +130,7 @@ describe('debug UI analysis API', () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.status).toBe('failed');
-      expect(body.scenario.stages.find((stage: { name: string }) => stage.name === 'Analysis').status).toBe('complete');
+      expect(body.scenario.stages.find((stage: { name: string }) => stage.name === 'Analysis').status).toBe('failed');
     } finally {
       await closeServer(server);
     }

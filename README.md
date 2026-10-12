@@ -182,6 +182,11 @@ adapter behind the small `AnalysisClient` boundary. The `INTERVENE` scenario
 shows a deterministic `!` badge; it records a mock debug event only and never
 invokes Tableau APIs or mutates a dashboard.
 
+For a future AWS HTTPS deployment, the browser continues using relative `/api`
+paths. The approved HTTPS host or reverse proxy must route those paths to the
+backend and enforce the approved origin/CORS policy; no deployment URL or
+production credential is hardcoded by this Issue.
+
 The same page can be loaded as a Tableau Dashboard Extension with the
 development manifest at [`extensions/ambient-analyst-dev.trex`](extensions/ambient-analyst-dev.trex).
 Tableau-specific initialization is isolated in the host adapter and is skipped

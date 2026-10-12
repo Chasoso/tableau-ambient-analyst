@@ -17,9 +17,11 @@ initialization is isolated in `src/debug-ui/host-adapter.ts`.
 
 The manifest is the environment-specific source configuration. A future
 production manifest should replace only its `<source-location><url>` with the
-approved HTTPS hosting URL; UI and analysis code do not need a production URL
-rewrite. The development manifest requests no full-data permission because this
-Issue does not access workbook data.
+approved HTTPS hosting URL. The browser continues using relative `/api`
+requests, so the future HTTPS host or approved reverse proxy must route `/api`
+to the backend and enforce the approved origin/CORS policy. UI and analysis
+code do not hardcode an AWS URL. The development manifest requests no full-data
+permission because this Issue does not access workbook data.
 
 ## Host boundary
 

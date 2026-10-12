@@ -208,6 +208,20 @@ function project(
   ];
   const projectedScenario: DebugScenario = {
     ...scenario,
+    utterances: flow.events
+      .filter(
+        (event): event is Extract<(typeof flow.events)[number], { type: 'utterance-received' }> =>
+          event.type === 'utterance-received',
+      )
+      .map(({ utterance }) => ({ speaker: utterance.speaker, text: utterance.text })),
+    trigger:
+      flow.detection.decision === 'ANALYZE'
+        ? {
+            decision: 'ANALYZE',
+            reason: flow.detection.opportunity.reason,
+            claim: flow.detection.opportunity.claim,
+          }
+        : { decision: 'IGNORE', reason: flow.detection.reason },
     questions: flow.contract?.requiredEvidence.map(({ question }) => question) ?? [],
     evidence,
     verifier: flow.verification

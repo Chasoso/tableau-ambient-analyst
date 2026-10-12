@@ -10,6 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '../../ui');
 const browserRoot = dirname(fileURLToPath(import.meta.url));
 const maxBodyBytes = 16_384;
 const maxStoredRuns = 32;
+const maxActiveRuns = 2;
 const runTimeoutMs = 3_000;
 
 function send(response: ServerResponse, status: number, body: unknown): void {
@@ -90,10 +91,23 @@ function sanitizeRun(
   requestedId: string,
   result: Awaited<ReturnType<AnalysisClient['replay']>>,
 ): AnalysisRunEnvelope {
-  const base = scenarioById(requestedId);
   const source = result.scenario;
   const scenario = {
-    ...base,
+    ...source,
+    id: requestedId,
+    name: boundedText(source.name, 200, 'Analysis run'),
+    description: boundedText(source.description, 500, 'Deterministic analysis run.'),
+    utterances: source.utterances.slice(0, 100).map((item) => ({
+      speaker: boundedText(item.speaker, 100, 'speaker'),
+      text: boundedText(item.text, 500, 'utterance unavailable'),
+    })),
+    trigger: {
+      decision: source.trigger.decision === 'ANALYZE' ? ('ANALYZE' as const) : ('IGNORE' as const),
+      reason: boundedText(source.trigger.reason, 100, 'trigger-result'),
+      ...(source.trigger.claim
+        ? { claim: boundedText(source.trigger.claim, 300, 'claim unavailable') }
+        : {}),
+    },
     questions: source.questions
       .slice(0, 8)
       .map((item) => boundedText(item, 300, 'Bounded analysis question.')),
@@ -108,6 +122,13 @@ function sanitizeRun(
         : 'NOT_RUN',
       detail: boundedText(source.verifier.detail, 500, 'Verification detail unavailable.'),
     },
+    stages: source.stages.slice(0, 16).map((item) => ({
+      name: boundedText(item.name, 100, 'stage'),
+      status: ['pending', 'active', 'complete', 'failed', 'skipped'].includes(item.status)
+        ? item.status
+        : ('failed' as const),
+      detail: boundedText(item.detail, 500, 'Stage detail unavailable.'),
+    })),
     intervention:
       source.intervention && ['HOLD', 'INTERVENE'].includes(source.intervention.decision)
         ? {
@@ -143,6 +164,7 @@ export function createDebugUiRequestHandler(
   client: AnalysisClient = new ApplicationAnalysisClient(),
 ) {
   const runs = new Map<string, AnalysisRunEnvelope>();
+  let activeRuns = 0;
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
@@ -153,7 +175,17 @@ export function createDebugUiRequestHandler(
           send(response, 400, { error: 'Invalid analysis run request.' });
           return;
         }
-        const runResult = await withTimeout(client.replay(scenarioById(body.scenarioId)));
+        if (activeRuns >= maxActiveRuns) {
+          send(response, 429, { error: 'Analysis run capacity is temporarily full.' });
+          return;
+        }
+        activeRuns += 1;
+        const runPromise = client.replay(scenarioById(body.scenarioId));
+        void runPromise.then(
+          () => activeRuns--,
+          () => activeRuns--,
+        );
+        const runResult = await withTimeout(runPromise);
         if (!validClientResult(runResult)) {
           send(response, 502, { error: 'Analysis run failed safely.' });
           return;
