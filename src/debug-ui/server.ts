@@ -2,13 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  FixtureAnalysisClient,
-  scenarioById,
-  scenarios,
-  type AnalysisClient,
-  type AnalysisRunEnvelope,
-} from './model.js';
+import { scenarioById, scenarios, type AnalysisClient, type AnalysisRunEnvelope } from './model.js';
+import { ApplicationAnalysisClient } from './application.js';
 
 const port = Number(process.env.PORT ?? 4173);
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../ui');
@@ -53,7 +48,19 @@ function createRunId(): string {
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function createDebugUiRequestHandler(client: AnalysisClient = new FixtureAnalysisClient()) {
+function isSafeRun(value: AnalysisRunEnvelope): boolean {
+  return (
+    value.runId.length <= 100 &&
+    value.audit.length <= 64 &&
+    value.audit.every((item) => item.length <= 200) &&
+    value.scenario.utterances.length <= 100 &&
+    value.scenario.evidence.length <= 20
+  );
+}
+
+export function createDebugUiRequestHandler(
+  client: AnalysisClient = new ApplicationAnalysisClient(),
+) {
   const runs = new Map<string, AnalysisRunEnvelope>();
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -67,6 +74,10 @@ export function createDebugUiRequestHandler(client: AnalysisClient = new Fixture
         }
         const runResult = await client.replay(scenarioById(body.scenarioId));
         const run: AnalysisRunEnvelope = { runId: createRunId(), ...runResult };
+        if (!isSafeRun(run)) {
+          send(response, 502, { error: 'Analysis run failed safely.' });
+          return;
+        }
         runs.set(run.runId, run);
         while (runs.size > maxStoredRuns) runs.delete(runs.keys().next().value as string);
         send(response, 200, run);

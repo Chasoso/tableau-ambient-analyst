@@ -175,7 +175,15 @@ export class HttpAnalysisClient implements AnalysisClient {
     });
     if (!response.ok) throw new Error('ANALYSIS_RUN_REQUEST_FAILED');
     const value = (await response.json()) as Partial<AnalysisRunEnvelope>;
-    if (typeof value.runId !== 'string' || !value.scenario || !Array.isArray(value.audit)) {
+    if (
+      typeof value.runId !== 'string' ||
+      value.runId.length > 100 ||
+      !value.scenario ||
+      !Array.isArray(value.audit) ||
+      value.audit.length > 64 ||
+      value.audit.some((item) => typeof item !== 'string' || item.length > 200) ||
+      !['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status ?? '')
+    ) {
       throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
     }
     return value as AnalysisRunEnvelope;

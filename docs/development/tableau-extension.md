@@ -1,13 +1,15 @@
 # Tableau Desktop Extension development
 
-Issue #68 loads the existing standalone debug console as a Tableau Dashboard
-Extension. The UI and fixture analysis client remain shared; Tableau-specific
+Issue #69 loads the standalone debug console and its local same-origin Node
+analysis API as a Tableau Dashboard Extension. The UI and application analysis
+client remain shared; Tableau-specific
 initialization is isolated in `src/debug-ui/host-adapter.ts`.
 
 ## Development configuration
 
 1. Install dependencies with `npm ci`.
-2. Start the UI with `npm run debug:ui` (default: `http://localhost:4173`).
+2. Start the UI and local API with `npm run debug:ui` (default:
+   `http://localhost:4173`).
 3. Use [`extensions/ambient-analyst-dev.trex`](../../extensions/ambient-analyst-dev.trex)
    in Tableau Desktop's dashboard Extension object.
 4. Select the local manifest, allow the localhost extension if Tableau asks,
@@ -25,7 +27,10 @@ The browser adapter treats a top-level page as `standalone` and does not load
 or initialize Tableau there. In an embedded frame it loads the Tableau
 Extensions API library only for that host, calls `tableau.extensions.initializeAsync()`,
 and reports `tableau`, `tableau-unavailable`, or `tableau-error` status. The
-standalone fixture replay remains usable when Tableau globals are absent.
+standalone replay remains usable when Tableau globals are absent. Both hosts
+call the same local API and application-layer replay path. The API uses
+bounded in-memory results and safe error responses, so failed runs do not
+expose provider/tool payloads or affect the host page.
 
 The adapter is intentionally not a View Action implementation. Worksheet,
 filter, and parameter operations remain in the future #71 boundary. No live
@@ -43,7 +48,7 @@ On a supported Tableau Desktop installation:
 3. Add a Dashboard Extension object and select the development `.trex` file.
 4. If prompted, explicitly approve the localhost/trust permission for this
    test extension. Record the exact prompt and Desktop version.
-5. Confirm the debug console renders, choose a deterministic fixture, and run
+5. Confirm the debug console renders, choose a deterministic scenario, and run
    Replay. Confirm the visible status, stages, evidence, and mock intervention
    behavior match the standalone browser.
 6. Remove the extension or restore the original dashboard state after testing.

@@ -29,7 +29,7 @@ describe('debug UI analysis API', () => {
       expect(created.status).toBe(200);
       const run = (await created.json()) as { runId: string; status: string; audit: string[] };
       expect(run.status).toBe('completed');
-      expect(run.audit).toContain('analysis.completed');
+      expect(run.audit).toContain('analysis-contract-created');
       const refreshed = await fetch(`${base}/api/analysis-runs/${run.runId}`);
       expect(refreshed.status).toBe(200);
       expect(await refreshed.json()).toEqual(run);
