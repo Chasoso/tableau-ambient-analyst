@@ -230,6 +230,31 @@ issuance and consumption are single-use and transaction-backed, and stale,
 cross-Issue, cross-worktree, duplicate, or partially modified states remain
 fail-closed.
 
+Issue #79 Execution Authorization identity
+------------------------------------------
+
+The Issue #79 execution approval is identified by the exact GitHub comment
+returned by the trusted GitHub API, not by a comment URL or copied body alone.
+The API response must bind the supplied comment ID to its canonical API URL,
+HTML URL, Issue 79 API URL, and the `Chasoso` author. The comment body must
+include the final implementation HEAD, epoch 1, invocation 1, state preimage,
+Schema fingerprint, Human Decision URL, and the following self-binding fields:
+
+```text
+- Execution Authorization comment ID: `<comment-id>`
+- Execution Authorization nonce: `<nonce>`
+- Execution Authorization identity: `issue-79-orphaned-invocation-reconciliation:<comment-id>:<nonce>`
+```
+
+The nonce is an identity binding and is never treated as authentication by
+itself. A copied body, a mismatched comment ID, another Issue or repository,
+another author, stale target state, or a GitHub API failure is rejected before
+approval state changes. The identity fields are persisted in the dedicated
+approval and audit record and must match through single-use consumption and
+transaction recovery. The comment ID is supplied at runtime, so a new
+Execution Authorization for the post-implementation HEAD does not require
+hard-coding a new ID in source code.
+
 This is distinct from the explicitly supported Issue #29 migration shape. That
 shape is recognized only by its exact repository, branch, base, legacy counter,
 and accounting-epoch invariants. It remains audit history and does not make an

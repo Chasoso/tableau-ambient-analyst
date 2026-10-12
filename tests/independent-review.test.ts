@@ -21,7 +21,17 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 const childProcessTestHooks = vi.hoisted(() => ({
   throwOnCodexSpawn: false,
   exceptionMessage: '',
-  humanDecisionComment: undefined as { url: string; author: string; body: string } | undefined,
+  humanDecisionApiFailure: false,
+  humanDecisionComment: undefined as
+    | {
+        url: string;
+        author: string;
+        body: string;
+        commentId?: number;
+        issueUrl?: string;
+        apiUrl?: string;
+      }
+    | undefined,
 }));
 
 const validTestHead = 'a'.repeat(40);
@@ -38,11 +48,31 @@ vi.mock('node:child_process', async () => {
         commandArgs[0] === 'api' &&
         childProcessTestHooks.humanDecisionComment
       ) {
+        if (childProcessTestHooks.humanDecisionApiFailure) {
+          return {
+            status: 1,
+            signal: null,
+            stdout: '',
+            stderr: 'fixture GitHub API failure',
+            pid: 1,
+            output: [],
+          } as ReturnType<typeof actual.spawnSync>;
+        }
+        const commentId =
+          childProcessTestHooks.humanDecisionComment.commentId ??
+          Number(String(commandArgs[1]).match(/comments\/(\d+)$/)?.[1]);
         return {
           status: 0,
           signal: null,
           stdout: JSON.stringify({
+            id: commentId,
+            url:
+              childProcessTestHooks.humanDecisionComment.apiUrl ??
+              `https://api.github.com/repos/Chasoso/tableau-ambient-analyst/issues/comments/${commentId}`,
             html_url: childProcessTestHooks.humanDecisionComment.url,
+            issue_url:
+              childProcessTestHooks.humanDecisionComment.issueUrl ??
+              'https://api.github.com/repos/Chasoso/tableau-ambient-analyst/issues/79',
             user: { login: childProcessTestHooks.humanDecisionComment.author },
             body: childProcessTestHooks.humanDecisionComment.body,
           }),
@@ -1524,6 +1554,7 @@ function issue79HumanDecisionBody(workspace: {
     '- Repository: `Chasoso/tableau-ambient-analyst`',
     '- Issue: `79`',
     '- Branch: `feat/issue-79` / Base: `main`',
+    '- Canonical worktree: `.worktrees/issue-79` の実Git identity',
     `- Implementation HEAD: \`${workspace.headSha}\``,
     '- Effective review epoch: `1`',
     '- Consumed invocation: `1`',
@@ -1534,6 +1565,10 @@ function issue79HumanDecisionBody(workspace: {
     `- Accounting preimage SHA-256: \`${statePreimage}\``,
     `- Reviewer Schema fingerprint: \`${workspace.schemaFingerprint}\``,
     '- 既存approval・transaction/lock: なし',
+    `- Human Decision URL: ${issue79OrphanedHumanDecisionUrl}`,
+    `- Execution Authorization comment ID: \`${issue79ExecutionCommentId}\``,
+    `- Execution Authorization nonce: \`${issue79ExecutionNonce}\``,
+    `- Execution Authorization identity: \`issue-79-orphaned-invocation-reconciliation:${issue79ExecutionCommentId}:${issue79ExecutionNonce}\``,
     '### 明示的に承認する操作',
     '`issue-79-orphaned-invocation-reconciliation` approvalを**対象に対して一度だけ**発行する',
     '正規の専用CLI/APIから`ORPHANED_INVOCATION_RECONCILIATION`を**一度だけ**実行',
@@ -1634,9 +1669,11 @@ const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445';
 const issue79OrphanedHumanDecisionUrl =
-  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116932871';
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6117990001';
 const issue79ImplementationHumanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116633116';
+const issue79ExecutionCommentId = 6117990001;
+const issue79ExecutionNonce = 'issue79-exec-nonce-20261012';
 
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -1843,6 +1880,9 @@ describe('Issue #79 orphaned invocation reconciliation', () => {
         reviewInvocation: 1,
         status: 'UNRESOLVED_NO_DURABLE_EVIDENCE',
         evidenceKind: 'ORPHANED_INVOCATION_RECONCILIATION',
+        humanDecisionCommentId: issue79ExecutionCommentId,
+        humanDecisionNonce: issue79ExecutionNonce,
+        humanDecisionIdentity: `issue-79-orphaned-invocation-reconciliation:${issue79ExecutionCommentId}:${issue79ExecutionNonce}`,
       });
       const approvals = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')) as {
         approvals: Array<Record<string, unknown>>;
@@ -1983,7 +2023,7 @@ describe('Issue #79 orphaned invocation reconciliation', () => {
           issue79OrphanedHumanDecisionUrl,
           workspace.cwd,
         ),
-      ).toContain('content');
+      ).toContain('identity');
       expect(existsSync(workspace.approvalPath)).toBe(false);
 
       childProcessTestHooks.humanDecisionComment = {
@@ -2026,10 +2066,79 @@ describe('Issue #79 orphaned invocation reconciliation', () => {
           issue79ImplementationHumanDecisionUrl,
           workspace.cwd,
         ),
-      ).toContain('canonical execution authorization');
+      ).toContain('identity');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace).replace(
+          workspace.headSha,
+          '4c4a35544a3aff514c6a2522674074950a5bdb53',
+        ),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('content');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+        issueUrl: 'https://api.github.com/repos/OtherOwner/other-repo/issues/79',
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionApiFailure = true;
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('unavailable');
       expect(existsSync(workspace.approvalPath)).toBe(false);
     } finally {
       childProcessTestHooks.humanDecisionComment = undefined;
+      childProcessTestHooks.humanDecisionApiFailure = false;
       rmSync(directory, { recursive: true, force: true });
     }
   });

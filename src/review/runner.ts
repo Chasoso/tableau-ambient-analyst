@@ -112,8 +112,10 @@ const issue76HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
 const issue79HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/79#issuecomment-([0-9]+)$/;
-const issue79ExecutionAuthorizationUrl =
-  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116932871';
+const issue79ExecutionAuthorizationTitle =
+  '## Human Decision: Issue #79 Orphaned Invocation Reconciliation — Execution Authorization';
+const issue79ExecutionAuthorizationNoncePattern = /^[A-Za-z0-9_-]{16,128}$/;
+const issue79ExecutionAuthorizationIdentityPrefix = 'issue-79-orphaned-invocation-reconciliation';
 const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
 const gitCommitShaPattern = /^[a-f0-9]{40}$/;
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
@@ -3170,39 +3172,70 @@ function verifyIssue79HumanDecisionComment(
   headSha: string,
   schemaFingerprint: string,
   statePreimageSha256: string,
-): string | undefined {
-  if (humanDecisionUrl !== issue79ExecutionAuthorizationUrl) {
-    return 'Issue #79 reconciliation requires the canonical execution authorization comment.';
-  }
+):
+  | {
+      commentId: number;
+      nonce: string;
+      identity: string;
+    }
+  | string {
   const match = issue79HumanDecisionUrlPattern.exec(humanDecisionUrl);
   if (!match) return 'Issue #79 reconciliation requires its canonical Human Decision URL.';
+  const commentId = Number(match[1]);
+  if (!Number.isSafeInteger(commentId)) {
+    return 'Issue #79 Human Decision comment identity is invalid.';
+  }
+  const expectedApiUrl = `https://api.github.com/repos/${targetRepository}/issues/comments/${commentId}`;
+  const expectedIssueUrl = `https://api.github.com/repos/${targetRepository}/issues/79`;
   const result = spawnSync(
     'gh',
-    ['api', `repos/Chasoso/tableau-ambient-analyst/issues/comments/${match[1]}`],
+    ['api', `repos/${targetRepository}/issues/comments/${commentId}`],
     { cwd, encoding: 'utf8', env: reviewerEnvironment(), maxBuffer: 1024 * 1024 },
   );
   if (result.status !== 0) {
-    return 'Issue #79 Human Decision comment could not be verified.';
+    return 'Issue #79 Human Decision comment could not be verified; authorization is unavailable.';
   }
   try {
     const comment = JSON.parse(result.stdout) as {
+      id?: unknown;
+      url?: unknown;
       html_url?: unknown;
+      issue_url?: unknown;
       user?: { login?: unknown };
       body?: unknown;
     };
     if (
+      comment.id !== commentId ||
+      comment.url !== expectedApiUrl ||
       comment.html_url !== humanDecisionUrl ||
+      comment.issue_url !== expectedIssueUrl ||
       comment.user?.login !== 'Chasoso' ||
       typeof comment.body !== 'string'
     ) {
       return 'Issue #79 Human Decision comment identity is invalid.';
     }
+    const nonceMatch = comment.body.match(/- Execution Authorization nonce: `([^`]+)`/);
+    const identityMatch = comment.body.match(/- Execution Authorization identity: `([^`]+)`/);
+    if (!nonceMatch || !identityMatch) {
+      return 'Issue #79 Execution Authorization identity is missing.';
+    }
+    const nonce = nonceMatch[1];
+    const identity = identityMatch[1];
+    const expectedIdentity = `${issue79ExecutionAuthorizationIdentityPrefix}:${commentId}:${nonce}`;
+    if (
+      !nonce ||
+      !issue79ExecutionAuthorizationNoncePattern.test(nonce) ||
+      identity !== expectedIdentity
+    ) {
+      return 'Issue #79 Execution Authorization identity is invalid.';
+    }
     const requiredEvidence = [
-      '## Human Decision: Issue #79 Orphaned Invocation Reconciliation — Execution Authorization',
+      issue79ExecutionAuthorizationTitle,
       'この承認は対象状態に限定した単回復旧実行のみ',
       '- Repository: `Chasoso/tableau-ambient-analyst`',
       '- Issue: `79`',
       '- Branch: `feat/issue-79` / Base: `main`',
+      '- Canonical worktree: `.worktrees/issue-79` の実Git identity',
       `- Implementation HEAD: \`${headSha}\``,
       '- Effective review epoch: `1`',
       '- Consumed invocation: `1`',
@@ -3213,6 +3246,10 @@ function verifyIssue79HumanDecisionComment(
       `- Accounting preimage SHA-256: \`${statePreimageSha256}\``,
       `- Reviewer Schema fingerprint: \`${schemaFingerprint}\``,
       '- 既存approval・transaction/lock: なし',
+      `- Human Decision URL: ${humanDecisionUrl}`,
+      `- Execution Authorization comment ID: \`${commentId}\``,
+      `- Execution Authorization nonce: \`${nonce}\``,
+      `- Execution Authorization identity: \`${expectedIdentity}\``,
       '### 明示的に承認する操作',
       '`issue-79-orphaned-invocation-reconciliation` approvalを**対象に対して一度だけ**発行する',
       '正規の専用CLI/APIから`ORPHANED_INVOCATION_RECONCILIATION`を**一度だけ**実行',
@@ -3223,10 +3260,10 @@ function verifyIssue79HumanDecisionComment(
     ];
     const body = comment.body;
     return requiredEvidence.every((value) => body.includes(value))
-      ? undefined
+      ? { commentId, nonce, identity }
       : 'Issue #79 Human Decision comment content does not match the reconciliation scope.';
   } catch {
-    return 'Issue #79 Human Decision comment could not be parsed.';
+    return 'Issue #79 Human Decision comment could not be parsed; authorization is unavailable.';
   }
 }
 
@@ -3277,14 +3314,14 @@ export function authorizeIssue79OrphanedInvocationReconciliationAtPath(
   ) {
     return 'Issue #79 reconciliation prerequisites do not match the canonical workspace.';
   }
-  const humanDecisionError = verifyIssue79HumanDecisionComment(
+  const humanDecision = verifyIssue79HumanDecisionComment(
     workspaceCwd,
     humanDecisionUrl,
     headSha,
     schemaFingerprint,
     statePreimageSha256,
   );
-  if (humanDecisionError) return humanDecisionError;
+  if (typeof humanDecision === 'string') return humanDecision;
   try {
     return withAccountingLock(statePath, () => {
       if (
@@ -3324,6 +3361,9 @@ export function authorizeIssue79OrphanedInvocationReconciliationAtPath(
         reconciliationReason: 'ORPHANED_INVOCATION',
         humanDecisionUrl,
         humanDecisionVerification: verifiedHumanDecisionMarker,
+        humanDecisionCommentId: humanDecision.commentId,
+        humanDecisionNonce: humanDecision.nonce,
+        humanDecisionIdentity: humanDecision.identity,
         issue: '79',
         statePreimageSha256,
         approvalPreimageSha256,
@@ -3418,6 +3458,12 @@ export function reconcileIssue79OrphanedInvocationAtPath(
           candidate.reconciliationReason === 'ORPHANED_INVOCATION' &&
           candidate.humanDecisionUrl === humanDecisionUrl &&
           candidate.humanDecisionVerification === verifiedHumanDecisionMarker &&
+          Number.isSafeInteger(candidate.humanDecisionCommentId) &&
+          typeof candidate.humanDecisionNonce === 'string' &&
+          issue79ExecutionAuthorizationNoncePattern.test(candidate.humanDecisionNonce) &&
+          typeof candidate.humanDecisionIdentity === 'string' &&
+          candidate.humanDecisionIdentity ===
+            `${issue79ExecutionAuthorizationIdentityPrefix}:${candidate.humanDecisionCommentId}:${candidate.humanDecisionNonce}` &&
           candidate.humanDecision === 'reconcile-orphaned-invocation' &&
           candidate.statePreimageSha256 === statePreimageSha256 &&
           !candidate.consumed,
@@ -3452,6 +3498,9 @@ export function reconcileIssue79OrphanedInvocationAtPath(
         schemaFingerprint,
         humanDecisionUrl,
         humanDecisionVerification: verifiedHumanDecisionMarker,
+        humanDecisionCommentId: approval.humanDecisionCommentId!,
+        humanDecisionNonce: approval.humanDecisionNonce!,
+        humanDecisionIdentity: approval.humanDecisionIdentity!,
         transactionId: approval.transactionId,
         reconciledAt,
       };
@@ -5649,6 +5698,9 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'executionEvidence',
     'humanDecisionUrl',
     'humanDecisionVerification',
+    'humanDecisionCommentId',
+    'humanDecisionNonce',
+    'humanDecisionIdentity',
     'issue',
     'statePreimageSha256',
     'approvalPreimageSha256',
@@ -5801,6 +5853,12 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       typeof approval.humanDecisionUrl === 'string' &&
       isIssue79HumanDecisionUrl(approval.humanDecisionUrl) &&
       approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
+      Number.isSafeInteger(approval.humanDecisionCommentId) &&
+      typeof approval.humanDecisionNonce === 'string' &&
+      issue79ExecutionAuthorizationNoncePattern.test(approval.humanDecisionNonce) &&
+      typeof approval.humanDecisionIdentity === 'string' &&
+      approval.humanDecisionIdentity ===
+        `${issue79ExecutionAuthorizationIdentityPrefix}:${approval.humanDecisionCommentId}:${approval.humanDecisionNonce}` &&
       typeof approval.humanDecision === 'string' &&
       orphanedInvocationReconciliationHumanDecisions.includes(
         approval.humanDecision as OrphanedInvocationReconciliationHumanDecision,
@@ -5996,6 +6054,9 @@ function isOrphanedInvocationReconciliation(value: unknown): boolean {
     'schemaFingerprint',
     'humanDecisionUrl',
     'humanDecisionVerification',
+    'humanDecisionCommentId',
+    'humanDecisionNonce',
+    'humanDecisionIdentity',
     'transactionId',
     'reconciledAt',
   ]);
@@ -6019,6 +6080,12 @@ function isOrphanedInvocationReconciliation(value: unknown): boolean {
     /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
     isIssue79HumanDecisionUrl(record.humanDecisionUrl) &&
     record.humanDecisionVerification === verifiedHumanDecisionMarker &&
+    Number.isSafeInteger(record.humanDecisionCommentId) &&
+    typeof record.humanDecisionNonce === 'string' &&
+    issue79ExecutionAuthorizationNoncePattern.test(record.humanDecisionNonce) &&
+    typeof record.humanDecisionIdentity === 'string' &&
+    record.humanDecisionIdentity ===
+      `${issue79ExecutionAuthorizationIdentityPrefix}:${record.humanDecisionCommentId}:${record.humanDecisionNonce}` &&
     typeof record.transactionId === 'string' &&
     typeof record.reconciledAt === 'string'
   );
@@ -6273,6 +6340,9 @@ function orphanedInvocationReconciliationStateIsConsistent(
     approval.canonicalWorktreePath !== record.canonicalWorktreePath ||
     approval.humanDecisionUrl !== record.humanDecisionUrl ||
     approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+    approval.humanDecisionCommentId !== record.humanDecisionCommentId ||
+    approval.humanDecisionNonce !== record.humanDecisionNonce ||
+    approval.humanDecisionIdentity !== record.humanDecisionIdentity ||
     approval.authorizationSource !== 'human-explicit' ||
     approval.humanDecision !== 'reconcile-orphaned-invocation' ||
     approval.consumed !== true ||

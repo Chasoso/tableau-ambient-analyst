@@ -188,6 +188,9 @@ export type ReviewResumeApproval = {
   executionEvidence?: ReviewReservationReconciliationEvidenceReason | undefined;
   humanDecisionUrl?: string | undefined;
   humanDecisionVerification?: 'GITHUB_COMMENT_VERIFIED' | undefined;
+  humanDecisionCommentId?: number | undefined;
+  humanDecisionNonce?: string | undefined;
+  humanDecisionIdentity?: string | undefined;
   issue?: string | undefined;
   statePreimageSha256?: string | undefined;
   approvalPreimageSha256?: string | null | undefined;
@@ -294,6 +297,9 @@ export type ReviewAccounting = {
     schemaFingerprint: string;
     humanDecisionUrl: string;
     humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED';
+    humanDecisionCommentId: number;
+    humanDecisionNonce: string;
+    humanDecisionIdentity: string;
     transactionId: string;
     reconciledAt: string;
   }>;
