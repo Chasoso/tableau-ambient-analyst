@@ -6,12 +6,14 @@ import {
   type DebugScenario,
   type ReplayState,
 } from './model.js';
+import { initializeTableauHost } from './host-adapter.js';
 
 const client = new FixtureAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const content = document.querySelector<HTMLElement>('#content')!;
+const hostStatus = document.querySelector<HTMLElement>('#host-status')!;
 
 function text(value: string): HTMLSpanElement {
   const element = document.createElement('span');
@@ -160,3 +162,8 @@ runButton.addEventListener('click', async () => {
 });
 
 renderIdle(selectedScenario());
+
+void initializeTableauHost().then(({ mode }) => {
+  hostStatus.dataset.host = mode;
+  hostStatus.textContent = mode === 'standalone' ? 'Standalone' : `Host: ${mode}`;
+});
