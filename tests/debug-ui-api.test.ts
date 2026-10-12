@@ -137,6 +137,32 @@ describe('debug UI analysis API', () => {
     }
   });
 
+  it('fails closed when a completed client result fabricates its trace', async () => {
+    const unsafeClient: AnalysisClient = {
+      replay: async () => ({
+        status: 'completed',
+        scenario: {
+          ...scenarioById('verified-intervention'),
+          stages: scenarioById('verified-intervention').stages.map((stage) => ({
+            ...stage,
+            status: 'skipped' as const,
+          })),
+        },
+        audit: ['replay.started'],
+      }),
+    };
+    const { server, base } = await withServer(unsafeClient);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(502);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('rejects cross-origin API requests while allowing the same local origin', async () => {
     const { server, base } = await withServer();
     try {
@@ -182,7 +208,15 @@ describe('debug UI analysis API', () => {
           ],
           audit: ['secret-audit'],
         },
-        audit: ['secret-audit'],
+        audit: [
+          'trigger-detected',
+          'analysis-contract-created',
+          'tableau-analysis-started',
+          'evidence-collected',
+          'verification-complete',
+          'intervention-recommended',
+          'secret-audit',
+        ],
       }),
     };
     const unsafe = await withServer(unsafeClient);

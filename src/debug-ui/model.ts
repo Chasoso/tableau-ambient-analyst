@@ -152,15 +152,32 @@ export class FixtureAnalysisClient implements AnalysisClient {
         : scenario.verifier.status === 'INSUFFICIENT'
           ? 'insufficient-evidence'
           : 'completed';
-    return {
-      status,
-      scenario,
-      audit: [
-        'replay.started',
-        `trigger.${scenario.trigger.decision.toLowerCase()}`,
-        ...(scenario.error ? ['flow.failed'] : ['analysis.completed', 'audit.recorded']),
-      ],
-    };
+    const audit = [
+      'replay.started',
+      scenario.error
+        ? 'flow-failed'
+        : scenario.trigger.decision === 'IGNORE'
+          ? 'trigger-ignored'
+          : 'trigger-detected',
+      ...(status === 'completed'
+        ? [
+            'analysis-contract-created',
+            'tableau-analysis-started',
+            'evidence-collected',
+            'verification-complete',
+            'intervention-recommended',
+          ]
+        : status === 'insufficient-evidence'
+          ? [
+              'analysis-contract-created',
+              'tableau-analysis-started',
+              'evidence-collected',
+              'verification-insufficient',
+              'intervention-hold',
+            ]
+          : []),
+    ];
+    return { status, scenario, audit };
   }
 }
 
@@ -206,6 +223,62 @@ export function hasValidReplayStateInvariants(
     );
   }
   return scenario.intervention === null || scenario.intervention.decision === 'HOLD';
+}
+
+const replayStageNames = [
+  'Trigger',
+  'Analysis Contract',
+  'Analysis',
+  'Evidence',
+  'Verifier',
+  'Intervention',
+] as const;
+
+export function hasValidReplayTraceInvariants(
+  status: ReplayState['status'],
+  scenario: Pick<DebugScenario, 'stages'> & Parameters<typeof hasValidReplayStateInvariants>[1],
+  audit: readonly string[],
+): boolean {
+  if (!hasValidReplayStateInvariants(status, scenario)) return false;
+  const stages = new Map(scenario.stages.map((stage) => [stage.name, stage.status]));
+  if (replayStageNames.some((name) => !stages.has(name))) return false;
+
+  const requiredAuditByStatus: Record<ReplayState['status'], readonly string[]> = {
+    completed: [
+      'trigger-detected',
+      'analysis-contract-created',
+      'tableau-analysis-started',
+      'evidence-collected',
+      'verification-complete',
+      'intervention-recommended',
+    ],
+    'insufficient-evidence': [
+      'trigger-detected',
+      'analysis-contract-created',
+      'tableau-analysis-started',
+      'evidence-collected',
+      'verification-insufficient',
+      'intervention-hold',
+    ],
+    ignored: ['trigger-ignored'],
+    failed: [],
+  };
+  if (status === 'failed') {
+    if (!audit.includes('flow-failed') && !audit.includes('flow.failed')) return false;
+  } else if (requiredAuditByStatus[status].some((event) => !audit.includes(event))) {
+    return false;
+  }
+
+  if (status === 'completed' || status === 'insufficient-evidence') {
+    return replayStageNames.every((name) => stages.get(name) === 'complete');
+  }
+  if (status === 'ignored') {
+    return (
+      stages.get('Trigger') === 'complete' &&
+      replayStageNames.slice(1).every((name) => stages.get(name) === 'skipped')
+    );
+  }
+  return replayStageNames.some((name) => stages.get(name) === 'failed');
 }
 
 function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
@@ -287,12 +360,17 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
       return false;
   }
   if (scenario.error !== undefined && !isBoundedString(scenario.error, 200)) return false;
-  return hasValidReplayStateInvariants(value.status as ReplayState['status'], {
-    trigger: scenario.trigger as DebugScenario['trigger'],
-    verifier: scenario.verifier as DebugScenario['verifier'],
-    intervention: scenario.intervention as DebugScenario['intervention'],
-    ...(scenario.error !== undefined ? { error: scenario.error as string } : {}),
-  });
+  return hasValidReplayTraceInvariants(
+    value.status as ReplayState['status'],
+    {
+      trigger: scenario.trigger as DebugScenario['trigger'],
+      verifier: scenario.verifier as DebugScenario['verifier'],
+      intervention: scenario.intervention as DebugScenario['intervention'],
+      stages: scenario.stages as DebugScenario['stages'],
+      ...(scenario.error !== undefined ? { error: scenario.error as string } : {}),
+    },
+    value.audit as string[],
+  );
 }
 
 export class HttpAnalysisClient implements AnalysisClient {

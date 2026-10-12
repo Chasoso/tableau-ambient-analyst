@@ -26,9 +26,10 @@ permission because this Issue does not access workbook data.
 ## Host boundary
 
 The local API permits only an explicit HTTP loopback origin (`localhost`,
-`127.0.0.1`, or `::1`) matching the request's loopback host and port. It does
-not derive trust from an arbitrary `Host` header, and rejects non-loopback or
-mismatched `Origin`/`Host` pairs with `403`.
+`127.0.0.1`, or `::1`) on the request's loopback port. The two loopback
+hostnames may differ because both are explicitly constrained to loopback; it
+does not derive trust from an arbitrary `Host` header and rejects
+non-loopback or mismatched-port pairs with `403`.
 
 The browser adapter treats a top-level page as `standalone` and does not load
 or initialize Tableau there. In an embedded frame it loads the Tableau

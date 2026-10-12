@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  hasValidReplayStateInvariants,
+  hasValidReplayTraceInvariants,
   scenarioById,
   scenarios,
   type AnalysisClient,
@@ -124,7 +124,7 @@ function validClientResult(
     return false;
   if (result.status === 'failed' && !scenario.error) return false;
   if (scenario.error !== undefined && result.status !== 'failed') return false;
-  return hasValidReplayStateInvariants(result.status, scenario);
+  return hasValidReplayTraceInvariants(result.status, scenario, result.audit);
 }
 
 function sanitizeRun(
