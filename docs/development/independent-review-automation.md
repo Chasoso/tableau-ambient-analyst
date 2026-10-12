@@ -180,6 +180,47 @@ use their actual git directory. It is created with a temporary file and
 rename, and an existing malformed or invalid state fails closed with
 `HUMAN_DECISION_REQUIRED` rather than resetting the accounting.
 
+If the reviewer callback or subprocess boundary raises after a reservation has
+been marked `STARTED`, the runner converts that exception into an `UNCERTAIN`
+review execution failure and uses the same durable failure-recording path as a
+normal non-zero exit. The failure record clears `pendingReview` without
+refunding the invocation. If failure recording cannot be persisted, the runner
+returns a fail-closed human escalation and does not claim that the reservation
+was recovered; the incomplete state remains for explicit human recovery. A
+subsequent reservation is rejected while `pendingReview` remains present.
+The reservation also captures the exact HEAD before reviewer execution. Start,
+success, and failure accounting must use that immutable value; if the current
+HEAD differs when execution is recorded, accounting fails closed and retains
+the incomplete reservation for explicit human handling rather than binding
+evidence to a different commit.
+
+The regression fixture
+`tests/fixtures/review-accounting/incomplete-review-reservation.json` preserves
+legacy counters alongside the current accounting epoch and an incomplete
+orphaned invocation. It has no cycle result, termination record, failure
+evidence, or pending marker. Accounting reads and new reservations reject this
+state without mutation or refund. A separate pending reservation is also
+rejected by the normal reservation guard. Recovery must not delete, rewrite,
+or refund prior failure history, and no missing historical reason is inferred.
+
+Issue #79 compatibility decision
+--------------------------------
+
+The historical state assessed for Issue #79 is represented by
+`tests/fixtures/review-accounting/issue-79-orphaned-invocation.json`: the
+current invocation count is non-zero, but there is no corresponding cycle
+result, termination evidence, execution-failure evidence, or pending marker.
+This is not a supported legacy format. A read of the state, a new reservation,
+and the same checks after a process restart must all fail closed without
+rewriting the file, guessing the missing reason, or resetting or refunding the
+counter.
+
+This is distinct from the explicitly supported Issue #29 migration shape. That
+shape is recognized only by its exact repository, branch, base, legacy counter,
+and accounting-epoch invariants. It remains audit history and does not make an
+orphaned current invocation recoverable. Other legacy or incomplete shapes are
+not silently upgraded; they require a separately authorized human decision.
+
 The old `cyclesUsed` field has one explicit migration: the Issue #29 branch's
 known prior state of 6 invocations and 1 completed AUTO_FIX is retained as
 legacy counter audit history. That legacy shape did not contain termination
@@ -313,6 +354,62 @@ Independent Review and the exact-head CI gate remain mandatory. If the new
 epoch reaches its limit, automation stops again and requires a new explicit
 human authorization.
 
+Issue #76 terminal finalization is a separate, narrower operation from
+review-limit resume. It exists for the recorded state in which invocation 16
+has a durable `CHANGES_REQUIRED` cycle, the counter is 16, no review is
+pending, and the historical review loop has not emitted the
+`MAX_REVIEW_INVOCATIONS` terminal evidence. It does not reserve or run another
+review and does not advance the epoch. A dedicated
+`review-limit-terminal-finalization` approval is required and is bound to the
+canonical `feat/issue-76`/`main` workspace, exact current HEAD, Schema
+fingerprint, epoch 1, count 16, and the invocation-16 `CHANGES_REQUIRED`
+result. The operation appends only the MAX terminal reason and its evidence,
+consumes that approval once, and preserves all counters, cycles, histories,
+recovery records, and reconciliation evidence.
+
+The two commands are intentionally separate and must be run only after a
+separate Human Decision has authorized this exact state; they are not a
+generic resume or retry path:
+
+When a review-limit resume creates the next accounting epoch, the prior epoch
+snapshot includes the complete durable evidence owned by that epoch: cycle and
+termination records, terminal-finalization evidence, reviewer execution
+failures, reviewer-failure recovery history, and reservation-reconciliation
+evidence. The snapshot is validated again after reload, so a present but
+malformed evidence record keeps the gate closed. Older historical snapshots
+that predate one of these optional evidence fields remain read-only compatible;
+the reader does not infer, migrate, or silently reconstruct missing evidence.
+
+New epoch snapshots additionally carry the versioned
+`review-epoch-evidence-v1` `invocationEvidenceCoverage` contract. It maps every
+consumed invocation exactly once to a cycle result, reviewer execution failure,
+or reservation reconciliation. Invocation numbers must be unique, in range,
+and complete, and each coverage entry must match the corresponding durable
+evidence. Removing an intermediate cycle or evidence record from a new-format
+snapshot therefore fails closed. Snapshots without this metadata remain legacy
+read-compatible only; that compatibility does not certify historical
+completeness or authorize recovery, and `known-incomplete` history is never
+treated as complete coverage.
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-review-limit-terminal \
+  --confirm-human-authorization \
+  --issue 76 --base main --cwd .worktrees/issue-76
+node dist/review/cli.js \
+  --finalize-review-limit-terminal \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The implementation and tests exercise these commands only against isolated
+fixtures. They do not authorize or modify the real Issue #76 accounting. A
+future real operation must re-read and verify the current HEAD, accounting,
+approval, transaction marker, and preimage before either command; any stale,
+partial, duplicate, or externally modified state fails closed. Terminal
+finalization and `--resume-after-limit` remain separate operations with
+separate approvals; finalization alone never permits an invocation 17.
+
 An AUTO_FIX implementer self-review that reports blocking issues is a distinct
 `BLOCKED` stop. It does not consume an AUTO_FIX cycle and is never retried
 automatically. A matching `BLOCKED` state is recoverable only when its durable
@@ -333,6 +430,170 @@ from the dirty worktree, Issue text, or PR history. A separately authorized
 later operation may proceed only if the actual state contains the new schema
 and its branch/base/head/path/fingerprint checks pass.
 
+A `REVIEWER_FAILURE` is a separate terminal state and cannot use either the
+review-limit or AUTO_FIX recovery commands. A human may create one dedicated
+`reviewer-failure-recovery` approval only after deterministic validation and
+the offline reviewer Schema compatibility check pass. The approval is bound to
+the repository, branch, base, current HEAD, review epoch, failed invocation,
+and the SHA-256 fingerprint of the reviewer Schema. The dedicated recovery
+command consumes that approval once, clears only the terminal stop, preserves
+the failure history and invocation count, and leaves the next review to reserve
+the next invocation number. It never refunds or resets accounting, and a fresh
+Independent Review remains mandatory. The recovery target is limited to a new
+durable `reviewer-failure-v2` evidence record containing the failed invocation,
+failure kind, review epoch, exact HEAD, Schema fingerprint, and
+`executionPhase: REVIEW`. `reviewer-failure-v1` is retained as a legacy
+compatibility-read format under its existing contract. Legitimate legacy
+records without an `evidenceVersion` are read only when the existing explicit
+compatibility conditions accept them. Old records are never automatically
+migrated, completed, or rewritten. States with
+an invocation count at or above `MAX_REVIEW_INVOCATIONS` are also not eligible
+for this recovery, because no authorized continuation can reserve another
+invocation within the current epoch; review-limit terminal handling remains a
+separate operation. States with
+`pendingReview`, incomplete failure evidence, legacy accounting shapes, or
+inferred history are not recoverable; they remain fail-closed for explicit
+human handling. Existing consumed approval and recovery records remain readable
+for audit compatibility but are never reused to authorize another review. The
+active `reviewerFailureRecovery` marker exists only between approval consumption
+and reservation of the next invocation. That reservation atomically moves the
+marker into append-only `reviewerFailureRecoveryHistory` and clears the active
+marker; a later reviewer failure can therefore set a new terminal
+`REVIEWER_FAILURE` without overwriting the consumed approval or making failure
+persistence impossible. Invalid or incomplete history remains fail-closed.
+
+This dedicated mechanism was added for Issue #76 after the explicit Human
+Decision recorded in [the recovery-scope comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431)
+to preserve the invocation and failure audit trail when the reviewer
+subprocess terminates unsuccessfully. The later decisions for the reserved
+invocation 13 are recorded in [the reconciliation-scope comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579),
+[the re-binding comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445),
+and [the current-HEAD comment](https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567).
+Together these Human Decisions explicitly authorize the following bounded
+Issue #76 scope:
+
+| Approved capability                                             | Implementation boundary                                                                                                                                                  | Not authorized                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Single-use recovery of a durable `REVIEWER_FAILURE`             | `reviewer-failure-recovery` approval, `REVIEWER_FAILURE` evidence checks, and the existing CLI authorization/consumption commands                                        | Generic retry/resume, automatic approval, counter refund/reset, or recovery of incomplete/legacy evidence |
+| One-time reconciliation of the reserved Issue #76 invocation 13 | `review-reservation-reconciliation` approval, the exact `feat/issue-76`/`main` workspace, invocation 13, current HEAD, epoch, Schema fingerprint, and transaction checks | Reconciliation for another Issue or invocation, inferred reviewer execution, or invocation 14+ execution  |
+| Audit-compatible state handling                                 | Existing accounting validation, append-only recovery history, single-use approval consumption, and legacy read-only compatibility                                        | History fabrication, deletion, rewriting, or reuse of consumed approvals                                  |
+
+These are bounded continuation mechanisms approved for this Issue's concrete
+failure states; they are not a general recovery framework or autonomous review
+loop. The commands are callable only after a separate matching Human Decision
+has created the durable approval, and every mismatch remains fail-closed.
+Review-limit recovery remains a separate pre-existing capability with its own
+`review-limit-resume` approval, epoch transition, limits, and tests; it is not
+implemented by or broadened through the Issue #76 reviewer-failure or
+reservation-reconciliation paths. AUTO_FIX recovery likewise retains its
+existing evidence and bounded-cycle rules.
+
+The implementation-to-decision mapping is:
+
+- [`src/review/runner.ts`](../../src/review/runner.ts): durable failure
+  evidence, approval binding, accounting validation, and the two bounded
+  transactions.
+- [`src/review/cli.ts`](../../src/review/cli.ts) and
+  [`src/review/cli-policy.ts`](../../src/review/cli-policy.ts): mutually
+  exclusive authorization/consumption entry points; no command creates an
+  approval without the explicit authorization flag and matching state.
+- [`src/review/gate.ts`](../../src/review/gate.ts): approval/evidence types and
+  fail-closed result contracts.
+- [`tests/independent-review.test.ts`](../../tests/independent-review.test.ts):
+  isolated approval, transaction, CLI, legacy-compatibility, and review-limit
+  recovery coverage.
+
+Recovery is possible only for a current `REVIEWER_FAILURE` with a durable
+`reviewer-failure-v2` record whose failed invocation, failure kind, review
+epoch, exact HEAD, Schema fingerprint, and `executionPhase: REVIEW` match the
+current state. `reviewer-failure-v1` and explicit `evidenceVersion`-absent
+legacy records remain read-only compatibility formats and are never inferred
+or upgraded. Legacy
+accounting, missing evidence, pending reservations, and inferred history are
+outside the recovery boundary. Review-limit recovery and AUTO_FIX recovery
+retain their existing commands, evidence requirements, and approval types.
+The single-use approval is bound to the repository, branch, base, HEAD, Schema
+fingerprint, review epoch, and failed invocation; consuming it preserves the
+failure history and invocation count. No approval is reused and no invocation
+is refunded or reset.
+
+The commands are:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-reviewer-failure-recovery \
+  --confirm-human-authorization \
+  --issue 76 --base main --cwd .worktrees/issue-76
+node dist/review/cli.js \
+  --resume-reviewer-failure-recovery \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The reviewer-failure recovery CLI and the exported Runner authorization and
+consumption APIs are intentionally limited to Issue #76 and its canonical
+`.worktrees/issue-76` worktree. They do not provide a generic retry or resume
+command for other Issues or worktrees; those states remain fail-closed pending
+their own explicit authorization boundary.
+
+Codex must not create or consume this approval without a separate explicit
+Human Decision. Missing approval, changed HEAD or Schema, failed deterministic
+validation, malformed evidence, and approval reuse remain fail-closed.
+
+Issue #76's reserved invocation 13 has a separate, one-time
+`review-reservation-reconciliation` approval. Its scope is fixed to Issue #76,
+invocation 13, the canonical `feat/issue-76`/`main` workspace, the current
+HEAD, review epoch, Schema fingerprint, and the Human Decision URL supplied to
+the dedicated commands. The URL is not a fixed comment ID: it is verified
+against GitHub at approval issuance and recorded in both the approval and the
+durable reconciliation evidence.
+At issuance, the canonical comment URL is fetched through the explicit GitHub
+verification path. The verified comment must be authored by `Chasoso`, point to
+Issue #76, and contain the exact current HEAD, reported reservation HEAD,
+review epoch, invocation, Schema fingerprint, and fixed evidence codes. The
+approval records the marker `GITHUB_COMMENT_VERIFIED`; URL shape alone is not
+authorization. The approval also records the reported reservation HEAD as
+`REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE` and the execution evidence as
+`NO_DURABLE_EXECUTION_EVIDENCE`; it does not claim that the reviewer was
+definitively never started. Issuing this approval and consuming it during
+reconciliation are separate operations. The dedicated command is:
+
+```bash
+npm run build
+node dist/review/cli.js \
+  --authorize-reservation-reconciliation \
+  --confirm-human-authorization \
+  --reported-reservation-head <reported-sha> \
+  --human-decision-url <issue-76-comment-url> \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The command only issues an unconsumed approval; it does not reconcile the
+reservation or reserve invocation 14. Missing or changed accounting preimages,
+an existing unconsumed approval, changed HEAD or Schema, an invalid Human
+Decision URL, and any non-exact invocation-13 reservation fail closed. The
+existing reviewer-failure approval type is never reused, and the accounting
+counter and prior history are preserved.
+
+After a separately authorized approval has been issued, reconciliation is a
+second, bounded command. It recomputes the canonical state and approval
+preimages, rechecks the exact HEAD, Schema fingerprint, reported reservation
+HEAD, Human Decision URL, canonical worktree, and the unconsumed approval, and
+then invokes the reconciliation transaction. It never reserves a new review
+invocation:
+
+```bash
+node dist/review/cli.js \
+  --reconcile-reserved-review \
+  --reported-reservation-head <reported-sha> \
+  --human-decision-url <issue-76-comment-url> \
+  --issue 76 --base main --cwd .worktrees/issue-76
+```
+
+The consumption command is mutually exclusive with all approval-creation and
+other resume commands. A missing, reused, altered, or mismatched approval or
+preimage fails closed; it does not retry, refund, or modify a reservation.
+
 If a future human-authorized recovery is applicable to the Issue #73 shape, the
 merged runner fix must first be made available in the canonical
 `.worktrees/issue-73` checkout through safe branch/base reconciliation. The
@@ -343,8 +604,8 @@ boundary. After safe reconciliation, verify the bounded evidence and exact
 dirty snapshot, run deterministic validation, obtain a fresh Independent
 Review, and only then use the existing-PR update path for PR #74. Required CI
 for the exact latest head must pass before the update is ready. This sequence
-does not authorize recovery by itself, and Issue #75 performs none of these
-PR #74 operations.
+does not authorize recovery by itself and is separate from Issue #76's bounded
+reviewer-failure recovery and invocation-13 reconciliation.
 The known older Issue #55 shape may be recovered only through the separate
 human-only command with `LEGACY_AUTO_FIX_SELF_REVIEW_BLOCKED` and an explicit
 Human Decision record. The old implementer blocking report is not persisted, so

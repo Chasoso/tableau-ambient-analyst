@@ -302,9 +302,54 @@ current Issue.
 
 The reviewer must return JSON matching
 `src/review/review-result.schema.json`. The independent reviewer wire format
-is structured-only. The TypeScript parser also accepts legacy string findings
-when called directly by older local callers, but those strings are not valid
-output for the reviewer CLI schema. New reviewer findings must use this shape:
+is structured-only, and the semantic parser rejects legacy string findings at
+the reviewer boundary. Any historical compatibility reader must remain a
+separate read-only path and must not be used to accept new reviewer output.
+New reviewer findings must use this shape:
+
+The contract is intentionally two-stage. The Schema is limited to the
+Structured Outputs-compatible structural subset (closed objects, types,
+enums, arrays, and finding fields); it does not use unsupported cross-field
+keywords. The semantic parser is the required second gate and rejects
+Schema-valid contradictions such as empty `CHANGES_REQUIRED`, `PASS` with
+blocking findings or escalation, and escalation without a human/blocked
+finding. A Schema-valid but parser-invalid response is therefore a deliberate
+fail-closed outcome, not a successful reviewer result.
+
+### Canonical result decision table
+
+The following table is the canonical semantic contract implemented by
+`parseReviewResult()`. The JSON Schema validates the structural column only;
+the parser validates the cross-field column after Schema validation. Every
+top-level field is required, top-level and finding objects are closed
+(`additionalProperties: false`), and finding objects may contain only
+`severity`, `classification`, `finding`, `generalized_rule`,
+`affected_locations`, and `recommended_fix`. Finding arrays may be empty at the
+Schema layer, subject to the semantic rules below.
+
+| Result | Blocking findings | Non-blocking findings | Allowed classifications | `escalationRequired` | Semantic outcome |
+| --- | --- | --- | --- | --- | --- |
+| `PASS` | empty | zero or more `AUTO_FIX` findings only | `AUTO_FIX` | `false` | valid |
+| `PASS` | any finding | any | any | any | invalid; PASS cannot contain blocking findings or escalation |
+| `CHANGES_REQUIRED` | at least one finding | any | `AUTO_FIX` only when no Human/Blocked finding exists | `false` | valid |
+| `CHANGES_REQUIRED` | empty | any | any | any | invalid; a blocking finding is required |
+| `CHANGES_REQUIRED` | at least one finding | any | Human/Blocked may appear in either array | `true` | valid, but escalation remains required |
+| `HUMAN_DECISION_REQUIRED` | or non-blocking array contains at least one `HUMAN_DECISION_REQUIRED` or `BLOCKED` finding | any | must include Human/Blocked somewhere | `true` | valid |
+| `HUMAN_DECISION_REQUIRED` | no Human/Blocked finding | any | `AUTO_FIX` only | `false` or `true` | invalid; the result and escalation require a Human/Blocked finding |
+
+The following cross-field rules apply to every row and both finding arrays:
+
+- blocking findings must have `severity: "blocking"`; non-blocking findings
+  must have `severity: "non-blocking"`.
+- `HUMAN_DECISION_REQUIRED` and `BLOCKED` classifications in either array
+  require `escalationRequired: true`.
+- `escalationRequired: true` requires at least one
+  `HUMAN_DECISION_REQUIRED` or `BLOCKED` finding in either array.
+- legacy string findings, unknown properties, missing required fields, invalid
+  enums, and wrong finding severity are invalid at the wire/parser boundary.
+- the Schema intentionally does not encode these cross-field rules with
+  unsupported Structured Outputs keywords; the parser is the mandatory second
+  gate and rejects Schema-valid contradictions.
 
 ```json
 {

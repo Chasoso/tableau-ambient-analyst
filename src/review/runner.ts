@@ -30,13 +30,19 @@ import {
   terminationReasons,
   reviewRecoveryReasons,
   reviewRecoveryHumanDecisions,
+  reviewerFailureRecoveryHumanDecisions,
   validationFailure,
   reviewResults,
   findingClassifications,
+  reviewExecutionFailureKinds,
   type ReviewAccounting,
   type ReviewCycleRecord,
   type ReviewEpochHistory,
   type ReviewResumeApproval,
+  reviewReservationReconciliationHumanDecisions,
+  reviewReservationReconciliationProvenances,
+  reviewReservationReconciliationEvidenceReasons,
+  reviewLimitTerminalFinalizationHumanDecisions,
   type ReviewFinding,
   type ReviewGateResult,
   type MaintainabilityResult,
@@ -44,6 +50,11 @@ import {
   type ReviewRecoveryReason,
   type ReviewTerminationEvidence,
   type ReviewTerminationRecovery,
+  type ReviewExecutionFailureKind,
+  reviewEpochEvidenceCoverageVersion,
+  reviewEpochEvidenceKinds,
+  type ReviewEpochEvidenceCoverage,
+  type ReviewEpochEvidenceKind,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -64,6 +75,7 @@ import {
 const reviewerTimeoutMs = 10 * 60 * 1000;
 const reviewStateFile = 'tableau-ambient-review-state.json';
 const reviewApprovalFile = 'tableau-ambient-review-approval.json';
+const canonicalRecoveryBase = 'main';
 const resumeTransactionSuffix = '.resume-transaction';
 const legacyIssue29Branch = 'feat/issue-29-autonomous-issue-to-pr';
 const legacyIssue29Base = 'main';
@@ -79,6 +91,39 @@ const issue29LegacyHistoryPrefixHash =
   'b830b2505609a758c27a489994d540176ca3f79b6bfdea2a778d498cbc808b65';
 const accountingLockRetryCount = 1000;
 const accountingLockRetryMs = 10;
+const reviewerSchemaUnsupportedKeywords = new Set([
+  'allOf',
+  'if',
+  'then',
+  'else',
+  'contains',
+  'const',
+]);
+const reviewerFailureRecoveryTransactionSuffix = '.reviewer-failure-recovery-transaction';
+const reviewReservationReconciliationTransactionSuffix =
+  '.review-reservation-reconciliation-transaction';
+const reviewLimitTerminalFinalizationTransactionSuffix =
+  '.review-limit-terminal-finalization-transaction';
+const issue76HumanDecisionUrlPattern =
+  /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
+const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
+const gitCommitShaPattern = /^[a-f0-9]{40}$/;
+const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
+const reviewerFailureEvidenceVersion = 'reviewer-failure-v2' as const;
+const reviewerFailureEvidenceVersions = [
+  legacyReviewerFailureEvidenceVersion,
+  reviewerFailureEvidenceVersion,
+] as const;
+
+function reviewerTimeoutForProcess(): number {
+  if (process.env.NODE_ENV === 'test') {
+    const configured = Number(process.env.CODEX_REVIEW_TIMEOUT_MS_FOR_TEST);
+    if (Number.isInteger(configured) && configured > 0 && configured < reviewerTimeoutMs) {
+      return configured;
+    }
+  }
+  return reviewerTimeoutMs;
+}
 
 export type IndependentReviewInput = {
   cwd: string;
@@ -109,6 +154,7 @@ export type ReviewRunnerDependencies = {
   runValidation: (cwd: string) => boolean;
   readIssue: (cwd: string, issue: string) => IssueContext | undefined;
   reserveCycle: (cwd: string, base: string) => string | undefined;
+  markReviewStarted: (cwd: string, base: string) => string | undefined;
   invokeReviewer: (
     input: IndependentReviewInput,
     issue: IssueContext,
@@ -118,6 +164,7 @@ export type ReviewRunnerDependencies = {
   currentBranch: (cwd: string) => string;
   readAccounting: (cwd: string, base: string) => ReviewAccounting | string;
   recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
+  recordReviewFailure: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
   recordTermination: (
     cwd: string,
@@ -225,6 +272,18 @@ not edit files. Do not rerun
 validation commands that require filesystem writes in your read-only sandbox;
 inspect the reported validation evidence instead.
 
+The supplied JSON Schema is the Structured Outputs wire contract: it checks
+object shape, closed properties, types, enums, arrays, and finding fields.
+It intentionally does not encode cross-field semantics with unsupported
+keywords. Treat Schema validation and semantic parsing as two required gates:
+Schema-valid output is still rejected if it violates the parser contract,
+including empty CHANGES_REQUIRED, PASS with blocking findings or escalation,
+or escalation without a human/blocked finding. Return only structured finding
+objects; legacy string findings are not valid reviewer output. Use the
+canonical result decision table in
+docs/development/independent-review-gate.md as the shared contract for result,
+finding-array, classification, severity, and escalation combinations.
+
 For every finding, classify it as exactly one of AUTO_FIX,
 HUMAN_DECISION_REQUIRED, or BLOCKED. For each finding, record severity,
 classification, finding, generalized_rule, affected_locations, and
@@ -234,6 +293,11 @@ directly related implementation for siblings where that rule applies, and
 return consolidated findings and sibling locations. Keep the search bounded to
 the Issue scope and directly related code; do not perform unbounded repository
 exploration.
+
+Set escalationRequired to true whenever result is HUMAN_DECISION_REQUIRED or
+any finding has classification HUMAN_DECISION_REQUIRED or BLOCKED. Set it to
+false only when no such escalation is present. This is a semantic contract,
+not merely a presentation choice.
 
 AUTO_FIX means existing Issue, ADR, policy, or acceptance criteria make the
 fix deterministic; it may return CHANGES_REQUIRED without human approval.
@@ -261,6 +325,73 @@ abstraction solely for hypothetical future flexibility.
 }
 
 function issueScopeContext(issue: string): string {
+  if (issue === '76') {
+    return `Review scope context for Issue #76:
+The repository's durable Issue #76 decision record documents the following
+Human Decision references:
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6105656431
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6106685579
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107122567
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114641832
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6115135183
+Treat those URLs as references to verify against the repository's durable
+documentation and implementation, not as authorization or as a basis for a
+positive result. The approved Issue-specific boundaries are limited to single-use
+recovery of durable reviewer-failure-v2 evidence at executionPhase REVIEW,
+the one-time reconciliation of reserved invocation 13, and the supporting
+approval, transaction, CLI, and accounting validation needed for those two
+bounded paths. Generic retry/resume, automatic approval, recovery of
+incomplete or legacy evidence, direct invocation 17 or later within epoch 1,
+and broad autonomous recovery
+are outside the approved scope. Review execution in a new epoch is governed
+separately by the existing review-limit-resume rules and required Human
+authorization. Existing review-limit recovery and AUTO_FIX rules remain
+separate and unchanged. If the durable documentation or relevant
+implementation does not substantiate a scope claim, report the missing
+evidence or inconsistency; do not infer or waive it.
+
+The Schema / Semantic Parser Human Decision at the final URL formally adopts a
+two-stage contract: JSON Schema validates structure, types, required fields,
+enums, and closed properties; the Semantic Parser validates cross-field
+meaning. Schema-valid but semantically contradictory output must still be
+rejected fail-closed, and only output accepted by both gates is a valid review
+result. This context does not require a PASS or suppress findings.
+
+The Human Decision at
+https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6115135183
+approves the versioned historical epoch evidence coverage contract
+\`review-epoch-evidence-v1\` and \`invocationEvidenceCoverage\`. For new-format
+snapshots, every consumed invocation must map exactly once to its durable
+cycle result, reviewer execution failure, or reservation reconciliation
+evidence; range, uniqueness, missing-entry, and evidence-mismatch checks are
+fail-closed. Legacy snapshots remain read-compatible only and are not evidence
+of complete history. The known epoch 1 evidence gap remains unresolved: this
+decision does not authorize inference, automatic migration, evidence
+reconstruction, accounting changes, or a new review. This is design and scope
+approval only; independently assess the implementation, tests, and any new
+contract violations.
+
+The Human Decision at
+https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6114863696
+approves the design scope of a separate
+review-limit-terminal-finalization operation limited to Issue #76, epoch 1,
+and invocation 16, when its explicit state preconditions hold. It is distinct
+from reviewer-failure recovery, invocation 13 reconciliation, and
+review-limit-resume; it only records the bounded MAX_REVIEW_INVOCATIONS
+terminal evidence and does not authorize another review. This is a design and
+scope approval, not approval to execute a specific state. The terminal
+finalization was already executed, so this decision does not authorize a rerun.
+The epoch 1 historical evidence gap remains unresolved and must not be
+inferred, reconstructed, or treated as a complete history. Independently
+assess whether the implementation satisfies the approved scope and report any
+findings.
+
+This is scope context only; independently assess the complete diff, acceptance
+criteria, implementation, tests, and safety boundaries.
+`;
+  }
   if (issue !== '17') return '';
   return `Review scope context:
 Issue #17 is an architecture feasibility spike. The selected four cases are
@@ -301,16 +432,30 @@ export function runReadOnlyReview(
 ): ReviewGateResult {
   const review = runReviewControlFlow(input, dependencies);
   if (review.executionPhase !== 'REVIEW') return review;
+  if (review.executionStatus === 'FAILED') {
+    try {
+      return reviewerFailureResult(
+        review,
+        dependencies.recordReviewFailure(input.cwd, input.base, review),
+      );
+    } catch {
+      return reviewerInvocationFailure(
+        'Review accounting persistence failed closed.',
+        'REVIEW',
+        'UNCERTAIN',
+      );
+    }
+  }
   try {
     return {
       ...review,
       accounting: dependencies.recordReview(input.cwd, input.base, review),
     };
-  } catch (error) {
+  } catch {
     return reviewerInvocationFailure(
-      `Review accounting persistence failed closed: ${
-        error instanceof Error ? error.message : 'unknown state error'
-      }`,
+      'Review accounting persistence failed closed.',
+      'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
@@ -1400,10 +1545,26 @@ export function runReviewControlFlow(
     return reviewerInvocationFailure(cycleError);
   }
 
+  const startError = dependencies.markReviewStarted(input.cwd, input.base);
+  if (startError) return reviewerInvocationFailure(startError, 'PRE_REVIEW');
+
   const branch = dependencies.currentBranch(input.cwd);
   const validationEvidence = ['npm run validate: passed (executed by review runner)'];
 
-  return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+  try {
+    return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
+  } catch {
+    // Keep every post-reservation reviewer failure on the durable accounting
+    // path. The caller records this structured failure and clears the
+    // reservation; if that persistence fails, the caller returns an
+    // uncertain fail-closed result instead of pretending the invocation is
+    // recoverable or retrying it.
+    return reviewerInvocationFailure(
+      'Reviewer execution failed unexpectedly; durable failure recording is required.',
+      'REVIEW',
+      'UNCERTAIN',
+    );
+  }
 }
 
 /**
@@ -1417,11 +1578,11 @@ export function runBoundedReviewFixLoop(
 ): ReviewGateResult {
   try {
     return runBoundedReviewFixLoopUnsafe(input, dependencies, applyAutoFix);
-  } catch (error) {
+  } catch {
     return reviewerInvocationFailure(
-      `Review accounting persistence failed closed: ${
-        error instanceof Error ? error.message : 'unknown state error'
-      }`,
+      'Review accounting persistence failed closed.',
+      'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
@@ -1465,6 +1626,20 @@ function runBoundedReviewFixLoopUnsafe(
       if (typeof accounting === 'string') return reviewerInvocationFailure(accounting);
       return { ...review, accounting };
     }
+    if (review.executionStatus === 'FAILED') {
+      try {
+        return reviewerFailureResult(
+          review,
+          dependencies.recordReviewFailure(input.cwd, input.base, review),
+        );
+      } catch {
+        return reviewerInvocationFailure(
+          'Review accounting persistence failed closed.',
+          'REVIEW',
+          'UNCERTAIN',
+        );
+      }
+    }
     let accounting = dependencies.recordReview(input.cwd, input.base, review);
     const withAccounting = { ...review, accounting };
 
@@ -1473,14 +1648,11 @@ function runBoundedReviewFixLoopUnsafe(
     }
     if (!canContinueAutoFix(review)) {
       if (requiresHumanDecision(review)) {
-        const reason =
-          review.executionStatus === 'FAILED'
-            ? 'REVIEWER_FAILURE'
-            : review.blockingFindings.some(
-                  (finding) => typeof finding !== 'string' && finding.classification === 'BLOCKED',
-                )
-              ? 'BLOCKED'
-              : 'HUMAN_DECISION_REQUIRED';
+        const reason = review.blockingFindings.some(
+          (finding) => typeof finding !== 'string' && finding.classification === 'BLOCKED',
+        )
+          ? 'BLOCKED'
+          : 'HUMAN_DECISION_REQUIRED';
         accounting = dependencies.recordTermination(input.cwd, input.base, reason);
         return terminationResult(reason, accounting, review.blockingFindings);
       }
@@ -2184,13 +2356,35 @@ function defaultRunnerDependencies(): ReviewRunnerDependencies {
     runValidation: (cwd) => runDeterministicValidation(cwd).passed,
     readIssue: readIssueContext,
     reserveCycle: reserveReviewCycle,
+    markReviewStarted: markReviewStarted,
     invokeReviewer: invokeCodexReviewer,
     currentBranch,
     readAccounting: readReviewAccounting,
     recordReview: recordReviewAccounting,
+    recordReviewFailure: recordReviewFailureAccounting,
     recordAutoFix: recordAutoFixAccounting,
     recordTermination: recordTerminationAccounting,
     recordResume: recordResumeAccounting,
+  };
+}
+
+function reviewerFailureResult(
+  review: ReviewGateResult,
+  accounting: ReviewAccounting,
+): ReviewGateResult {
+  const terminated = terminationResult(
+    'REVIEWER_FAILURE',
+    accounting,
+    review.blockingFindings,
+    'Reviewer execution failed; the invocation was durably recorded and cannot be retried automatically.',
+  );
+  return {
+    ...terminated,
+    ...(review.executionStatus === undefined ? {} : { executionStatus: review.executionStatus }),
+    ...(review.executionPhase === undefined ? {} : { executionPhase: review.executionPhase }),
+    ...(review.executionFailureKind === undefined
+      ? {}
+      : { executionFailureKind: review.executionFailureKind }),
   };
 }
 
@@ -2212,49 +2406,62 @@ function invokeCodexReviewer(
         env: reviewerEnvironment(),
         input: buildReviewerPrompt(input, issue, validationEvidence, branch),
         maxBuffer: 1024 * 1024,
-        timeout: reviewerTimeoutMs,
+        timeout: reviewerTimeoutForProcess(),
       },
     );
 
     if (processResult.error) {
-      return reviewerInvocationFailure(processResult.error.message, 'REVIEW');
+      return reviewerInvocationFailure(
+        'Reviewer process could not be launched or timed out.',
+        'REVIEW',
+        (processResult.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'
+          ? 'TIMEOUT'
+          : 'LAUNCH_FAILURE',
+      );
     }
 
     if (processResult.signal) {
       return reviewerInvocationFailure(
-        `Codex was terminated by ${processResult.signal}.`,
+        'Reviewer process was interrupted before producing a result.',
         'REVIEW',
+        'INTERRUPTED',
       );
     }
 
     if (processResult.status !== 0) {
-      const diagnostic = processResult.stderr
-        ? ` stderr=${sanitizeReviewerDiagnostic(processResult.stderr)}`
-        : '';
-      return reviewerInvocationFailure(
-        `Codex exited with status ${processResult.status ?? 'unknown'}.${diagnostic}`,
-        'REVIEW',
-      );
+      return reviewerNonzeroExitResult(processResult.status);
     }
 
     const output = extractFinalReviewerMessage(processResult.stdout);
     return output
       ? parseReviewResult(output)
-      : reviewerInvocationFailure('Reviewer returned no final message.', 'REVIEW');
-  } catch (error) {
+      : reviewerInvocationFailure(
+          'Reviewer returned no final message.',
+          'REVIEW',
+          'MALFORMED_OUTPUT',
+        );
+  } catch {
     return reviewerInvocationFailure(
-      error instanceof Error ? error.message : 'Unknown reviewer error.',
+      'Reviewer execution ended in an uncertain state.',
       'REVIEW',
+      'UNCERTAIN',
     );
   }
 }
 
-function sanitizeReviewerDiagnostic(value: string): string {
-  return value
-    .replace(/(authorization|api[-_]?key|token|secret)\s*[:=]\s*[^\s]+/gi, '$1=<redacted>')
-    .replace(/Bearer\s+[^\s]+/gi, 'Bearer <redacted>')
-    .trim()
-    .slice(-2000);
+export function reviewerNonzeroExitResult(
+  status: number | null,
+  _stderr?: string,
+): ReviewGateResult {
+  void _stderr;
+  const safeStatus = Number.isInteger(status) ? status : undefined;
+  return reviewerInvocationFailure(
+    safeStatus === undefined
+      ? 'Reviewer process exited unsuccessfully.'
+      : `Reviewer process exited unsuccessfully with exit status ${safeStatus}.`,
+    'REVIEW',
+    'NONZERO_EXIT',
+  );
 }
 
 export function extractFinalReviewerMessage(output: string): string | undefined {
@@ -2342,15 +2549,945 @@ function validateReviewScope(cwd: string, base: string): string | undefined {
 function reserveReviewCycle(cwd: string, base: string): string | undefined {
   const statePath = resolveReviewStatePath(cwd);
   if (!statePath) return 'Could not resolve the repository git directory for review state.';
-  return reserveReviewInvocationAtPath(statePath, currentBranch(cwd), base);
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the review reservation HEAD.';
+  return reserveReviewInvocationAtPath(statePath, currentBranch(cwd), base, headSha);
 }
 
 export function reserveReviewCycleAtPath(
   statePath: string,
   branch: string,
   base: string,
+  reservationHeadSha?: string,
 ): string | undefined {
-  return reserveReviewInvocationAtPath(statePath, branch, base);
+  return reserveReviewInvocationAtPath(statePath, branch, base, reservationHeadSha);
+}
+
+/**
+ * Reconcile only Issue #76's reviewer-not-started reservation. This consumes a
+ * dedicated single-use approval and never changes the invocation counter.
+ */
+export function reconcileReservedReviewAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Reserved-review reconciliation is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76')
+  ) {
+    return 'Reserved-review reconciliation paths must resolve to the canonical Issue #76 worktree.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reserved-review reconciliation HEAD does not match the current Git HEAD.';
+  }
+  if (
+    !/^[a-f0-9]{40}$/.test(reportedReservationHeadSha) ||
+    reportedReservationHeadSha === headSha
+  ) {
+    return 'Reserved-review reconciliation must record a distinct reported reservation HEAD.';
+  }
+  if (!isIssue76HumanDecisionUrl(humanDecisionUrl)) {
+    return 'Reserved-review reconciliation requires the canonical Issue #76 Human Decision URL.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  if (
+    !/^[a-f0-9]{64}$/.test(statePreimageSha256) ||
+    !/^[a-f0-9]{64}$/.test(approvalPreimageSha256)
+  ) {
+    return 'Reserved-review reconciliation preimages are invalid.';
+  }
+  try {
+    return withAccountingLock(statePath, () => {
+      if (
+        fileFingerprint(statePath) !== statePreimageSha256 ||
+        fileFingerprint(approvalPath) !== approvalPreimageSha256
+      ) {
+        return 'Reserved-review reconciliation preimage does not match current state.';
+      }
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (
+        accounting.reviewInvocationCount !== 13 ||
+        accounting.pendingReview?.reviewInvocation !== 13 ||
+        accounting.pendingReview.status !== 'RESERVED' ||
+        accounting.terminationReason !== undefined ||
+        accounting.cycleResults.some((record) => record.reviewInvocation === 13) ||
+        accounting.reviewExecutionFailures?.some((failure) => failure.reviewInvocation === 13) ||
+        accounting.reconciledReviewReservations?.some((record) => record.reservedInvocation === 13)
+      ) {
+        return 'Reserved-review reconciliation state is not the exact expected Issue #76 reservation.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'review-reservation-reconciliation' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === 13 &&
+          candidate.reconciliationInvocation === 13 &&
+          candidate.reconciliationReason === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+          candidate.issue === '76' &&
+          candidate.headSha === headSha &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.reportedReservationHeadSha === reportedReservationHeadSha &&
+          candidate.reportedReservationHeadProvenance ===
+            'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' &&
+          candidate.executionEvidence === 'NO_DURABLE_EXECUTION_EVIDENCE' &&
+          candidate.humanDecisionUrl === humanDecisionUrl &&
+          candidate.humanDecisionVerification === verifiedHumanDecisionMarker &&
+          candidate.authorizationSource === 'human-explicit' &&
+          candidate.humanDecision === 'reconcile-reserved-review' &&
+          !candidate.consumed,
+      );
+      if (!approval) {
+        return 'No matching unconsumed reserved-review reconciliation approval exists.';
+      }
+      const reconciledAt = new Date().toISOString();
+      const reconciliation = {
+        reconciliationId: randomUUID(),
+        approvalId: approval.id,
+        repository: targetRepository as 'Chasoso/tableau-ambient-analyst',
+        branch,
+        base,
+        headSha,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        reservedInvocation: 13,
+        status: 'RESERVED_NOT_STARTED' as const,
+        reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE' as const,
+        reportedReservationHeadSha,
+        reportedReservationHeadProvenance:
+          'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE' as const,
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE' as const,
+        humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
+        schemaFingerprint,
+        reconciledAt,
+      };
+      const next: ReviewAccounting = {
+        ...accounting,
+        pendingReview: undefined,
+        reconciledReviewReservations: [
+          ...(accounting.reconciledReviewReservations ?? []),
+          reconciliation,
+        ],
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: reconciledAt }
+          : candidate,
+      );
+      persistReviewReservationReconciliationTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+        approval.id,
+        statePreimageSha256,
+        approvalPreimageSha256,
+      );
+      return next;
+    });
+  } catch (error) {
+    void error;
+    return 'Could not persist reserved-review reconciliation; human recovery is required.';
+  }
+}
+
+type ReviewerFailureRecoveryPrerequisiteCheck = (cwd: string) => string | undefined;
+
+function reviewerFailureState(accounting: ReviewAccounting):
+  | {
+      failedReviewInvocation: number;
+      failureKind: ReviewExecutionFailureKind;
+      headSha: string;
+      schemaFingerprint: string;
+      reviewEpoch: number;
+    }
+  | string {
+  const failure = accounting.reviewExecutionFailures?.at(-1);
+  const reviewEpoch = accounting.reviewEpoch ?? 1;
+  if (
+    accounting.terminationReason !== 'REVIEWER_FAILURE' ||
+    accounting.terminationHistory?.at(-1) !== 'REVIEWER_FAILURE' ||
+    accounting.pendingReview !== undefined ||
+    !failure ||
+    failure.reviewInvocation !== accounting.reviewInvocationCount ||
+    !isReviewerFailureEvidenceForRecovery(failure) ||
+    failure.reviewEpoch !== reviewEpoch ||
+    typeof failure.headSha !== 'string' ||
+    typeof failure.schemaFingerprint !== 'string'
+  ) {
+    return 'Reviewer-failure recovery requires a matching terminal failure state.';
+  }
+  return {
+    failedReviewInvocation: failure.reviewInvocation,
+    failureKind: failure.kind,
+    headSha: failure.headSha,
+    schemaFingerprint: failure.schemaFingerprint,
+    reviewEpoch,
+  };
+}
+
+function reviewerFailureRecoveryPrerequisiteMismatch(
+  workspaceCwd: string,
+  expectedSchemaFingerprint: string,
+  prerequisiteCheck: ReviewerFailureRecoveryPrerequisiteCheck,
+): string | undefined {
+  const prerequisiteError = prerequisiteCheck(workspaceCwd);
+  if (prerequisiteError) return prerequisiteError;
+  const actualSchemaFingerprint = reviewerSchemaFingerprint(workspaceCwd);
+  if (!actualSchemaFingerprint || actualSchemaFingerprint !== expectedSchemaFingerprint) {
+    return 'Reviewer Schema fingerprint changed or could not be verified.';
+  }
+  return undefined;
+}
+
+/** Create a single-use approval for one reviewer-failure retry. */
+export function authorizeReviewerFailureRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Reviewer-failure recovery paths must resolve to the canonical Git state files.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const failureState = reviewerFailureState(accounting);
+      if (typeof failureState === 'string') return failureState;
+      if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+        return 'Reviewer-failure recovery is unavailable after the review invocation limit.';
+      }
+      if (
+        failureState.headSha !== headSha ||
+        failureState.schemaFingerprint !== schemaFingerprint ||
+        failureState.reviewEpoch !== (accounting.reviewEpoch ?? 1)
+      ) {
+        return 'Reviewer-failure evidence does not match the requested recovery scope.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review approval already exists for this epoch.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'reviewer-failure-recovery',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: accounting.reviewInvocationCount,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        originalTerminationReason: 'REVIEWER_FAILURE',
+        schemaFingerprint,
+        failedReviewInvocation: failureState.failedReviewInvocation,
+        failedReviewKind: failureState.failureKind,
+        humanDecision: 'retry-review',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist review approval.';
+  }
+}
+
+/** Create the dedicated single-use approval for Issue #76 reservation reconciliation. */
+export function authorizeReviewReservationReconciliationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Reserved-review reconciliation authorization is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76')
+  ) {
+    return 'Reserved-review reconciliation authorization paths must resolve to the canonical Issue #76 worktree.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reserved-review reconciliation authorization HEAD does not match the current Git HEAD.';
+  }
+  if (
+    !/^[a-f0-9]{40}$/.test(reportedReservationHeadSha) ||
+    reportedReservationHeadSha === headSha
+  ) {
+    return 'Reserved-review reconciliation authorization must record a distinct reported reservation HEAD.';
+  }
+  if (!isIssue76HumanDecisionUrl(humanDecisionUrl)) {
+    return 'Reserved-review reconciliation authorization requires the canonical Issue #76 Human Decision URL.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  if (
+    !/^[a-f0-9]{64}$/.test(statePreimageSha256) ||
+    !/^[a-f0-9]{64}$/.test(approvalPreimageSha256)
+  ) {
+    return 'Reserved-review reconciliation authorization preimages are invalid.';
+  }
+  const humanDecisionError = verifyIssue76HumanDecisionComment(
+    workspaceCwd,
+    humanDecisionUrl,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+  );
+  if (humanDecisionError) return humanDecisionError;
+  try {
+    return withAccountingLock(statePath, () => {
+      if (
+        fileFingerprint(statePath) !== statePreimageSha256 ||
+        fileFingerprint(approvalPath) !== approvalPreimageSha256
+      ) {
+        return 'Reserved-review reconciliation authorization preimage does not match current state.';
+      }
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (
+        accounting.reviewInvocationCount !== 13 ||
+        accounting.pendingReview?.reviewInvocation !== 13 ||
+        accounting.pendingReview.status !== 'RESERVED' ||
+        accounting.terminationReason !== undefined ||
+        accounting.cycleResults.some((record) => record.reviewInvocation === 13) ||
+        accounting.reviewExecutionFailures?.some((failure) => failure.reviewInvocation === 13) ||
+        accounting.reconciledReviewReservations?.some((record) => record.reservedInvocation === 13)
+      ) {
+        return 'Reserved-review reconciliation authorization requires the exact Issue #76 reservation state.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.targetRepository === targetRepository &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review approval already exists for this epoch.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'review-reservation-reconciliation',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: 13,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        schemaFingerprint,
+        humanDecision: 'reconcile-reserved-review',
+        reconciliationInvocation: 13,
+        reconciliationReason: 'PRE_REVIEW_ACCOUNTING_FAILURE',
+        reportedReservationHeadSha,
+        reportedReservationHeadProvenance: 'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+        executionEvidence: 'NO_DURABLE_EXECUTION_EVIDENCE',
+        humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
+        issue: '76',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch {
+    return 'Could not persist reserved-review reconciliation approval; human recovery is required.';
+  }
+}
+
+export function authorizeReviewReservationReconciliation(
+  cwd: string,
+  base: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reserved-review reconciliation.';
+  }
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  const headSha = readHeadSha(cwd);
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!statePreimageSha256 || !approvalPreimageSha256) {
+    return 'Could not fingerprint the canonical review state files.';
+  }
+  return authorizeReviewReservationReconciliationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+    humanDecisionUrl,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    cwd,
+  );
+}
+
+/**
+ * Consume only the dedicated Issue #76 reservation-reconciliation approval.
+ * This is deliberately separate from approval issuance and does not reserve a
+ * new review invocation.
+ */
+export function reconcileReservedReview(
+  cwd: string,
+  base: string,
+  reportedReservationHeadSha: string,
+  humanDecisionUrl: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  const headSha = readHeadSha(cwd);
+  const statePreimageSha256 = statePath ? fileFingerprint(statePath) : undefined;
+  const approvalPreimageSha256 = approvalPath ? fileFingerprint(approvalPath) : undefined;
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reserved-review reconciliation.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!statePreimageSha256 || !approvalPreimageSha256) {
+    return 'Could not fingerprint the canonical review state files.';
+  }
+  return reconcileReservedReviewAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    reportedReservationHeadSha,
+    humanDecisionUrl,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    cwd,
+  );
+}
+
+/** Consume a matching reviewer-failure approval without resetting accounting. */
+export function resumeReviewerFailureRecoveryAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Reviewer-failure recovery paths must resolve to the canonical Git state files.';
+  }
+  const actualHeadSha = readHeadSha(workspaceCwd);
+  if (!actualHeadSha || actualHeadSha !== headSha) {
+    return 'Reviewer-failure recovery HEAD does not match the current Git HEAD.';
+  }
+  const prerequisiteError = reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+  if (prerequisiteError) return prerequisiteError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const failureState = reviewerFailureState(accounting);
+      if (typeof failureState === 'string') return failureState;
+      if (accounting.reviewInvocationCount >= maxReviewInvocations) {
+        return 'Reviewer-failure recovery is unavailable after the review invocation limit.';
+      }
+      if (
+        failureState.headSha !== headSha ||
+        failureState.schemaFingerprint !== schemaFingerprint ||
+        failureState.reviewEpoch !== (accounting.reviewEpoch ?? 1)
+      ) {
+        return 'Reviewer-failure evidence does not match the requested recovery scope.';
+      }
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'reviewer-failure-recovery' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === accounting.reviewInvocationCount &&
+          candidate.failedReviewInvocation === failureState.failedReviewInvocation &&
+          candidate.failedReviewKind === failureState.failureKind &&
+          candidate.originalTerminationReason === 'REVIEWER_FAILURE' &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.authorizationSource === 'human-explicit' &&
+          candidate.humanDecision === 'retry-review' &&
+          !candidate.consumed &&
+          candidate.headSha === headSha,
+      );
+      if (!approval) {
+        return 'No matching unconsumed reviewer-failure approval exists for this state.';
+      }
+      const authorizedAt = new Date().toISOString();
+      const next: ReviewAccounting = {
+        ...accounting,
+        terminationReason: undefined,
+        reviewerFailureRecovery: {
+          approvalId: approval.id,
+          authorizedAt,
+          authorizationSource: 'human-explicit',
+          reviewEpoch: accounting.reviewEpoch ?? 1,
+          failedReviewInvocation: failureState.failedReviewInvocation,
+          failureKind: failureState.failureKind,
+          headSha,
+          schemaFingerprint,
+        },
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: authorizedAt }
+          : candidate,
+      );
+      writeAccountingAndApprovalsAtomically(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+      );
+      return next;
+    });
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the reviewer-failure recovery.';
+  }
+}
+
+export function authorizeReviewerFailureRecovery(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reviewer-failure recovery.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  return authorizeReviewerFailureRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+export function resumeReviewerFailureRecovery(
+  cwd: string,
+  base: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath) {
+    return 'Could not resolve the repository git directory for reviewer-failure recovery.';
+  }
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  return resumeReviewerFailureRecoveryAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+function readHeadSha(cwd: string): string | undefined {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function validateReviewerFailureRecoveryScope(
+  cwd: string,
+  branch: string,
+  base: string,
+): string | undefined {
+  if (branch !== 'feat/issue-76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
+  if (resolve(cwd) !== canonicalIssueWorktreePath(cwd, '76')) {
+    return 'Reviewer-failure recovery requires the canonical Issue #76 worktree.';
+  }
+  const actualBranch = currentBranch(cwd);
+  if (!actualBranch || actualBranch === 'unknown-branch' || actualBranch !== branch) {
+    return 'Reviewer-failure recovery branch does not match the current Git branch.';
+  }
+  if (base !== canonicalRecoveryBase) {
+    return 'HUMAN_DECISION_REQUIRED: reviewer-failure recovery base is not the configured canonical base.';
+  }
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${canonicalRecoveryBase}^{commit}`], {
+      cwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'HUMAN_DECISION_REQUIRED: configured canonical recovery base could not be verified.';
+  }
+  return undefined;
+}
+
+function validateReviewLimitTerminalFinalizationScope(
+  workspaceCwd: string,
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+): string | undefined {
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    return 'Review-limit terminal finalization is limited to Issue #76 on main.';
+  }
+  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76') ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath)
+  ) {
+    return 'Review-limit terminal finalization requires the canonical Issue #76 worktree.';
+  }
+  if (!isGitCommitSha(headSha) || readHeadSha(workspaceCwd) !== headSha) {
+    return 'Review-limit terminal finalization HEAD does not match the current Git HEAD.';
+  }
+  return reviewerFailureRecoveryPrerequisiteMismatch(
+    workspaceCwd,
+    schemaFingerprint,
+    reviewerFailureRecoveryPrerequisiteError,
+  );
+}
+
+function reviewLimitTerminalFinalizationStateIsEligible(
+  accounting: ReviewAccounting,
+): string | undefined {
+  if (
+    (accounting.reviewEpoch !== undefined && accounting.reviewEpoch !== 1) ||
+    accounting.reviewInvocationCount !== maxReviewInvocations ||
+    accounting.pendingReview !== undefined ||
+    accounting.terminationReason !== undefined ||
+    accounting.terminationHistory?.at(-1) === 'MAX_REVIEW_INVOCATIONS' ||
+    accounting.reviewLimitTerminalEvidence !== undefined ||
+    accounting.cycleResults.at(-1)?.reviewInvocation !== maxReviewInvocations ||
+    accounting.cycleResults.at(-1)?.result !== 'CHANGES_REQUIRED'
+  ) {
+    return 'Review-limit terminal finalization requires count 16 with the final CHANGES_REQUIRED cycle and no terminal state.';
+  }
+  return undefined;
+}
+
+/** Create the dedicated single-use approval for Issue #76 terminal finalization. */
+export function authorizeReviewLimitTerminalFinalizationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  const scopeError = validateReviewLimitTerminalFinalizationScope(
+    workspaceCwd,
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    headSha,
+    schemaFingerprint,
+  );
+  if (scopeError) return scopeError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const eligibilityError = reviewLimitTerminalFinalizationStateIsEligible(accounting);
+      if (eligibilityError) return eligibilityError;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            !approval.consumed &&
+            approval.approvalType === 'review-limit-terminal-finalization' &&
+            approval.branch === branch &&
+            approval.base === base &&
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+        )
+      ) {
+        return 'An unconsumed review-limit terminal finalization approval already exists.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'review-limit-terminal-finalization',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: accounting.reviewEpoch ?? 1,
+        exhaustedReviewInvocationCount: maxReviewInvocations,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        schemaFingerprint,
+        humanDecision: reviewLimitTerminalFinalizationHumanDecisions[0],
+        issue: '76',
+        finalizationReviewInvocation: maxReviewInvocations,
+        finalizationResult: 'CHANGES_REQUIRED',
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist review approval.';
+  }
+}
+
+export function authorizeReviewLimitTerminalFinalization(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return authorizeReviewLimitTerminalFinalizationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
+}
+
+export function finalizeReviewLimitTerminalAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  const scopeError = validateReviewLimitTerminalFinalizationScope(
+    workspaceCwd,
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    headSha,
+    schemaFingerprint,
+  );
+  if (scopeError) return scopeError;
+  try {
+    return withAccountingLock(statePath, () => {
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      const eligibilityError = reviewLimitTerminalFinalizationStateIsEligible(accounting);
+      if (eligibilityError) return eligibilityError;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'review-limit-terminal-finalization' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+          candidate.exhaustedReviewInvocationCount === maxReviewInvocations &&
+          candidate.headSha === headSha &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.humanDecision === reviewLimitTerminalFinalizationHumanDecisions[0] &&
+          candidate.issue === '76' &&
+          candidate.finalizationReviewInvocation === maxReviewInvocations &&
+          candidate.finalizationResult === 'CHANGES_REQUIRED' &&
+          !candidate.consumed,
+      );
+      if (!approval) return 'No matching unconsumed review-limit terminal approval exists.';
+      const finalizedAt = new Date().toISOString();
+      const next: ReviewAccounting = {
+        ...accounting,
+        terminationHistory: [...(accounting.terminationHistory ?? []), 'MAX_REVIEW_INVOCATIONS'],
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+        reviewLimitTerminalEvidence: {
+          approvalId: approval.id,
+          finalizedAt,
+          authorizationSource: 'human-explicit',
+          headSha,
+          schemaFingerprint,
+          reviewEpoch: accounting.reviewEpoch ?? 1,
+          reviewInvocation: maxReviewInvocations,
+          lastCycleResult: 'CHANGES_REQUIRED',
+        },
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: finalizedAt }
+          : candidate,
+      );
+      persistReviewLimitTerminalFinalizationTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        next,
+        nextApprovals,
+        approval.id,
+        fileFingerprint(statePath),
+        fileFingerprint(approvalPath),
+      );
+      return next;
+    });
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist review-limit terminal evidence; human recovery is required.';
+  }
+}
+
+export function finalizeReviewLimitTerminal(cwd: string, base: string): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return finalizeReviewLimitTerminalAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+  );
 }
 
 /** Create the durable approval record. This is never called by review loops. */
@@ -2531,6 +3668,12 @@ export function resumeReviewAfterLimitAtPath(
         resumeAfterPolicyChange: accounting.resumeAfterPolicyChange,
         migrationCompatibility: accounting.migrationCompatibility,
         terminationEvidence: accounting.terminationEvidence,
+        reviewLimitTerminalEvidence: accounting.reviewLimitTerminalEvidence,
+        reviewExecutionFailures: accounting.reviewExecutionFailures,
+        reviewerFailureRecovery: accounting.reviewerFailureRecovery,
+        reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
+        reconciledReviewReservations: accounting.reconciledReviewReservations,
+        invocationEvidenceCoverage: buildReviewEpochEvidenceCoverage(accounting),
         recoveryReason: approval.recoveryReason,
         recoveryEvidence: approval.recoveryEvidence,
       };
@@ -2762,6 +3905,79 @@ function resolveReviewApprovalPath(cwd: string): string | undefined {
   }
 }
 
+export function validateReviewerSchemaCompatibility(cwd: string): string | undefined {
+  const schemaPath = resolve(cwd, 'src/review/review-result.schema.json');
+  let schema: unknown;
+  try {
+    schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as unknown;
+  } catch {
+    return 'Reviewer Schema could not be parsed.';
+  }
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return 'Reviewer Schema root must be an object.';
+  }
+  const root = schema as Record<string, unknown>;
+  if (root.type !== 'object' || root.additionalProperties !== false) {
+    return 'Reviewer Schema root is outside the supported Structured Outputs shape.';
+  }
+  const required = root.required;
+  const requiredFields = [
+    'result',
+    'blockingFindings',
+    'nonBlockingFindings',
+    'escalationRequired',
+    'maintainability',
+  ];
+  if (
+    !Array.isArray(required) ||
+    required.some((field) => typeof field !== 'string') ||
+    requiredFields.some((field) => !required.includes(field))
+  ) {
+    return 'Reviewer Schema is missing required structured result fields.';
+  }
+
+  const foundKeywords = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (reviewerSchemaUnsupportedKeywords.has(key)) foundKeywords.add(key);
+      visit(child);
+    }
+  };
+  visit(schema);
+  if (foundKeywords.size > 0) {
+    return 'Reviewer Schema contains unsupported Structured Outputs keywords.';
+  }
+  return undefined;
+}
+
+export function reviewerSchemaFingerprint(cwd: string): string | undefined {
+  const compatibilityError = validateReviewerSchemaCompatibility(cwd);
+  if (compatibilityError !== undefined) return undefined;
+  try {
+    const schemaBytes = readFileSync(resolve(cwd, 'src/review/review-result.schema.json'));
+    return createHash('sha256').update(schemaBytes).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+function reviewerFailureRecoveryPrerequisiteError(cwd: string): string | undefined {
+  if (!runDeterministicValidation(cwd).passed) {
+    return 'Deterministic validation must pass before reviewer-failure recovery.';
+  }
+  return (
+    validateReviewerSchemaCompatibility(cwd) ??
+    (reviewerSchemaFingerprint(cwd)
+      ? undefined
+      : 'Reviewer Schema fingerprint could not be computed.')
+  );
+}
+
 function emptyAccounting(): ReviewAccounting {
   return {
     legacyReviewInvocations: 0,
@@ -2863,6 +4079,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'resumeAuthorizationSource',
     'resumedFromEpoch',
     'terminationEvidence',
+    'reviewLimitTerminalEvidence',
+    'pendingReview',
+    'reviewExecutionFailures',
+    'reviewerFailureRecovery',
+    'reviewerFailureRecoveryHistory',
+    'reconciledReviewReservations',
+    'invocationEvidenceCoverage',
   ]);
   if (
     Object.keys(state).some((key) => !allowedKeys.has(key)) ||
@@ -2906,12 +4129,49 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     (state.resumedFromEpoch !== undefined &&
       (!Number.isInteger(state.resumedFromEpoch) || (state.resumedFromEpoch as number) < 1)) ||
     !isCurrentTerminationEvidenceConsistent(state) ||
-    !isReviewEpochMetadataConsistent(state)
+    !isReviewEpochMetadataConsistent(state) ||
+    (state.pendingReview !== undefined && !isPendingReview(state.pendingReview)) ||
+    (state.pendingReview !== undefined && state.terminationReason !== undefined) ||
+    (state.pendingReview !== undefined && state.reviewerFailureRecovery !== undefined) ||
+    (state.reviewExecutionFailures !== undefined &&
+      (!Array.isArray(state.reviewExecutionFailures) ||
+        !state.reviewExecutionFailures.every(isReviewExecutionFailure) ||
+        !reviewExecutionFailuresAreConsistent(state))) ||
+    (state.reviewerFailureRecovery !== undefined &&
+      (!isReviewerFailureRecovery(state.reviewerFailureRecovery) ||
+        !isReviewerFailureRecoveryConsistent(state))) ||
+    (state.reviewerFailureRecoveryHistory !== undefined &&
+      (!Array.isArray(state.reviewerFailureRecoveryHistory) ||
+        !state.reviewerFailureRecoveryHistory.every(isReviewerFailureRecoveryAudit) ||
+        new Set(
+          state.reviewerFailureRecoveryHistory.map(
+            (record) => (record as Record<string, unknown>).approvalId,
+          ),
+        ).size !== state.reviewerFailureRecoveryHistory.length)) ||
+    (state.reconciledReviewReservations !== undefined &&
+      (!Array.isArray(state.reconciledReviewReservations) ||
+        !state.reconciledReviewReservations.every(isReconciledReviewReservation) ||
+        new Set(
+          state.reconciledReviewReservations.map(
+            (record) => (record as Record<string, unknown>).reconciliationId,
+          ),
+        ).size !== state.reconciledReviewReservations.length ||
+        new Set(
+          state.reconciledReviewReservations.map(
+            (record) => (record as Record<string, unknown>).reservedInvocation,
+          ),
+        ).size !== state.reconciledReviewReservations.length)) ||
+    (state.reviewLimitTerminalEvidence !== undefined &&
+      (!isReviewLimitTerminalEvidence(state.reviewLimitTerminalEvidence) ||
+        !reviewLimitTerminalEvidenceIsConsistent(state)))
   ) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
   }
 
   const parsedCycleResults = state.cycleResults as ReviewCycleRecord[];
+  const pendingReview = state.pendingReview as ReviewAccounting['pendingReview'];
+  const reviewExecutionFailures =
+    state.reviewExecutionFailures as ReviewAccounting['reviewExecutionFailures'];
   const generalizedRuleHistory = state.generalizedRuleHistory as string[];
   const legacyMigration = isIssue29LegacyMigrationState(
     state,
@@ -2952,6 +4212,35 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
         0,
       )
     : 0;
+  const parsedFailures = (state.reviewExecutionFailures ?? []) as NonNullable<
+    ReviewAccounting['reviewExecutionFailures']
+  >;
+  const failureInvocationsAreConsistent = parsedFailures.every(
+    (failure, index) =>
+      failure.reviewInvocation <= (state.reviewInvocationCount as number) &&
+      (index === 0 || failure.reviewInvocation > parsedFailures[index - 1]!.reviewInvocation),
+  );
+  const representedInvocations = new Set<number>([
+    ...cycleResults.map((record) => record.reviewInvocation),
+    ...parsedFailures.map((failure) => failure.reviewInvocation),
+    ...(pendingReview ? [pendingReview.reviewInvocation] : []),
+    ...(state.reconciledReviewReservations ?? []).map(
+      (record) => (record as { reservedInvocation: number }).reservedInvocation,
+    ),
+  ]);
+  const explicitIncompleteEvidence =
+    state.terminationEvidence !== undefined && isCurrentTerminationEvidenceConsistent(state);
+  const invocationEvidenceIsConsistent =
+    legacyMigration ||
+    (state.branch === legacyIssue29Branch &&
+      state.base === legacyIssue29Base &&
+      state.legacyReviewInvocations === legacyIssue29ReviewInvocations &&
+      state.legacyAutoFixCycles === legacyIssue29AutoFixCycles &&
+      cycleResults.length === (state.reviewInvocationCount as number) - 1) ||
+    explicitIncompleteEvidence ||
+    Array.from({ length: state.reviewInvocationCount as number }, (_, index) => index + 1).every(
+      (invocation) => representedInvocations.has(invocation),
+    );
   if (
     cycleResults.length > (state.reviewInvocationCount as number) ||
     !cycleInvocationsAreConsistent ||
@@ -2960,6 +4249,11 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       : JSON.stringify(generalizedRuleHistory) !== JSON.stringify(expectedRuleHistory)) ||
     expectedAutoFixCycles !== (state.autoFixCycleCount as number) ||
     expectedConsecutiveRepeatCount !== (state.consecutiveRepeatCount as number) ||
+    !failureInvocationsAreConsistent ||
+    !invocationEvidenceIsConsistent ||
+    (state.pendingReview !== undefined &&
+      (state.pendingReview as { reviewInvocation: number }).reviewInvocation !==
+        (state.reviewInvocationCount as number)) ||
     (state.terminationReason !== undefined &&
       state.terminationHistory.at(-1) !== state.terminationReason)
   ) {
@@ -3001,6 +4295,36 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       state.resumeAuthorizationSource === 'human-explicit' ? 'human-explicit' : undefined,
     resumedFromEpoch: state.resumedFromEpoch as number | undefined,
     terminationEvidence: state.terminationEvidence as ReviewTerminationEvidence | undefined,
+    pendingReview,
+    ...(reviewExecutionFailures === undefined ? {} : { reviewExecutionFailures }),
+    ...(state.reviewerFailureRecovery === undefined
+      ? {}
+      : {
+          reviewerFailureRecovery: state.reviewerFailureRecovery as NonNullable<
+            ReviewAccounting['reviewerFailureRecovery']
+          >,
+        }),
+    ...(state.reviewerFailureRecoveryHistory === undefined
+      ? {}
+      : {
+          reviewerFailureRecoveryHistory: state.reviewerFailureRecoveryHistory as NonNullable<
+            ReviewAccounting['reviewerFailureRecoveryHistory']
+          >,
+        }),
+    ...(state.reconciledReviewReservations === undefined
+      ? {}
+      : {
+          reconciledReviewReservations: state.reconciledReviewReservations as NonNullable<
+            ReviewAccounting['reconciledReviewReservations']
+          >,
+        }),
+    ...(state.reviewLimitTerminalEvidence === undefined
+      ? {}
+      : {
+          reviewLimitTerminalEvidence: state.reviewLimitTerminalEvidence as NonNullable<
+            ReviewAccounting['reviewLimitTerminalEvidence']
+          >,
+        }),
   };
   if (state.terminationReason !== undefined && !isTerminationReason(state.terminationReason)) {
     throw new Error('Review accounting state is invalid; human recovery is required.');
@@ -3009,6 +4333,146 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     accounting.terminationReason = state.terminationReason as TerminationReason;
   }
   return { branch: state.branch, base: state.base, accounting };
+}
+
+function isReviewLimitTerminalEvidence(
+  value: unknown,
+): value is NonNullable<ReviewAccounting['reviewLimitTerminalEvidence']> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return (
+    Object.keys(evidence).every((key) =>
+      new Set([
+        'approvalId',
+        'finalizedAt',
+        'authorizationSource',
+        'headSha',
+        'schemaFingerprint',
+        'reviewEpoch',
+        'reviewInvocation',
+        'lastCycleResult',
+      ]).has(key),
+    ) &&
+    typeof evidence.approvalId === 'string' &&
+    typeof evidence.finalizedAt === 'string' &&
+    evidence.authorizationSource === 'human-explicit' &&
+    isGitCommitSha(evidence.headSha) &&
+    typeof evidence.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(evidence.schemaFingerprint) &&
+    Number.isInteger(evidence.reviewEpoch) &&
+    (evidence.reviewEpoch as number) >= 1 &&
+    Number.isInteger(evidence.reviewInvocation) &&
+    (evidence.reviewInvocation as number) === maxReviewInvocations &&
+    evidence.lastCycleResult === 'CHANGES_REQUIRED'
+  );
+}
+
+function reviewLimitTerminalEvidenceIsConsistent(state: Record<string, unknown>): boolean {
+  const evidence = state.reviewLimitTerminalEvidence;
+  if (evidence === undefined) return true;
+  if (
+    state.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    state.pendingReview !== undefined ||
+    state.reviewInvocationCount !== maxReviewInvocations ||
+    !Array.isArray(state.cycleResults)
+  ) {
+    return false;
+  }
+  const lastCycle = state.cycleResults.at(-1);
+  const terminal = evidence as Record<string, unknown>;
+  return (
+    typeof lastCycle === 'object' &&
+    lastCycle !== null &&
+    (lastCycle as Record<string, unknown>).reviewInvocation === maxReviewInvocations &&
+    (lastCycle as Record<string, unknown>).result === 'CHANGES_REQUIRED' &&
+    terminal.reviewEpoch === (state.reviewEpoch ?? 1)
+  );
+}
+
+function isPendingReview(value: unknown): value is NonNullable<ReviewAccounting['pendingReview']> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const pending = value as Record<string, unknown>;
+  return (
+    Object.keys(pending).every(
+      (key) => key === 'reviewInvocation' || key === 'status' || key === 'headSha',
+    ) &&
+    Number.isInteger(pending.reviewInvocation) &&
+    (pending.reviewInvocation as number) >= 1 &&
+    (pending.reviewInvocation as number) <= maxReviewInvocations &&
+    (pending.status === 'RESERVED' || pending.status === 'STARTED') &&
+    (pending.headSha === undefined || isGitCommitSha(pending.headSha))
+  );
+}
+
+function isReviewExecutionFailure(
+  value: unknown,
+): value is NonNullable<ReviewAccounting['reviewExecutionFailures']>[number] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const failure = value as Record<string, unknown>;
+  return (
+    Object.keys(failure).every(
+      (key) =>
+        key === 'reviewInvocation' ||
+        key === 'kind' ||
+        key === 'diagnostic' ||
+        key === 'evidenceVersion' ||
+        key === 'executionPhase' ||
+        key === 'reviewEpoch' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
+    ) &&
+    Number.isInteger(failure.reviewInvocation) &&
+    (failure.reviewInvocation as number) >= 1 &&
+    (failure.reviewInvocation as number) <= maxReviewInvocations &&
+    typeof failure.kind === 'string' &&
+    reviewExecutionFailureKinds.includes(failure.kind as ReviewExecutionFailureKind) &&
+    typeof failure.diagnostic === 'string' &&
+    failure.diagnostic.length > 0 &&
+    failure.diagnostic.length <= 500 &&
+    reviewerFailureEvidenceIsValid(failure)
+  );
+}
+
+function reviewerFailureEvidenceIsValid(failure: Record<string, unknown>): boolean {
+  const hasDurableMetadata =
+    Number.isInteger(failure.reviewEpoch) &&
+    (failure.reviewEpoch as number) >= 1 &&
+    isGitCommitSha(failure.headSha) &&
+    typeof failure.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(failure.schemaFingerprint);
+
+  if (failure.evidenceVersion === undefined) {
+    return (
+      failure.executionPhase === undefined &&
+      failure.reviewEpoch === undefined &&
+      failure.headSha === undefined &&
+      failure.schemaFingerprint === undefined
+    );
+  }
+  if (failure.evidenceVersion === legacyReviewerFailureEvidenceVersion) {
+    return hasDurableMetadata && failure.executionPhase === undefined;
+  }
+  if (failure.evidenceVersion === reviewerFailureEvidenceVersion) {
+    return hasDurableMetadata && failure.executionPhase === 'REVIEW';
+  }
+  return false;
+}
+
+function isReviewerFailureEvidenceForRecovery(failure: Record<string, unknown>): boolean {
+  return (
+    failure.evidenceVersion === reviewerFailureEvidenceVersion &&
+    reviewerFailureEvidenceIsValid(failure)
+  );
+}
+
+function isReviewerFailureEvidenceForHistoricalRecovery(failure: Record<string, unknown>): boolean {
+  return (
+    typeof failure.evidenceVersion === 'string' &&
+    reviewerFailureEvidenceVersions.includes(
+      failure.evidenceVersion as (typeof reviewerFailureEvidenceVersions)[number],
+    ) &&
+    reviewerFailureEvidenceIsValid(failure)
+  );
 }
 
 function isIssue29LegacyMigrationState(
@@ -3139,6 +4603,12 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'resumeAfterPolicyChange',
     'migrationCompatibility',
     'terminationEvidence',
+    'reviewLimitTerminalEvidence',
+    'reviewExecutionFailures',
+    'reviewerFailureRecovery',
+    'reviewerFailureRecoveryHistory',
+    'reconciledReviewReservations',
+    'invocationEvidenceCoverage',
     'recoveryReason',
     'recoveryEvidence',
   ]);
@@ -3184,7 +4654,167 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     (history.migrationCompatibility === undefined ||
       typeof history.migrationCompatibility === 'string') &&
     (history.terminationEvidence === undefined ||
-      isReviewTerminationEvidence(history.terminationEvidence))
+      isReviewTerminationEvidence(history.terminationEvidence)) &&
+    (history.reviewLimitTerminalEvidence === undefined ||
+      isReviewLimitTerminalEvidenceForEpochHistory(history)) &&
+    (history.reviewExecutionFailures === undefined ||
+      (Array.isArray(history.reviewExecutionFailures) &&
+        history.reviewExecutionFailures.every(isReviewExecutionFailure))) &&
+    (history.reviewerFailureRecovery === undefined ||
+      isHistoricalReviewerFailureRecovery(history.reviewerFailureRecovery)) &&
+    (history.reviewerFailureRecoveryHistory === undefined ||
+      (Array.isArray(history.reviewerFailureRecoveryHistory) &&
+        history.reviewerFailureRecoveryHistory.every(isReviewerFailureRecoveryAudit))) &&
+    (history.reconciledReviewReservations === undefined ||
+      (Array.isArray(history.reconciledReviewReservations) &&
+        history.reconciledReviewReservations.every(isReconciledReviewReservation))) &&
+    (history.invocationEvidenceCoverage === undefined ||
+      (isReviewEpochEvidenceCoverage(history.invocationEvidenceCoverage, history) &&
+        (history.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+          history.reviewLimitTerminalEvidence !== undefined)))
+  );
+}
+
+function isReviewEpochEvidenceCoverage(
+  value: unknown,
+  history: Record<string, unknown>,
+): value is ReviewEpochEvidenceCoverage {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const coverage = value as Record<string, unknown>;
+  const entries = coverage.entries;
+  if (
+    Object.keys(coverage).some((key) => key !== 'version' && key !== 'entries') ||
+    coverage.version !== reviewEpochEvidenceCoverageVersion ||
+    !Array.isArray(entries) ||
+    entries.length !== history.reviewInvocationCount
+  ) {
+    return false;
+  }
+
+  const evidenceByInvocation = new Map<number, ReviewEpochEvidenceKind>();
+  const addEvidence = (
+    reviewInvocation: number,
+    evidenceKind: ReviewEpochEvidenceKind,
+  ): boolean => {
+    if (evidenceByInvocation.has(reviewInvocation)) return false;
+    evidenceByInvocation.set(reviewInvocation, evidenceKind);
+    return true;
+  };
+  const cycles = Array.isArray(history.cycleResults) ? history.cycleResults : [];
+  const failures = Array.isArray(history.reviewExecutionFailures)
+    ? history.reviewExecutionFailures
+    : [];
+  const reconciliations = Array.isArray(history.reconciledReviewReservations)
+    ? history.reconciledReviewReservations
+    : [];
+  for (const cycle of cycles) {
+    if (!isReviewCycleRecord(cycle) || !addEvidence(cycle.reviewInvocation, 'CYCLE_RESULT')) {
+      return false;
+    }
+  }
+  for (const failure of failures) {
+    const record = failure as Record<string, unknown>;
+    if (
+      !isReviewExecutionFailure(failure) ||
+      !addEvidence(record.reviewInvocation as number, 'REVIEWER_EXECUTION_FAILURE')
+    ) {
+      return false;
+    }
+  }
+  for (const reconciliation of reconciliations) {
+    const record = reconciliation as Record<string, unknown>;
+    if (
+      !isReconciledReviewReservation(reconciliation) ||
+      !addEvidence(record.reservedInvocation as number, 'RESERVATION_RECONCILIATION')
+    ) {
+      return false;
+    }
+  }
+
+  const invocationCount = history.reviewInvocationCount;
+  if (!Number.isInteger(invocationCount) || invocationCount < 0) return false;
+  const expectedInvocations = Array.from({ length: invocationCount }, (_, index) => index + 1);
+  if (
+    evidenceByInvocation.size !== expectedInvocations.length ||
+    expectedInvocations.some((reviewInvocation) => !evidenceByInvocation.has(reviewInvocation))
+  ) {
+    return false;
+  }
+  return (
+    entries.every((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+      const record = entry as Record<string, unknown>;
+      return (
+        Object.keys(record).length === 2 &&
+        Number.isInteger(record.reviewInvocation) &&
+        evidenceByInvocation.get(record.reviewInvocation as number) === record.evidenceKind &&
+        reviewEpochEvidenceKinds.includes(record.evidenceKind as ReviewEpochEvidenceKind)
+      );
+    }) &&
+    new Set(entries.map((entry) => (entry as Record<string, unknown>).reviewInvocation)).size ===
+      entries.length
+  );
+}
+
+function buildReviewEpochEvidenceCoverage(
+  accounting: ReviewAccounting,
+): ReviewEpochEvidenceCoverage | undefined {
+  // Accounting without explicit epoch metadata is an older legacy shape. It
+  // remains read-compatible and must not be silently promoted to the new
+  // complete-coverage contract during recovery.
+  if (
+    accounting.reviewEpoch === undefined ||
+    (accounting.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+      accounting.reviewLimitTerminalEvidence === undefined)
+  ) {
+    // Historical MAX snapshots created before terminal evidence was durable
+    // remain legacy read-compatible and are not promoted to the new contract.
+    return undefined;
+  }
+
+  const evidenceByInvocation = new Map<number, ReviewEpochEvidenceKind>();
+  const addEvidence = (reviewInvocation: number, evidenceKind: ReviewEpochEvidenceKind): void => {
+    if (evidenceByInvocation.has(reviewInvocation)) {
+      throw new Error('Cannot snapshot an invocation with multiple durable evidence records.');
+    }
+    evidenceByInvocation.set(reviewInvocation, evidenceKind);
+  };
+  accounting.cycleResults.forEach((cycle) => addEvidence(cycle.reviewInvocation, 'CYCLE_RESULT'));
+  (accounting.reviewExecutionFailures ?? []).forEach((failure) =>
+    addEvidence(failure.reviewInvocation, 'REVIEWER_EXECUTION_FAILURE'),
+  );
+  (accounting.reconciledReviewReservations ?? []).forEach((reconciliation) =>
+    addEvidence(reconciliation.reservedInvocation, 'RESERVATION_RECONCILIATION'),
+  );
+  const expectedInvocations = Array.from(
+    { length: accounting.reviewInvocationCount },
+    (_, index) => index + 1,
+  );
+  if (
+    evidenceByInvocation.size !== expectedInvocations.length ||
+    expectedInvocations.some((reviewInvocation) => !evidenceByInvocation.has(reviewInvocation))
+  ) {
+    throw new Error('Cannot snapshot incomplete invocation evidence coverage.');
+  }
+  return {
+    version: reviewEpochEvidenceCoverageVersion,
+    entries: expectedInvocations.map((reviewInvocation) => ({
+      reviewInvocation,
+      evidenceKind: evidenceByInvocation.get(reviewInvocation) as ReviewEpochEvidenceKind,
+    })),
+  };
+}
+
+function isReviewLimitTerminalEvidenceForEpochHistory(history: Record<string, unknown>): boolean {
+  const evidence = history.reviewLimitTerminalEvidence;
+  return (
+    isReviewLimitTerminalEvidence(evidence) &&
+    history.terminationReason === 'MAX_REVIEW_INVOCATIONS' &&
+    history.reviewInvocationCount === maxReviewInvocations &&
+    Array.isArray(history.cycleResults) &&
+    history.cycleResults.at(-1)?.reviewInvocation === maxReviewInvocations &&
+    history.cycleResults.at(-1)?.result === 'CHANGES_REQUIRED' &&
+    evidence.reviewEpoch === history.reviewEpoch
   );
 }
 
@@ -3321,8 +4951,7 @@ function isBoundedReasonRejectionEvidence(value: string): boolean {
     (targetPaths as string[]).includes(evidence.rejectedPath as string) &&
     (targetPaths as string[]).every((path) => (changedPaths as string[]).includes(path)) &&
     evidence.terminalState === 'BLOCKED' &&
-    typeof evidence.headSha === 'string' &&
-    /^[0-9a-f]{40}$/.test(evidence.headSha) &&
+    isGitCommitSha(evidence.headSha) &&
     typeof evidence.workingTreeFingerprint === 'string' &&
     /^[0-9a-f]{64}$/.test(evidence.workingTreeFingerprint)
   );
@@ -3495,6 +5124,10 @@ function isLegacyRecoveryEvidence(
   );
 }
 
+function isGitCommitSha(value: unknown): value is string {
+  return typeof value === 'string' && gitCommitShaPattern.test(value);
+}
+
 function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const approval = value as Record<string, unknown>;
@@ -3514,50 +5147,444 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'originalTerminationReason',
     'recoveryReason',
     'recoveryEvidence',
+    'schemaFingerprint',
+    'failedReviewInvocation',
+    'failedReviewKind',
     'humanDecision',
+    'reconciliationInvocation',
+    'reconciliationReason',
+    'reportedReservationHeadSha',
+    'reportedReservationHeadProvenance',
+    'executionEvidence',
+    'humanDecisionUrl',
+    'humanDecisionVerification',
     'issue',
+    'finalizationReviewInvocation',
+    'finalizationResult',
+  ]);
+  if (
+    !Object.keys(approval).every((key) => allowedKeys.has(key)) ||
+    typeof approval.id !== 'string' ||
+    !(
+      approval.approvalType === 'review-limit-resume' ||
+      approval.approvalType === 'review-termination-recovery' ||
+      approval.approvalType === 'reviewer-failure-recovery' ||
+      approval.approvalType === 'review-reservation-reconciliation' ||
+      approval.approvalType === 'review-limit-terminal-finalization'
+    ) ||
+    approval.targetRepository !== targetRepository ||
+    typeof approval.branch !== 'string' ||
+    typeof approval.base !== 'string' ||
+    !Number.isInteger(approval.reviewEpoch) ||
+    (approval.reviewEpoch as number) < 1 ||
+    !Number.isInteger(approval.exhaustedReviewInvocationCount) ||
+    (approval.exhaustedReviewInvocationCount as number) < 0 ||
+    (approval.exhaustedReviewInvocationCount as number) > maxReviewInvocations ||
+    typeof approval.approvedAt !== 'string' ||
+    approval.authorizationSource !== 'human-explicit' ||
+    typeof approval.consumed !== 'boolean' ||
+    !isGitCommitSha(approval.headSha) ||
+    (approval.consumed
+      ? typeof approval.consumedAt !== 'string'
+      : approval.consumedAt !== undefined)
+  ) {
+    return false;
+  }
+  if (approval.approvalType === 'review-limit-resume') {
+    return (
+      approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      approval.schemaFingerprint === undefined &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      approval.humanDecision === undefined
+    );
+  }
+  if (approval.approvalType === 'reviewer-failure-recovery') {
+    return (
+      approval.originalTerminationReason === 'REVIEWER_FAILURE' &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      isGitCommitSha(approval.headSha) &&
+      Number.isInteger(approval.failedReviewInvocation) &&
+      (approval.failedReviewInvocation as number) >= 1 &&
+      (approval.failedReviewInvocation as number) <= maxReviewInvocations &&
+      (approval.failedReviewKind === undefined ||
+        (typeof approval.failedReviewKind === 'string' &&
+          reviewExecutionFailureKinds.includes(
+            approval.failedReviewKind as ReviewExecutionFailureKind,
+          ))) &&
+      typeof approval.humanDecision === 'string' &&
+      reviewerFailureRecoveryHumanDecisions.includes(
+        approval.humanDecision as (typeof reviewerFailureRecoveryHumanDecisions)[number],
+      ) &&
+      approval.issue === undefined
+    );
+  }
+  if (approval.approvalType === 'review-reservation-reconciliation') {
+    return (
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      typeof approval.humanDecision === 'string' &&
+      reviewReservationReconciliationHumanDecisions.includes(
+        approval.humanDecision as (typeof reviewReservationReconciliationHumanDecisions)[number],
+      ) &&
+      approval.reconciliationInvocation === 13 &&
+      approval.reconciliationReason === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+      approval.issue === '76' &&
+      approval.branch === 'feat/issue-76' &&
+      approval.base === 'main' &&
+      typeof approval.reportedReservationHeadSha === 'string' &&
+      /^[a-f0-9]{40}$/.test(approval.reportedReservationHeadSha) &&
+      typeof approval.reportedReservationHeadProvenance === 'string' &&
+      reviewReservationReconciliationProvenances.includes(
+        approval.reportedReservationHeadProvenance as (typeof reviewReservationReconciliationProvenances)[number],
+      ) &&
+      typeof approval.executionEvidence === 'string' &&
+      reviewReservationReconciliationEvidenceReasons.includes(
+        approval.executionEvidence as (typeof reviewReservationReconciliationEvidenceReasons)[number],
+      ) &&
+      typeof approval.humanDecisionUrl === 'string' &&
+      isIssue76HumanDecisionUrl(approval.humanDecisionUrl) &&
+      approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
+      approval.reportedReservationHeadSha !== approval.headSha &&
+      isGitCommitSha(approval.headSha)
+    );
+  }
+  if (approval.approvalType === 'review-limit-terminal-finalization') {
+    return (
+      approval.branch === 'feat/issue-76' &&
+      approval.base === 'main' &&
+      approval.reviewEpoch === 1 &&
+      approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      approval.reconciliationInvocation === undefined &&
+      approval.reconciliationReason === undefined &&
+      approval.reportedReservationHeadSha === undefined &&
+      approval.reportedReservationHeadProvenance === undefined &&
+      approval.executionEvidence === undefined &&
+      approval.humanDecisionUrl === undefined &&
+      approval.humanDecisionVerification === undefined &&
+      approval.humanDecision === 'finalize-review-limit' &&
+      approval.issue === '76' &&
+      approval.finalizationReviewInvocation === maxReviewInvocations &&
+      approval.finalizationResult === 'CHANGES_REQUIRED'
+    );
+  }
+  return (
+    (approval.originalTerminationReason === 'BLOCKED' ||
+      approval.originalTerminationReason === 'NO_PROGRESS') &&
+    typeof approval.recoveryReason === 'string' &&
+    reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
+    typeof approval.recoveryEvidence === 'string' &&
+    approval.recoveryEvidence.trim().length > 0 &&
+    typeof approval.humanDecision === 'string' &&
+    reviewRecoveryHumanDecisions.includes(
+      approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
+    ) &&
+    approval.schemaFingerprint === undefined &&
+    approval.failedReviewInvocation === undefined &&
+    (approval.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
+      ? typeof approval.issue === 'string' &&
+        /^\d+$/.test(approval.issue) &&
+        approval.branch === `feat/issue-${approval.issue}`
+      : approval.issue === undefined)
+  );
+}
+
+function isReviewerFailureRecovery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const recovery = value as Record<string, unknown>;
+  return (
+    Object.keys(recovery).every(
+      (key) =>
+        key === 'approvalId' ||
+        key === 'authorizedAt' ||
+        key === 'authorizationSource' ||
+        key === 'reviewEpoch' ||
+        key === 'failedReviewInvocation' ||
+        key === 'failureKind' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
+    ) &&
+    typeof recovery.approvalId === 'string' &&
+    typeof recovery.authorizedAt === 'string' &&
+    recovery.authorizationSource === 'human-explicit' &&
+    Number.isInteger(recovery.reviewEpoch) &&
+    (recovery.reviewEpoch as number) >= 1 &&
+    Number.isInteger(recovery.failedReviewInvocation) &&
+    (recovery.failedReviewInvocation as number) >= 1 &&
+    (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
+    typeof recovery.failureKind === 'string' &&
+    reviewExecutionFailureKinds.includes(recovery.failureKind as ReviewExecutionFailureKind) &&
+    isGitCommitSha(recovery.headSha) &&
+    typeof recovery.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
+  );
+}
+
+function isReviewerFailureRecoveryAudit(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const audit = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'approvalId',
+    'authorizedAt',
+    'archivedAt',
+    'authorizationSource',
+    'reviewEpoch',
+    'failedReviewInvocation',
+    'failureKind',
+    'headSha',
+    'schemaFingerprint',
   ]);
   return (
-    Object.keys(approval).every((key) => allowedKeys.has(key)) &&
-    typeof approval.id === 'string' &&
-    (approval.approvalType === 'review-limit-resume' ||
-      approval.approvalType === 'review-termination-recovery') &&
-    approval.targetRepository === targetRepository &&
-    typeof approval.branch === 'string' &&
-    typeof approval.base === 'string' &&
-    Number.isInteger(approval.reviewEpoch) &&
-    (approval.reviewEpoch as number) >= 1 &&
-    Number.isInteger(approval.exhaustedReviewInvocationCount) &&
-    (approval.exhaustedReviewInvocationCount as number) >= 0 &&
-    (approval.exhaustedReviewInvocationCount as number) <= maxReviewInvocations &&
-    typeof approval.approvedAt === 'string' &&
-    approval.authorizationSource === 'human-explicit' &&
-    typeof approval.consumed === 'boolean' &&
-    typeof approval.headSha === 'string' &&
-    (approval.consumed
-      ? typeof approval.consumedAt === 'string'
-      : approval.consumedAt === undefined) &&
-    (approval.approvalType === 'review-limit-resume'
-      ? approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
-        approval.originalTerminationReason === undefined &&
-        approval.recoveryReason === undefined &&
-        approval.recoveryEvidence === undefined &&
-        approval.humanDecision === undefined
-      : (approval.originalTerminationReason === 'BLOCKED' ||
-          approval.originalTerminationReason === 'NO_PROGRESS') &&
-        typeof approval.recoveryReason === 'string' &&
-        reviewRecoveryReasons.includes(approval.recoveryReason as ReviewRecoveryReason) &&
-        typeof approval.recoveryEvidence === 'string' &&
-        approval.recoveryEvidence.trim().length > 0 &&
-        typeof approval.humanDecision === 'string' &&
-        reviewRecoveryHumanDecisions.includes(
-          approval.humanDecision as (typeof reviewRecoveryHumanDecisions)[number],
-        ) &&
-        (approval.recoveryReason === 'AUTO_FIX_BOUNDED_REASON_REJECTED'
-          ? typeof approval.issue === 'string' &&
-            /^\d+$/.test(approval.issue) &&
-            approval.branch === `feat/issue-${approval.issue}`
-          : approval.issue === undefined))
+    Object.keys(audit).every((key) => allowedKeys.has(key)) &&
+    typeof audit.archivedAt === 'string' &&
+    isHistoricalReviewerFailureRecovery(
+      Object.fromEntries(Object.entries(audit).filter(([key]) => key !== 'archivedAt')),
+    )
+  );
+}
+
+function isHistoricalReviewerFailureRecovery(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const recovery = value as Record<string, unknown>;
+  return (
+    Object.keys(recovery).every(
+      (key) =>
+        key === 'approvalId' ||
+        key === 'authorizedAt' ||
+        key === 'authorizationSource' ||
+        key === 'reviewEpoch' ||
+        key === 'failedReviewInvocation' ||
+        key === 'failureKind' ||
+        key === 'headSha' ||
+        key === 'schemaFingerprint',
+    ) &&
+    typeof recovery.approvalId === 'string' &&
+    typeof recovery.authorizedAt === 'string' &&
+    recovery.authorizationSource === 'human-explicit' &&
+    Number.isInteger(recovery.reviewEpoch) &&
+    (recovery.reviewEpoch as number) >= 1 &&
+    Number.isInteger(recovery.failedReviewInvocation) &&
+    (recovery.failedReviewInvocation as number) >= 1 &&
+    (recovery.failedReviewInvocation as number) <= maxReviewInvocations &&
+    (recovery.failureKind === undefined ||
+      (typeof recovery.failureKind === 'string' &&
+        reviewExecutionFailureKinds.includes(
+          recovery.failureKind as ReviewExecutionFailureKind,
+        ))) &&
+    isGitCommitSha(recovery.headSha) &&
+    typeof recovery.schemaFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(recovery.schemaFingerprint)
+  );
+}
+
+function isReconciledReviewReservation(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'reconciliationId',
+    'approvalId',
+    'repository',
+    'branch',
+    'base',
+    'headSha',
+    'reviewEpoch',
+    'reservedInvocation',
+    'status',
+    'reasonCode',
+    'reportedReservationHeadSha',
+    'reportedReservationHeadProvenance',
+    'executionEvidence',
+    'humanDecisionUrl',
+    'humanDecisionVerification',
+    'schemaFingerprint',
+    'reconciledAt',
+  ]);
+  return (
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    typeof record.reconciliationId === 'string' &&
+    typeof record.approvalId === 'string' &&
+    record.repository === targetRepository &&
+    typeof record.branch === 'string' &&
+    typeof record.base === 'string' &&
+    isGitCommitSha(record.headSha) &&
+    Number.isInteger(record.reviewEpoch) &&
+    (record.reviewEpoch as number) >= 1 &&
+    Number.isInteger(record.reservedInvocation) &&
+    (record.reservedInvocation as number) >= 1 &&
+    (record.reservedInvocation as number) <= maxReviewInvocations &&
+    record.status === 'RESERVED_NOT_STARTED' &&
+    record.reasonCode === 'PRE_REVIEW_ACCOUNTING_FAILURE' &&
+    isGitCommitSha(record.reportedReservationHeadSha) &&
+    reviewReservationReconciliationProvenances.includes(
+      record.reportedReservationHeadProvenance as (typeof reviewReservationReconciliationProvenances)[number],
+    ) &&
+    reviewReservationReconciliationEvidenceReasons.includes(
+      record.executionEvidence as (typeof reviewReservationReconciliationEvidenceReasons)[number],
+    ) &&
+    isIssue76HumanDecisionUrl(record.humanDecisionUrl) &&
+    record.humanDecisionVerification === verifiedHumanDecisionMarker &&
+    record.reportedReservationHeadSha !== record.headSha &&
+    /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
+    typeof record.reconciledAt === 'string'
+  );
+}
+
+function isIssue76HumanDecisionUrl(value: unknown): value is string {
+  return typeof value === 'string' && issue76HumanDecisionUrlPattern.test(value);
+}
+
+function verifyIssue76HumanDecisionComment(
+  cwd: string,
+  humanDecisionUrl: string,
+  headSha: string,
+  schemaFingerprint: string,
+  reportedReservationHeadSha: string,
+): string | undefined {
+  const match = issue76HumanDecisionUrlPattern.exec(humanDecisionUrl);
+  if (!match)
+    return 'Reserved-review reconciliation requires the canonical Issue #76 Human Decision URL.';
+  const result = spawnSync(
+    'gh',
+    ['api', `repos/Chasoso/tableau-ambient-analyst/issues/comments/${match[1]}`],
+    {
+      cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    return 'Human Decision comment could not be verified; reconciliation authorization is unavailable.';
+  }
+  try {
+    const comment = JSON.parse(result.stdout) as {
+      html_url?: unknown;
+      user?: { login?: unknown };
+      body?: unknown;
+    };
+    if (
+      comment.html_url !== humanDecisionUrl ||
+      comment.user?.login !== 'Chasoso' ||
+      typeof comment.body !== 'string'
+    ) {
+      return 'Human Decision comment identity is invalid; reconciliation authorization is unavailable.';
+    }
+    const body = comment.body;
+    const requiredEvidence = [
+      `Current HEAD: ${headSha}`,
+      `Reported reservation HEAD: ${reportedReservationHeadSha}`,
+      'Review epoch: 1',
+      'Reserved invocation: 13',
+      `Schema fingerprint: ${schemaFingerprint}`,
+      'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+      'NO_DURABLE_EXECUTION_EVIDENCE',
+    ];
+    if (!requiredEvidence.every((value) => body.includes(value))) {
+      return 'Human Decision comment content does not match the reconciliation scope.';
+    }
+    return undefined;
+  } catch {
+    return 'Human Decision comment could not be verified; reconciliation authorization is unavailable.';
+  }
+}
+
+function reviewFailureMatchesRecovery(
+  failure: Record<string, unknown>,
+  recovery: Record<string, unknown>,
+  historical = false,
+): boolean {
+  const evidenceMatches = historical
+    ? isReviewerFailureEvidenceForHistoricalRecovery(failure)
+    : isReviewerFailureEvidenceForRecovery(failure);
+  return (
+    recovery.failedReviewInvocation === failure.reviewInvocation &&
+    (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
+    recovery.reviewEpoch === (failure.reviewEpoch ?? recovery.reviewEpoch) &&
+    (failure.evidenceVersion === undefined ||
+      (evidenceMatches &&
+        failure.reviewEpoch === recovery.reviewEpoch &&
+        failure.headSha === recovery.headSha &&
+        failure.schemaFingerprint === recovery.schemaFingerprint))
+  );
+}
+
+function reviewExecutionFailuresAreConsistent(state: Record<string, unknown>): boolean {
+  const failures = state.reviewExecutionFailures;
+  if (!Array.isArray(failures) || failures.length === 0) return true;
+
+  const currentTerminalFailure =
+    state.terminationReason === 'REVIEWER_FAILURE' &&
+    Array.isArray(state.terminationHistory) &&
+    state.terminationHistory.at(-1) === 'REVIEWER_FAILURE';
+  const activeRecovery =
+    typeof state.reviewerFailureRecovery === 'object' &&
+    state.reviewerFailureRecovery !== null &&
+    !Array.isArray(state.reviewerFailureRecovery)
+      ? (state.reviewerFailureRecovery as Record<string, unknown>)
+      : undefined;
+  const archivedRecoveries = Array.isArray(state.reviewerFailureRecoveryHistory)
+    ? state.reviewerFailureRecoveryHistory
+        .filter((record) => typeof record === 'object' && record !== null && !Array.isArray(record))
+        .map((record) => record as Record<string, unknown>)
+    : [];
+  const reviewInvocationCount = state.reviewInvocationCount;
+
+  return failures.every((candidate) => {
+    if (!isReviewExecutionFailure(candidate) || !Number.isInteger(reviewInvocationCount)) {
+      return false;
+    }
+    const failure = candidate as Record<string, unknown>;
+    const isCurrentTerminal =
+      currentTerminalFailure && failure.reviewInvocation === reviewInvocationCount;
+    const currentFailureEvidenceIsConsistent =
+      reviewerFailureEvidenceIsValid(failure) &&
+      (failure.evidenceVersion === undefined || failure.reviewEpoch === (state.reviewEpoch ?? 1));
+    const hasRecoveryEvidence =
+      (activeRecovery !== undefined && reviewFailureMatchesRecovery(failure, activeRecovery)) ||
+      archivedRecoveries.some((recovery) => reviewFailureMatchesRecovery(failure, recovery, true));
+    return (isCurrentTerminal && currentFailureEvidenceIsConsistent) || hasRecoveryEvidence;
+  });
+}
+
+function isReviewerFailureRecoveryConsistent(state: Record<string, unknown>): boolean {
+  const recovery = state.reviewerFailureRecovery as Record<string, unknown>;
+  const failures = state.reviewExecutionFailures;
+  return (
+    state.terminationReason === undefined &&
+    Array.isArray(state.terminationHistory) &&
+    state.terminationHistory.at(-1) === 'REVIEWER_FAILURE' &&
+    Array.isArray(failures) &&
+    failures.some(
+      (failure) =>
+        isReviewExecutionFailure(failure) &&
+        failure.reviewInvocation === recovery.failedReviewInvocation &&
+        (recovery.failureKind === undefined || failure.kind === recovery.failureKind) &&
+        (recovery.failureKind === undefined ||
+          (isReviewerFailureEvidenceForRecovery(failure) &&
+            failure.reviewEpoch === recovery.reviewEpoch &&
+            failure.headSha === recovery.headSha &&
+            failure.schemaFingerprint === recovery.schemaFingerprint)),
+    ) &&
+    recovery.reviewEpoch === (state.reviewEpoch ?? 1) &&
+    (recovery.failedReviewInvocation as number) <= (state.reviewInvocationCount as number)
   );
 }
 
@@ -3607,11 +5634,16 @@ function readReviewAccountingAtPathUnsafe(
   base: string,
 ): ReviewAccounting {
   try {
-    return stateForBranch(
+    const accounting = stateForBranch(
       existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : undefined,
       branch,
       base,
     );
+    reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewReservationReconciliationApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewLimitTerminalFinalizationApprovalStateIsConsistent(statePath, branch, base, accounting);
+    reviewHistoryEvidenceIsConsistent(statePath, branch, base, accounting);
+    return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
       cause: error,
@@ -3663,6 +5695,246 @@ function readReviewApprovalsAtPath(approvalPath: string): ReviewResumeApproval[]
   return approvals;
 }
 
+function reviewerFailureRecoveryApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const recoveries = [
+    ...(accounting.reviewerFailureRecovery ? [accounting.reviewerFailureRecovery] : []),
+    ...(accounting.reviewerFailureRecoveryHistory ?? []),
+  ];
+  if (recoveries.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const recovery of recoveries) {
+    const approval = approvals.find((candidate) => candidate.id === recovery.approvalId);
+    if (
+      !approval ||
+      approval.approvalType !== 'reviewer-failure-recovery' ||
+      approval.targetRepository !== targetRepository ||
+      approval.branch !== branch ||
+      approval.base !== base ||
+      approval.reviewEpoch !== recovery.reviewEpoch ||
+      approval.exhaustedReviewInvocationCount !== recovery.failedReviewInvocation ||
+      approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+      approval.failedReviewKind !== recovery.failureKind ||
+      approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+      approval.headSha !== recovery.headSha ||
+      approval.schemaFingerprint !== recovery.schemaFingerprint ||
+      approval.authorizationSource !== 'human-explicit' ||
+      approval.humanDecision !== 'retry-review' ||
+      approval.consumed !== true ||
+      approval.consumedAt !== recovery.authorizedAt
+    ) {
+      throw new Error(
+        'Reviewer-failure recovery approval state is inconsistent; human recovery is required.',
+      );
+    }
+  }
+}
+
+function reviewReservationReconciliationApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const reconciliations = accounting.reconciledReviewReservations ?? [];
+  if (reconciliations.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const reconciliation of reconciliations) {
+    const approval = approvals.find((candidate) => candidate.id === reconciliation.approvalId);
+    if (
+      !approval ||
+      approval.approvalType !== 'review-reservation-reconciliation' ||
+      approval.targetRepository !== targetRepository ||
+      approval.branch !== branch ||
+      approval.base !== base ||
+      approval.reviewEpoch !== reconciliation.reviewEpoch ||
+      approval.exhaustedReviewInvocationCount !== reconciliation.reservedInvocation ||
+      approval.reconciliationInvocation !== reconciliation.reservedInvocation ||
+      approval.reconciliationReason !== reconciliation.reasonCode ||
+      approval.issue !== '76' ||
+      approval.headSha !== reconciliation.headSha ||
+      approval.schemaFingerprint !== reconciliation.schemaFingerprint ||
+      approval.reportedReservationHeadSha !== reconciliation.reportedReservationHeadSha ||
+      approval.reportedReservationHeadProvenance !==
+        reconciliation.reportedReservationHeadProvenance ||
+      approval.executionEvidence !== reconciliation.executionEvidence ||
+      approval.humanDecisionUrl !== reconciliation.humanDecisionUrl ||
+      approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+      approval.authorizationSource !== 'human-explicit' ||
+      approval.humanDecision !== 'reconcile-reserved-review' ||
+      approval.consumed !== true ||
+      approval.consumedAt !== reconciliation.reconciledAt
+    ) {
+      throw new Error(
+        'Reserved-review reconciliation approval state is inconsistent; human recovery is required.',
+      );
+    }
+  }
+}
+
+function reviewLimitTerminalFinalizationApprovalStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const evidence = accounting.reviewLimitTerminalEvidence;
+  if (evidence === undefined) return;
+  if (branch !== 'feat/issue-76' || base !== 'main') {
+    throw new Error(
+      'Review-limit terminal evidence scope is inconsistent; human recovery is required.',
+    );
+  }
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  const approval = approvals.find((candidate) => candidate.id === evidence.approvalId);
+  if (
+    !approval ||
+    approval.approvalType !== 'review-limit-terminal-finalization' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== branch ||
+    approval.base !== base ||
+    approval.reviewEpoch !== evidence.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.headSha !== evidence.headSha ||
+    approval.schemaFingerprint !== evidence.schemaFingerprint ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.humanDecision !== 'finalize-review-limit' ||
+    approval.issue !== '76' ||
+    approval.finalizationReviewInvocation !== evidence.reviewInvocation ||
+    approval.finalizationResult !== evidence.lastCycleResult ||
+    approval.consumedAt !== evidence.finalizedAt ||
+    approval.consumed !== true
+  ) {
+    throw new Error(
+      'Review-limit terminal approval state is inconsistent; human recovery is required.',
+    );
+  }
+}
+
+function reviewHistoryEvidenceIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const histories = accounting.reviewHistory ?? [];
+  if (histories.length === 0) return;
+
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  for (const history of histories) {
+    const failures = history.reviewExecutionFailures ?? [];
+    for (const failure of failures) {
+      if (
+        failure.reviewInvocation > history.reviewInvocationCount ||
+        (failure.evidenceVersion !== undefined && failure.reviewEpoch !== history.reviewEpoch)
+      ) {
+        throw new Error(
+          'Historical reviewer-failure evidence is inconsistent; human recovery is required.',
+        );
+      }
+      const terminalFailure =
+        history.terminationReason === 'REVIEWER_FAILURE' &&
+        failure.reviewInvocation === history.reviewInvocationCount;
+      const recoveredFailure = [
+        ...(history.reviewerFailureRecovery ? [history.reviewerFailureRecovery] : []),
+        ...(history.reviewerFailureRecoveryHistory ?? []),
+      ].some(
+        (recovery) =>
+          recovery.reviewEpoch === history.reviewEpoch &&
+          recovery.failedReviewInvocation === failure.reviewInvocation &&
+          (recovery.failureKind === undefined || recovery.failureKind === failure.kind) &&
+          (failure.evidenceVersion === undefined ||
+            (isReviewerFailureEvidenceForHistoricalRecovery(failure) &&
+              failure.headSha === recovery.headSha &&
+              failure.schemaFingerprint === recovery.schemaFingerprint)),
+      );
+      if (failure.evidenceVersion !== undefined && !terminalFailure && !recoveredFailure) {
+        throw new Error(
+          'Historical reviewer-failure evidence has no matching terminal or recovery record; human recovery is required.',
+        );
+      }
+    }
+
+    const recoveries = [
+      ...(history.reviewerFailureRecovery ? [history.reviewerFailureRecovery] : []),
+      ...(history.reviewerFailureRecoveryHistory ?? []),
+    ];
+    for (const recovery of recoveries) {
+      const matchingFailure = failures.find(
+        (failure) =>
+          failure.reviewInvocation === recovery.failedReviewInvocation &&
+          reviewFailureMatchesRecovery(failure, recovery, true),
+      );
+      const approval = approvals.find((candidate) => candidate.id === recovery.approvalId);
+      if (
+        !matchingFailure ||
+        recovery.reviewEpoch !== history.reviewEpoch ||
+        recovery.failedReviewInvocation > history.reviewInvocationCount ||
+        !approval ||
+        approval.approvalType !== 'reviewer-failure-recovery' ||
+        approval.targetRepository !== targetRepository ||
+        approval.branch !== branch ||
+        approval.base !== base ||
+        approval.reviewEpoch !== recovery.reviewEpoch ||
+        approval.exhaustedReviewInvocationCount !== recovery.failedReviewInvocation ||
+        approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+        approval.failedReviewKind !== recovery.failureKind ||
+        approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+        approval.headSha !== recovery.headSha ||
+        approval.schemaFingerprint !== recovery.schemaFingerprint ||
+        approval.authorizationSource !== 'human-explicit' ||
+        approval.humanDecision !== 'retry-review' ||
+        approval.consumed !== true ||
+        approval.consumedAt !== recovery.authorizedAt
+      ) {
+        throw new Error(
+          'Historical reviewer-failure recovery approval is inconsistent; human recovery is required.',
+        );
+      }
+    }
+
+    for (const reconciliation of history.reconciledReviewReservations ?? []) {
+      const approval = approvals.find((candidate) => candidate.id === reconciliation.approvalId);
+      if (
+        reconciliation.reviewEpoch !== history.reviewEpoch ||
+        reconciliation.reservedInvocation > history.reviewInvocationCount ||
+        !approval ||
+        approval.approvalType !== 'review-reservation-reconciliation' ||
+        approval.targetRepository !== targetRepository ||
+        approval.branch !== branch ||
+        approval.base !== base ||
+        approval.reviewEpoch !== reconciliation.reviewEpoch ||
+        approval.exhaustedReviewInvocationCount !== reconciliation.reservedInvocation ||
+        approval.reconciliationInvocation !== reconciliation.reservedInvocation ||
+        approval.reconciliationReason !== reconciliation.reasonCode ||
+        approval.issue !== '76' ||
+        approval.headSha !== reconciliation.headSha ||
+        approval.schemaFingerprint !== reconciliation.schemaFingerprint ||
+        approval.reportedReservationHeadSha !== reconciliation.reportedReservationHeadSha ||
+        approval.reportedReservationHeadProvenance !==
+          reconciliation.reportedReservationHeadProvenance ||
+        approval.executionEvidence !== reconciliation.executionEvidence ||
+        approval.humanDecisionUrl !== reconciliation.humanDecisionUrl ||
+        approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+        approval.authorizationSource !== 'human-explicit' ||
+        approval.humanDecision !== 'reconcile-reserved-review' ||
+        approval.consumed !== true ||
+        approval.consumedAt !== reconciliation.reconciledAt
+      ) {
+        throw new Error(
+          'Historical reservation-reconciliation approval is inconsistent; human recovery is required.',
+        );
+      }
+    }
+  }
+}
+
 function writeReviewApprovalsAtPath(approvalPath: string, approvals: ReviewResumeApproval[]): void {
   approvals.forEach((approval) => {
     if (!isReviewResumeApproval(approval)) {
@@ -3680,6 +5952,46 @@ type ResumeTransaction = {
   base: string;
   exhaustedEpoch: number;
   exhaustedReviewInvocationCount?: number;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
+  statePostimageSha256: string;
+  approvalPostimageSha256: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
+type ReviewerFailureRecoveryTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  approvalId: string;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
+type ReviewReservationReconciliationTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  approvalId: string;
+  statePreimageSha256: string;
+  approvalPreimageSha256: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
+type ReviewLimitTerminalFinalizationTransaction = {
+  statePath: string;
+  approvalPath: string;
+  branch: string;
+  base: string;
+  approvalId: string;
+  statePreimageSha256: string | null;
+  approvalPreimageSha256: string | null;
   accountingState: unknown;
   approvalState: unknown;
 };
@@ -3690,8 +6002,33 @@ function writeJsonAtomically(path: string, value: unknown): void {
   renameSync(temporaryPath, path);
 }
 
+function jsonFingerprint(value: unknown): string {
+  return sha256(JSON.stringify(value));
+}
+
+function fileFingerprint(path: string): string | null {
+  if (!existsSync(path)) return null;
+  return sha256(readFileSync(path, 'utf8'));
+}
+
+function isFileFingerprint(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && /^[a-f0-9]{64}$/.test(value));
+}
+
 function resumeTransactionPath(statePath: string): string {
   return `${statePath}${resumeTransactionSuffix}`;
+}
+
+function reviewerFailureRecoveryTransactionPath(statePath: string): string {
+  return `${statePath}${reviewerFailureRecoveryTransactionSuffix}`;
+}
+
+function reviewReservationReconciliationTransactionPath(statePath: string): string {
+  return `${statePath}${reviewReservationReconciliationTransactionSuffix}`;
+}
+
+function reviewLimitTerminalFinalizationTransactionPath(statePath: string): string {
+  return `${statePath}${reviewLimitTerminalFinalizationTransactionSuffix}`;
 }
 
 function canonicalResumeApprovalPath(statePath: string): string {
@@ -3721,6 +6058,26 @@ function recoverPendingResumeTransaction(statePath: string): void {
   ) {
     throw new Error('Review resume transaction is invalid; human recovery is required.');
   }
+  const statePostimageSha256 = transaction.statePostimageSha256;
+  const approvalPostimageSha256 = transaction.approvalPostimageSha256;
+  if (
+    !isFileFingerprint(transaction.statePreimageSha256) ||
+    !isFileFingerprint(transaction.approvalPreimageSha256) ||
+    typeof statePostimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(statePostimageSha256) ||
+    typeof approvalPostimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(approvalPostimageSha256)
+  ) {
+    throw new Error('Review resume transaction is invalid; human recovery is required.');
+  }
+  if (
+    statePostimageSha256 !== jsonFingerprint(transaction.accountingState) ||
+    approvalPostimageSha256 !== jsonFingerprint(transaction.approvalState)
+  ) {
+    throw new Error(
+      'Review resume transaction postimage hash is invalid; human recovery is required.',
+    );
+  }
   const accountingEntries = accountingStateEntries(transaction.accountingState);
   const approvalState = transaction.approvalState as Record<string, unknown>;
   if (
@@ -3736,8 +6093,20 @@ function recoverPendingResumeTransaction(statePath: string): void {
     accountingEntries,
     approvalState.approvals as ReviewResumeApproval[],
   );
-  writeJsonAtomically(statePath, transaction.accountingState);
-  writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  const currentStateFingerprint = fileFingerprint(statePath);
+  const currentApprovalFingerprint = fileFingerprint(transaction.approvalPath);
+  const stateIsPreimage = currentStateFingerprint === transaction.statePreimageSha256;
+  const stateIsPostimage = currentStateFingerprint === statePostimageSha256;
+  const approvalIsPreimage = currentApprovalFingerprint === transaction.approvalPreimageSha256;
+  const approvalIsPostimage = currentApprovalFingerprint === approvalPostimageSha256;
+  if ((!stateIsPreimage && !stateIsPostimage) || (!approvalIsPreimage && !approvalIsPostimage)) {
+    throw new Error(
+      'Review resume transaction preimage/postimage mismatch; human recovery is required.',
+    );
+  }
+  if (!stateIsPostimage) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalIsPostimage)
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
   unlinkSync(transactionPath);
 }
 
@@ -3750,6 +6119,111 @@ function persistResumeTransaction(
   approvals: ReviewResumeApproval[],
   approvalId: string,
   exhaustedEpoch: number,
+): void {
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  const approvalState = { approvals };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const transactionPath = resumeTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    approvalId,
+    branch,
+    base,
+    exhaustedEpoch,
+    exhaustedReviewInvocationCount: accounting.reviewHistory?.at(-1)?.reviewInvocationCount ?? 0,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    statePostimageSha256: jsonFingerprint(accountingState),
+    approvalPostimageSha256: jsonFingerprint(approvalState),
+    accountingState,
+    approvalState,
+  } satisfies ResumeTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, { approvals });
+  unlinkSync(transactionPath);
+}
+
+function writeAccountingAndApprovalsAtomically(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+): void {
+  const statePreimageSha256 = fileFingerprint(statePath);
+  const approvalPreimageSha256 = fileFingerprint(approvalPath);
+  const approvalId = accounting.reviewerFailureRecovery?.approvalId;
+  if (!approvalId) {
+    throw new Error(
+      'Reviewer-failure recovery approval identity is missing; human recovery is required.',
+    );
+  }
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  const approvalState = { approvals };
+  const transactionPath = reviewerFailureRecoveryTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    accountingState,
+    approvalState,
+  } satisfies ReviewerFailureRecoveryTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function persistReviewReservationReconciliationTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+  approvalId: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
 ): void {
   const currentValue = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))
@@ -3769,21 +6243,460 @@ function persistResumeTransaction(
       throw new Error('Review approval state is invalid; human recovery is required.');
     }
   });
-  const transactionPath = resumeTransactionPath(statePath);
+  const approvalState = { approvals };
+  const transactionPath = reviewReservationReconciliationTransactionPath(statePath);
   writeJsonAtomically(transactionPath, {
     statePath,
     approvalPath,
-    approvalId,
     branch,
     base,
-    exhaustedEpoch,
-    exhaustedReviewInvocationCount: accounting.reviewHistory?.at(-1)?.reviewInvocationCount ?? 0,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
     accountingState,
-    approvalState: { approvals },
-  } satisfies ResumeTransaction);
+    approvalState,
+  } satisfies ReviewReservationReconciliationTransaction);
   writeJsonAtomically(statePath, accountingState);
-  writeJsonAtomically(approvalPath, { approvals });
+  writeJsonAtomically(approvalPath, approvalState);
   unlinkSync(transactionPath);
+}
+
+function recoverPendingReviewReservationReconciliationTransaction(statePath: string): void {
+  const transactionPath = reviewReservationReconciliationTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewReservationReconciliationTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    typeof transaction.branch !== 'string' ||
+    typeof transaction.base !== 'string' ||
+    typeof transaction.approvalId !== 'string' ||
+    typeof transaction.statePreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.statePreimageSha256) ||
+    typeof transaction.approvalPreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction is invalid; human recovery is required.',
+    );
+  }
+  validateReviewReservationReconciliationTransactionSemantics(
+    transaction as ReviewReservationReconciliationTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Reserved-review reconciliation encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
+  unlinkSync(transactionPath);
+}
+
+function validateReviewReservationReconciliationTransactionSemantics(
+  transaction: ReviewReservationReconciliationTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const record = entry?.accounting.reconciledReviewReservations?.find(
+    (candidate) => candidate.approvalId === transaction.approvalId,
+  );
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  if (!entry || !record || !approval) {
+    throw new Error(
+      'Reserved-review reconciliation transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    record.repository !== targetRepository ||
+    record.branch !== transaction.branch ||
+    record.base !== transaction.base ||
+    record.reservedInvocation !== 13 ||
+    record.status !== 'RESERVED_NOT_STARTED' ||
+    record.reasonCode !== 'PRE_REVIEW_ACCOUNTING_FAILURE' ||
+    approval.approvalType !== 'review-reservation-reconciliation' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== record.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== 13 ||
+    approval.reconciliationInvocation !== 13 ||
+    approval.reconciliationReason !== 'PRE_REVIEW_ACCOUNTING_FAILURE' ||
+    approval.issue !== '76' ||
+    approval.headSha !== record.headSha ||
+    approval.schemaFingerprint !== record.schemaFingerprint ||
+    approval.reportedReservationHeadSha !== record.reportedReservationHeadSha ||
+    approval.reportedReservationHeadProvenance !== record.reportedReservationHeadProvenance ||
+    approval.executionEvidence !== record.executionEvidence ||
+    approval.humanDecisionUrl !== record.humanDecisionUrl ||
+    approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+    approval.humanDecision !== 'reconcile-reserved-review' ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.consumed !== true ||
+    approval.consumedAt !== record.reconciledAt
+  ) {
+    throw new Error(
+      'Reserved-review reconciliation transaction semantics are invalid; human recovery is required.',
+    );
+  }
+}
+
+function recoverPendingReviewerFailureRecoveryTransaction(statePath: string): void {
+  const transactionPath = reviewerFailureRecoveryTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewerFailureRecoveryTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    typeof transaction.branch !== 'string' ||
+    typeof transaction.base !== 'string' ||
+    typeof transaction.approvalId !== 'string' ||
+    !(
+      transaction.statePreimageSha256 === null ||
+      (typeof transaction.statePreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.statePreimageSha256))
+    ) ||
+    !(
+      transaction.approvalPreimageSha256 === null ||
+      (typeof transaction.approvalPreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256))
+    ) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  entries.forEach((entry) =>
+    parseAccountingStateEntry({ branch: entry.branch, base: entry.base, ...entry.accounting }),
+  );
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction is invalid; human recovery is required.',
+    );
+  }
+  if (
+    !entries.some((entry) => entry.branch === transaction.branch && entry.base === transaction.base)
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction target is missing; human recovery is required.',
+    );
+  }
+  validateReviewerFailureRecoveryTransactionSemantics(
+    transaction as ReviewerFailureRecoveryTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Reviewer-failure recovery transaction encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
+  unlinkSync(transactionPath);
+}
+
+function validateReviewerFailureRecoveryTransactionSemantics(
+  transaction: ReviewerFailureRecoveryTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const recovery = entry?.accounting.reviewerFailureRecovery;
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  const failure = entry?.accounting.reviewExecutionFailures?.find(
+    (candidate) => candidate.reviewInvocation === recovery?.failedReviewInvocation,
+  );
+  if (!entry || !recovery || !approval || !failure) {
+    throw new Error(
+      'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    recovery.approvalId !== transaction.approvalId ||
+    approval.approvalType !== 'reviewer-failure-recovery' ||
+    !approval.consumed ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== recovery.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== entry.accounting.reviewInvocationCount ||
+    approval.failedReviewInvocation !== recovery.failedReviewInvocation ||
+    approval.failedReviewKind !== recovery.failureKind ||
+    approval.originalTerminationReason !== 'REVIEWER_FAILURE' ||
+    approval.headSha !== recovery.headSha ||
+    approval.schemaFingerprint !== recovery.schemaFingerprint ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.humanDecision !== 'retry-review' ||
+    approval.consumedAt !== recovery.authorizedAt ||
+    entry.accounting.terminationReason !== undefined ||
+    entry.accounting.terminationHistory?.at(-1) !== 'REVIEWER_FAILURE' ||
+    (entry.accounting.reviewEpoch ?? 1) !== recovery.reviewEpoch ||
+    entry.accounting.reviewExecutionFailures?.every(
+      (failure) => failure.reviewInvocation !== recovery.failedReviewInvocation,
+    ) ||
+    !isReviewerFailureEvidenceForRecovery(failure) ||
+    failure.reviewEpoch !== recovery.reviewEpoch ||
+    failure.kind !== recovery.failureKind ||
+    failure.headSha !== recovery.headSha ||
+    failure.schemaFingerprint !== recovery.schemaFingerprint
+  ) {
+    throw new Error(
+      'Reviewer-failure recovery transaction semantics are invalid; human recovery is required.',
+    );
+  }
+}
+
+function persistReviewLimitTerminalFinalizationTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+  approvalId: string,
+  statePreimageSha256: string | null,
+  approvalPreimageSha256: string | null,
+): void {
+  const currentValue = existsSync(statePath)
+    ? JSON.parse(readFileSync(statePath, 'utf8'))
+    : undefined;
+  const entries = accountingStateEntries(currentValue);
+  const accountingState = {
+    entries: [
+      ...entries
+        .filter((entry) => entry.branch !== branch || entry.base !== base)
+        .map((entry) => ({ branch: entry.branch, base: entry.base, ...entry.accounting })),
+      { branch, base, ...accounting },
+    ],
+  };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const approvalState = { approvals };
+  const transactionPath = reviewLimitTerminalFinalizationTransactionPath(statePath);
+  if (
+    fileFingerprint(statePath) !== statePreimageSha256 ||
+    fileFingerprint(approvalPath) !== approvalPreimageSha256
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization preimage does not match current state; human recovery is required.',
+    );
+  }
+  writeJsonAtomically(transactionPath, {
+    statePath,
+    approvalPath,
+    branch,
+    base,
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    accountingState,
+    approvalState,
+  } satisfies ReviewLimitTerminalFinalizationTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function recoverPendingReviewLimitTerminalFinalizationTransaction(statePath: string): void {
+  const transactionPath = reviewLimitTerminalFinalizationTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<ReviewLimitTerminalFinalizationTransaction>;
+  if (
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    transaction.branch !== 'feat/issue-76' ||
+    transaction.base !== 'main' ||
+    typeof transaction.approvalId !== 'string' ||
+    !(
+      transaction.statePreimageSha256 === null ||
+      (typeof transaction.statePreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.statePreimageSha256))
+    ) ||
+    !(
+      transaction.approvalPreimageSha256 === null ||
+      (typeof transaction.approvalPreimageSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256))
+    ) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction is invalid; human recovery is required.',
+    );
+  }
+  const entries = accountingStateEntries(transaction.accountingState);
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction is invalid; human recovery is required.',
+    );
+  }
+  validateReviewLimitTerminalFinalizationTransactionSemantics(
+    transaction as ReviewLimitTerminalFinalizationTransaction,
+    entries,
+    approvalState.approvals as ReviewResumeApproval[],
+  );
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Review-limit terminal finalization encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
+  unlinkSync(transactionPath);
+}
+
+function validateReviewLimitTerminalFinalizationTransactionSemantics(
+  transaction: ReviewLimitTerminalFinalizationTransaction,
+  entries: AccountingStateEntry[],
+  approvals: ReviewResumeApproval[],
+): void {
+  const entry = entries.find(
+    (candidate) => candidate.branch === transaction.branch && candidate.base === transaction.base,
+  );
+  const accounting = entry?.accounting;
+  const evidence = accounting?.reviewLimitTerminalEvidence;
+  const approval = approvals.find((candidate) => candidate.id === transaction.approvalId);
+  if (!entry || !accounting || !evidence || !approval) {
+    throw new Error(
+      'Review-limit terminal finalization transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  if (
+    approval.approvalType !== 'review-limit-terminal-finalization' ||
+    approval.consumed !== true ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== transaction.branch ||
+    approval.base !== transaction.base ||
+    approval.reviewEpoch !== evidence.reviewEpoch ||
+    approval.exhaustedReviewInvocationCount !== maxReviewInvocations ||
+    approval.headSha !== evidence.headSha ||
+    approval.schemaFingerprint !== evidence.schemaFingerprint ||
+    approval.humanDecision !== 'finalize-review-limit' ||
+    approval.issue !== '76' ||
+    approval.finalizationReviewInvocation !== maxReviewInvocations ||
+    approval.finalizationResult !== 'CHANGES_REQUIRED' ||
+    evidence.approvalId !== transaction.approvalId ||
+    approval.consumedAt !== evidence.finalizedAt ||
+    accounting.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
+    accounting.reviewInvocationCount !== maxReviewInvocations ||
+    accounting.pendingReview !== undefined ||
+    accounting.cycleResults.at(-1)?.reviewInvocation !== maxReviewInvocations ||
+    accounting.cycleResults.at(-1)?.result !== 'CHANGES_REQUIRED'
+  ) {
+    throw new Error(
+      'Review-limit terminal finalization transaction semantics are invalid; human recovery is required.',
+    );
+  }
 }
 
 function validateResumeTransactionSemantics(
@@ -3860,6 +6773,9 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
       throw new Error('Review accounting state is locked; human recovery is required.');
     }
     recoverPendingResumeTransaction(statePath);
+    recoverPendingReviewerFailureRecoveryTransaction(statePath);
+    recoverPendingReviewReservationReconciliationTransaction(statePath);
+    recoverPendingReviewLimitTerminalFinalizationTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {
@@ -3901,6 +6817,13 @@ function recordReviewAccounting(
   review: ReviewGateResult,
 ): ReviewAccounting {
   return updateAccounting(cwd, base, (accounting) => {
+    if (
+      accounting.pendingReview?.status !== 'STARTED' ||
+      !accounting.pendingReview?.headSha ||
+      readHeadSha(cwd) !== accounting.pendingReview.headSha
+    ) {
+      throw new Error('Review execution HEAD changed; accounting is incomplete and fail-closed.');
+    }
     const findings = [...review.blockingFindings, ...review.nonBlockingFindings];
     const rules = findings
       .filter((finding) => typeof finding !== 'string')
@@ -3934,11 +6857,56 @@ function recordReviewAccounting(
     );
     return {
       ...accounting,
+      pendingReview: undefined,
       generalizedRuleHistory: rules.length
         ? [...accounting.generalizedRuleHistory, ...rules]
         : accounting.generalizedRuleHistory,
       consecutiveRepeatCount,
       cycleResults: [...accounting.cycleResults, currentCycle],
+    };
+  });
+}
+
+function recordReviewFailureAccounting(
+  cwd: string,
+  base: string,
+  review: ReviewGateResult,
+): ReviewAccounting {
+  return updateAccounting(cwd, base, (accounting) => {
+    const reviewInvocation =
+      accounting.pendingReview?.reviewInvocation ?? accounting.reviewInvocationCount;
+    if (
+      !accounting.pendingReview ||
+      accounting.pendingReview.status !== 'STARTED' ||
+      accounting.pendingReview.reviewInvocation !== reviewInvocation ||
+      review.executionPhase !== 'REVIEW' ||
+      !review.executionFailureKind ||
+      !reviewExecutionFailureKinds.includes(review.executionFailureKind)
+    ) {
+      throw new Error('Review accounting reservation is missing; human recovery is required.');
+    }
+    const kind: ReviewExecutionFailureKind = review.executionFailureKind ?? 'UNCERTAIN';
+    const headSha = accounting.pendingReview.headSha;
+    const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+    if (!headSha || readHeadSha(cwd) !== headSha || !schemaFingerprint) {
+      throw new Error('Reviewer failure evidence is incomplete; human recovery is required.');
+    }
+    const failure = {
+      reviewInvocation,
+      kind,
+      diagnostic: `Reviewer execution failed: ${kind}.`,
+      evidenceVersion: reviewerFailureEvidenceVersion,
+      executionPhase: 'REVIEW' as const,
+      reviewEpoch: accounting.reviewEpoch ?? 1,
+      headSha,
+      schemaFingerprint,
+    };
+    return {
+      ...accounting,
+      pendingReview: undefined,
+      reviewExecutionFailures: [...(accounting.reviewExecutionFailures ?? []), failure],
+      terminationHistory: [...(accounting.terminationHistory ?? []), 'REVIEWER_FAILURE'],
+      terminationReason: 'REVIEWER_FAILURE',
     };
   });
 }
@@ -4014,17 +6982,45 @@ function reserveReviewInvocationAtPath(
   statePath: string,
   branch: string,
   base: string,
+  reservationHeadSha?: string,
 ): string | undefined {
   try {
     return withAccountingLock(statePath, () => {
       const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (accounting.pendingReview) {
+        return 'Review accounting contains an incomplete reviewer execution; human recovery is required.';
+      }
       if (accounting.reviewInvocationCount >= maxReviewInvocations) {
         return `Review invocation limit of ${maxReviewInvocations} reached for ${branch}.`;
       }
-      writeAccountingAtPath(statePath, branch, base, {
-        ...accounting,
+      if (accounting.terminationReason) {
+        return 'Review accounting is terminal; human recovery is required.';
+      }
+      const nextReviewState = {
         reviewInvocationCount: accounting.reviewInvocationCount + 1,
-      });
+        pendingReview: {
+          reviewInvocation: accounting.reviewInvocationCount + 1,
+          status: 'RESERVED' as const,
+          ...(reservationHeadSha ? { headSha: reservationHeadSha } : {}),
+        },
+      };
+      if (accounting.reviewerFailureRecovery) {
+        const { reviewerFailureRecovery: activeRecovery, ...accountingWithoutActiveRecovery } =
+          accounting;
+        writeAccountingAtPath(statePath, branch, base, {
+          ...accountingWithoutActiveRecovery,
+          reviewerFailureRecoveryHistory: [
+            ...(accounting.reviewerFailureRecoveryHistory ?? []),
+            { ...activeRecovery, archivedAt: new Date().toISOString() },
+          ],
+          ...nextReviewState,
+        });
+      } else {
+        writeAccountingAtPath(statePath, branch, base, {
+          ...accounting,
+          ...nextReviewState,
+        });
+      }
       return undefined;
     });
   } catch (error) {
@@ -4035,11 +7031,44 @@ function reserveReviewInvocationAtPath(
   return undefined;
 }
 
+function markReviewStarted(cwd: string, base: string): string | undefined {
+  const statePath = resolveReviewStatePath(cwd);
+  if (!statePath) return 'Could not resolve the repository git directory for review state.';
+  try {
+    withAccountingLock(statePath, () => {
+      const branch = currentBranch(cwd);
+      const accounting = readReviewAccountingAtPathUnsafe(statePath, branch, base);
+      if (!accounting.pendingReview || accounting.pendingReview.status !== 'RESERVED') {
+        throw new Error(
+          'Review accounting reservation is not in a startable state; human recovery is required.',
+        );
+      }
+      if (
+        !accounting.pendingReview.headSha ||
+        readHeadSha(cwd) !== accounting.pendingReview.headSha
+      ) {
+        throw new Error(
+          'Review reservation HEAD changed or is unavailable; human recovery is required.',
+        );
+      }
+      writeAccountingAtPath(statePath, branch, base, {
+        ...accounting,
+        pendingReview: { ...accounting.pendingReview, status: 'STARTED' },
+      });
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Could not persist the reviewer execution start state.';
+  }
+}
+
 function runDeterministicValidation(cwd: string): { passed: boolean } {
   const result = spawnSync('npm', ['run', 'validate'], {
     cwd,
     env: reviewerEnvironment(),
-    stdio: 'inherit',
+    stdio: 'ignore',
   });
 
   return { passed: result.status === 0 };
