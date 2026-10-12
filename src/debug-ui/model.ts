@@ -201,7 +201,7 @@ export function hasValidReplayStateInvariants(
     return (
       scenario.trigger.decision === 'ANALYZE' &&
       scenario.verifier.status === 'VERIFIED' &&
-      scenario.intervention !== null &&
+      scenario.intervention?.decision === 'INTERVENE' &&
       scenario.error === undefined
     );
   }

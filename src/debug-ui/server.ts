@@ -30,7 +30,25 @@ function isAllowedOrigin(request: IncomingMessage): boolean {
   if (origin === undefined) return true;
   const host = request.headers.host;
   if (!host) return false;
-  return origin === `http://${host}`;
+  let originUrl: URL;
+  let hostUrl: URL;
+  try {
+    originUrl = new URL(origin);
+    hostUrl = new URL(`http://${host}`);
+  } catch {
+    return false;
+  }
+  const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+  const normalizedOriginHost = originUrl.hostname.toLowerCase();
+  const normalizedRequestHost = hostUrl.hostname.toLowerCase();
+  if (
+    originUrl.protocol !== 'http:' ||
+    !loopbackHosts.has(normalizedOriginHost) ||
+    !loopbackHosts.has(normalizedRequestHost) ||
+    originUrl.port !== hostUrl.port
+  )
+    return false;
+  return true;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

@@ -114,6 +114,29 @@ describe('debug UI analysis API', () => {
     }
   });
 
+  it('fails closed when a completed client result suppresses intervention', async () => {
+    const unsafeClient: AnalysisClient = {
+      replay: async () => ({
+        status: 'completed',
+        scenario: {
+          ...scenarioById('verified-intervention'),
+          intervention: { decision: 'HOLD' as const, reason: 'unsafe substitution' },
+        },
+        audit: ['analysis.completed'],
+      }),
+    };
+    const { server, base } = await withServer(unsafeClient);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(502);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('rejects cross-origin API requests while allowing the same local origin', async () => {
     const { server, base } = await withServer();
     try {
@@ -132,6 +155,17 @@ describe('debug UI analysis API', () => {
       });
       expect(allowed.status).toBe(200);
       expect(allowed.headers.get('access-control-allow-origin')).toBe(base);
+
+      const attackerControlledHost = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        headers: {
+          origin: 'http://evil.example',
+          host: 'evil.example',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ scenarioId: 'ignored' }),
+      });
+      expect(attackerControlledHost.status).toBe(403);
     } finally {
       await closeServer(server);
     }
@@ -313,6 +347,14 @@ describe('HttpAnalysisClient response boundary', () => {
         (
           (value.scenario as Record<string, unknown>).intervention as Record<string, unknown>
         ).decision = 'INTERVENE';
+      },
+    ],
+    [
+      'completed hold intervention',
+      (value: Record<string, unknown>) => {
+        (
+          (value.scenario as Record<string, unknown>).intervention as Record<string, unknown>
+        ).decision = 'HOLD';
       },
     ],
     [

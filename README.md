@@ -182,6 +182,12 @@ adapter behind the small `AnalysisClient` boundary. The `INTERVENE` scenario
 shows a deterministic `!` badge; it records a mock debug event only and never
 invokes Tableau APIs or mutates a dashboard.
 
+The local API accepts browser origins only when both the request `Host` and
+the `Origin` are explicit HTTP loopback addresses (`localhost`, `127.0.0.1`,
+or `::1`) on the same port. It never trusts an arbitrary `Host` header to
+authorize a cross-origin caller; non-loopback or mismatched origins fail
+closed with `403`.
+
 For a future AWS HTTPS deployment, the browser continues using relative `/api`
 paths. The approved HTTPS host or reverse proxy must route those paths to the
 backend and enforce the approved origin/CORS policy; no deployment URL or
