@@ -294,7 +294,7 @@ export function startDebugUiServer(): ReturnType<typeof createServer> {
   const server = createServer((request, response) => {
     void handler(request, response);
   });
-  server.listen(port, 'localhost', () => {
+  server.listen(port, '127.0.0.1', () => {
     console.log(`Ambient Analyst debug UI: http://localhost:${port}`);
   });
   return server;
