@@ -219,6 +219,27 @@ type ActivePullRequest = {
 };
 const targetRepository = 'Chasoso/tableau-ambient-analyst';
 
+function isTargetRepositoryRemoteUrl(value: string): boolean {
+  if (value === `git@github.com:${targetRepository}.git`) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.port === '' &&
+      url.search === '' &&
+      url.hash === '' &&
+      (url.pathname === `/${targetRepository}` || url.pathname === `/${targetRepository}.git`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 const requiredSelfReviewChecks = [
   'scope',
   'completeDiff',
@@ -3086,10 +3107,7 @@ function validateIssue79OrphanedInvocationScope(
       cwd,
       encoding: 'utf8',
     }).trim();
-    if (
-      remote !== 'https://github.com/Chasoso/tableau-ambient-analyst.git' &&
-      remote !== 'git@github.com:Chasoso/tableau-ambient-analyst.git'
-    ) {
+    if (!isTargetRepositoryRemoteUrl(remote)) {
       return 'Orphaned invocation reconciliation repository does not match the target repository.';
     }
     execFileSync('git', ['rev-parse', '--verify', 'main^{commit}'], {

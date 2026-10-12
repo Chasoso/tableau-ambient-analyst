@@ -1807,6 +1807,83 @@ function prepareReservedReviewReconciliationFixture(workspace: {
 }
 
 describe('Issue #79 orphaned invocation reconciliation', () => {
+  it('accepts only the three exact canonical repository remote forms', () => {
+    const acceptedRemotes = [
+      'https://github.com/Chasoso/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/tableau-ambient-analyst',
+      'git@github.com:Chasoso/tableau-ambient-analyst.git',
+    ];
+    const rejectedRemotes = [
+      'git@github.com:Chasoso/tableau-ambient-analyst',
+      'https://github.com/OtherOwner/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/other-repository.git',
+      'https://github.com.evil/Chasoso/tableau-ambient-analyst.git',
+      'https://user:password@github.com/Chasoso/tableau-ambient-analyst.git',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git?mirror=1',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git#mirror',
+      'https://github.com/Chasoso/tableau-ambient-analyst.git/extra',
+      'ssh://git@github.com/Chasoso/tableau-ambient-analyst.git',
+    ];
+    try {
+      for (const remote of acceptedRemotes) {
+        const directory = mkdtempSync(join(tmpdir(), 'issue-79-remote-accepted-'));
+        try {
+          const workspace = createIssue79OrphanedWorkspace(directory);
+          execFileSync('git', ['remote', 'set-url', 'origin', remote], { cwd: directory });
+          childProcessTestHooks.humanDecisionComment = {
+            url: issue79OrphanedHumanDecisionUrl,
+            author: 'Chasoso',
+            body: issue79HumanDecisionBody(workspace),
+          };
+          const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+          const result = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+            workspace.statePath,
+            workspace.approvalPath,
+            'feat/issue-79',
+            'main',
+            workspace.headSha,
+            workspace.schemaFingerprint,
+            statePreimage,
+            null,
+            issue79OrphanedHumanDecisionUrl,
+            workspace.cwd,
+          );
+          expect(result).not.toBeTypeOf('string');
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+
+      for (const remote of rejectedRemotes) {
+        const directory = mkdtempSync(join(tmpdir(), 'issue-79-remote-rejected-'));
+        try {
+          const workspace = createIssue79OrphanedWorkspace(directory);
+          execFileSync('git', ['remote', 'set-url', 'origin', remote], { cwd: directory });
+          const before = readFileSync(workspace.statePath, 'utf8');
+          const result = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+            workspace.statePath,
+            workspace.approvalPath,
+            'feat/issue-79',
+            'main',
+            workspace.headSha,
+            workspace.schemaFingerprint,
+            testSha256(before),
+            null,
+            issue79OrphanedHumanDecisionUrl,
+            workspace.cwd,
+          );
+          expect(result).toContain('repository');
+          expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+          expect(existsSync(workspace.approvalPath)).toBe(false);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+    }
+  });
+
   it('rejects the orphaned state through normal read and reservation without mutation', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-normal-'));
     try {
