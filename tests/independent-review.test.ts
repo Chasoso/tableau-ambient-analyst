@@ -686,6 +686,167 @@ describe('Issue #76 reserved-review reconciliation', () => {
   });
 });
 
+describe('Issue #69 review-limit terminal finalization', () => {
+  it('uses dedicated CLI operations once and preserves exhausted history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-69-terminal-finalization-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0', '69');
+      const cycleResults = completedReviewCycles(16).map((cycle, index) =>
+        index === 15 ? { ...cycle, result: 'CHANGES_REQUIRED' as const } : cycle,
+      );
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-69',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: 16,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: null,
+              cycleResults,
+              terminationHistory: [],
+              reviewEpoch: 1,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(workspace.approvalPath, JSON.stringify({ approvals: [] }), 'utf8');
+      const stateBeforeApproval = readFileSync(workspace.statePath, 'utf8');
+
+      const authorization = authorizeReviewLimitTerminalFinalizationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-69',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+        '69',
+      );
+      expect(authorization).toMatchObject({
+        approvalType: 'review-limit-terminal-finalization',
+        issue: '69',
+        branch: 'feat/issue-69',
+        consumed: false,
+        headSha: workspace.headSha,
+      });
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBeforeApproval);
+
+      const finalization = finalizeReviewLimitTerminalAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-69',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+        '69',
+      );
+      expect(finalization).toMatchObject({
+        reviewInvocationCount: 16,
+        terminationReason: 'MAX_REVIEW_INVOCATIONS',
+      });
+      const afterFinalization = readReviewAccountingAtPath(
+        workspace.statePath,
+        'feat/issue-69',
+        'main',
+      );
+      expect(afterFinalization.cycleResults).toEqual(cycleResults);
+      expect(afterFinalization.terminationHistory).toEqual(['MAX_REVIEW_INVOCATIONS']);
+      expect(afterFinalization.reviewLimitTerminalEvidence).toMatchObject({
+        reviewInvocation: 16,
+        lastCycleResult: 'CHANGES_REQUIRED',
+        headSha: workspace.headSha,
+      });
+      const stateAfterFinalization = readFileSync(workspace.statePath, 'utf8');
+      const duplicate = finalizeReviewLimitTerminalAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-69',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+        '69',
+      );
+      expect(duplicate).toMatch(/terminal state|approval/i);
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateAfterFinalization);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('rejects stale HEAD and missing human confirmation without changing state', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-69-terminal-finalization-reject-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(directory, 'exit 0', '69');
+      const cycleResults = completedReviewCycles(16).map((cycle, index) =>
+        index === 15 ? { ...cycle, result: 'CHANGES_REQUIRED' as const } : cycle,
+      );
+      writeFileSync(
+        workspace.statePath,
+        JSON.stringify({
+          entries: [
+            {
+              branch: 'feat/issue-69',
+              base: 'main',
+              legacyReviewInvocations: 0,
+              legacyAutoFixCycles: 0,
+              accountingEpochStart: 'issue-29-accounting-v2',
+              reviewInvocationCount: 16,
+              autoFixCycleCount: 0,
+              generalizedRuleHistory: [],
+              consecutiveRepeatCount: 0,
+              lastFixChangedRepository: null,
+              cycleResults,
+              terminationHistory: [],
+              reviewEpoch: 1,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(workspace.approvalPath, JSON.stringify({ approvals: [] }), 'utf8');
+      const stateBefore = readFileSync(workspace.statePath, 'utf8');
+      const approvalBefore = readFileSync(workspace.approvalPath, 'utf8');
+      expect(
+        authorizeReviewLimitTerminalFinalizationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-69',
+          'main',
+          'b'.repeat(40),
+          workspace.schemaFingerprint,
+          workspace.cwd,
+          '69',
+        ),
+      ).toMatch(/HEAD/i);
+      const missingApproval = finalizeReviewLimitTerminalAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-69',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        workspace.cwd,
+        '69',
+      );
+      expect(missingApproval).toMatch(/No matching unconsumed review-limit terminal approval/i);
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBefore);
+      expect(readFileSync(workspace.approvalPath, 'utf8')).toBe(approvalBefore);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Issue #76 review-limit terminal finalization', () => {
   it('authorizes and finalizes count 16 without changing history or invoking review', () => {
     const directory = mkdtempSync(join(tmpdir(), 'issue-76-terminal-finalization-'));
@@ -1360,6 +1521,7 @@ function createReviewerRecoveryWorkspace(
 function createCanonicalIndependentReviewWorkspace(
   directory: string,
   behavior: string,
+  issue = '76',
 ): {
   cwd: string;
   statePath: string;
@@ -1369,7 +1531,7 @@ function createCanonicalIndependentReviewWorkspace(
   approvalPath: string;
   schemaFingerprint: string;
 } {
-  const worktreePath = join(directory, '.worktrees', 'issue-76');
+  const worktreePath = join(directory, '.worktrees', `issue-${issue}`);
   const binDirectory = join(directory, 'bin');
   const promptPath = join(directory, 'captured-prompt.txt');
   mkdirSync(join(directory, 'src/review'), { recursive: true });
@@ -1420,7 +1582,7 @@ function createCanonicalIndependentReviewWorkspace(
   });
   execFileSync('git', ['commit', '-m', 'base'], { cwd: directory, stdio: 'ignore' });
   execFileSync('git', ['branch', '-M', 'main'], { cwd: directory, stdio: 'ignore' });
-  execFileSync('git', ['worktree', 'add', '-b', 'feat/issue-76', worktreePath, 'main'], {
+  execFileSync('git', ['worktree', 'add', '-b', `feat/issue-${issue}`, worktreePath, 'main'], {
     cwd: directory,
     stdio: 'ignore',
   });
