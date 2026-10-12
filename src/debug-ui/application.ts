@@ -229,7 +229,7 @@ function project(
           status: flow.verification.completion === 'COMPLETE' ? 'VERIFIED' : 'INSUFFICIENT',
           detail: flow.verification.reasons.join(' ').slice(0, 500) || 'Verification completed.',
         }
-      : scenario.verifier,
+      : { status: 'NOT_RUN', detail: 'Verification was not reached.' },
     intervention,
     stages,
   };

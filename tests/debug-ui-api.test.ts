@@ -271,6 +271,7 @@ describe('debug UI analysis API', () => {
       expect(
         body.scenario.stages.find((stage: { name: string }) => stage.name === 'Analysis').status,
       ).toBe('failed');
+      expect(body.scenario.verifier.status).toBe('NOT_RUN');
     } finally {
       await closeServer(server);
     }
@@ -298,6 +299,7 @@ describe('debug UI analysis API', () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.status).toBe('failed');
+      expect(body.scenario.verifier.status).toBe('NOT_RUN');
       expect(JSON.stringify(body)).not.toContain('provider');
     } finally {
       await closeServer(server);
