@@ -93,7 +93,6 @@ function sanitizeRun(
 ): AnalysisRunEnvelope {
   const source = result.scenario;
   const scenario = {
-    ...source,
     id: requestedId,
     name: boundedText(source.name, 200, 'Analysis run'),
     description: boundedText(source.description, 500, 'Deterministic analysis run.'),
@@ -180,12 +179,24 @@ export function createDebugUiRequestHandler(
           return;
         }
         activeRuns += 1;
-        const runPromise = client.replay(scenarioById(body.scenarioId));
-        void runPromise.then(
-          () => activeRuns--,
-          () => activeRuns--,
+        let released = false;
+        const release = () => {
+          if (!released) {
+            released = true;
+            activeRuns -= 1;
+          }
+        };
+        const runPromise = Promise.resolve().then(() =>
+          client.replay(scenarioById(body.scenarioId)),
         );
-        const runResult = await withTimeout(runPromise);
+        void runPromise.then(release, release);
+        let runResult: Awaited<ReturnType<AnalysisClient['replay']>>;
+        try {
+          runResult = await withTimeout(runPromise);
+        } catch (error) {
+          release();
+          throw error;
+        }
         if (!validClientResult(runResult)) {
           send(response, 502, { error: 'Analysis run failed safely.' });
           return;
