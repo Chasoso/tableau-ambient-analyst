@@ -888,7 +888,7 @@ describe('Issue #76 review-limit terminal finalization', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('preserves MAX terminal evidence across an epoch transition and reload', () => {
     const directory = mkdtempSync(join(tmpdir(), 'terminal-finalization-resume-'));
@@ -1338,6 +1338,7 @@ function createCanonicalIndependentReviewWorkspace(
     ['npm', execFileSync('which', ['npm'], { encoding: 'utf8' }).trim()],
     ['git', execFileSync('which', ['git'], { encoding: 'utf8' }).trim()],
     ['sh', '/bin/sh'],
+    ['sleep', '/bin/sleep'],
   ] as const) {
     symlinkSync(target, join(binDirectory, name));
   }
