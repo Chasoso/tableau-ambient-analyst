@@ -7,9 +7,16 @@ import {
   resumeReviewAfterLimit,
   authorizeReviewTerminationRecovery,
   resumeReviewTerminationRecovery,
+  authorizeReviewerFailureRecovery,
+  resumeReviewerFailureRecovery,
+  authorizeReviewReservationReconciliation,
+  reconcileReservedReview,
+  authorizeReviewLimitTerminalFinalization,
+  finalizeReviewLimitTerminal,
   type IndependentReviewInput,
 } from './runner.js';
 import { resolveIssueWorkspace, validateIssueWorkspace } from './issue-worktree.js';
+import { hasAuthorizationResumeConflict } from './cli-policy.js';
 
 const argumentsByName = new Map<string, string>();
 const rawArguments = process.argv.slice(2);
@@ -36,8 +43,18 @@ const resumeAfterLimit = rawArguments.includes('--resume-after-limit');
 const authorizeAfterLimit = rawArguments.includes('--authorize-resume-after-limit');
 const resumeAfterRecovery = rawArguments.includes('--resume-after-recovery');
 const authorizeAfterRecovery = rawArguments.includes('--authorize-termination-recovery');
+const resumeAfterReviewerFailure = rawArguments.includes('--resume-reviewer-failure-recovery');
+const authorizeAfterReviewerFailure = rawArguments.includes(
+  '--authorize-reviewer-failure-recovery',
+);
+const authorizeReservationReconciliation = rawArguments.includes(
+  '--authorize-reservation-reconciliation',
+);
+const reconcileReservation = rawArguments.includes('--reconcile-reserved-review');
+const authorizeReviewLimitTerminal = rawArguments.includes('--authorize-review-limit-terminal');
+const finalizeReviewLimitTerminalMode = rawArguments.includes('--finalize-review-limit-terminal');
 const existingPullRequest = argumentsByName.get('update-pr');
-if ((resumeAfterLimit && authorizeAfterLimit) || (resumeAfterRecovery && authorizeAfterRecovery)) {
+if (hasAuthorizationResumeConflict(rawArguments)) {
   console.error('Authorization and resume are separate commands.');
   process.exitCode = 2;
 } else if (authorizeAfterLimit) {
@@ -54,6 +71,30 @@ if ((resumeAfterLimit && authorizeAfterLimit) || (resumeAfterRecovery && authori
   if (typeof authorizationResult === 'string') process.exitCode = 1;
 } else if (resumeAfterRecovery) {
   const resumeResult = resumeRecovery(input);
+  console.log(JSON.stringify(resumeResult, null, 2));
+  if (typeof resumeResult === 'string') process.exitCode = 1;
+} else if (authorizeAfterReviewerFailure) {
+  const authorizationResult = authorizeReviewerFailure(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (authorizeReservationReconciliation) {
+  const authorizationResult = authorizeReservation(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (authorizeReviewLimitTerminal) {
+  const authorizationResult = authorizeReviewLimitTerminalFromCli(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (finalizeReviewLimitTerminalMode) {
+  const finalizationResult = finalizeReviewLimitTerminalFromCli(input);
+  console.log(JSON.stringify(finalizationResult, null, 2));
+  if (typeof finalizationResult === 'string') process.exitCode = 1;
+} else if (reconcileReservation) {
+  const reconciliationResult = reconcileReservationFromApproval(input);
+  console.log(JSON.stringify(reconciliationResult, null, 2));
+  if (typeof reconciliationResult === 'string') process.exitCode = 1;
+} else if (resumeAfterReviewerFailure) {
+  const resumeResult = resumeReviewerFailure(input);
   console.log(JSON.stringify(resumeResult, null, 2));
   if (typeof resumeResult === 'string') process.exitCode = 1;
 } else {
@@ -138,6 +179,76 @@ function resumeRecovery(reviewInput: IndependentReviewInput) {
   return typeof evidence === 'string'
     ? evidence
     : resumeReviewTerminationRecovery(reviewInput.cwd, reviewInput.base, evidence);
+}
+
+function authorizeReviewerFailure(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  return authorizeReviewerFailureRecovery(reviewInput.cwd, reviewInput.base);
+}
+
+function resumeReviewerFailure(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '76') {
+    return 'Reviewer-failure recovery is limited to Issue #76.';
+  }
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  return resumeReviewerFailureRecovery(reviewInput.cwd, reviewInput.base);
+}
+
+function authorizeReservation(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  const reportedHead = argumentsByName.get('reported-reservation-head');
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!reportedHead || !decisionUrl) {
+    return 'Reserved-review reconciliation requires --reported-reservation-head and --human-decision-url.';
+  }
+  return authorizeReviewReservationReconciliation(
+    reviewInput.cwd,
+    reviewInput.base,
+    reportedHead,
+    decisionUrl,
+  );
+}
+
+function authorizeReviewLimitTerminalFromCli(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (reviewInput.issue !== '76')
+    return 'Review-limit terminal finalization is limited to Issue #76.';
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  return authorizeReviewLimitTerminalFinalization(reviewInput.cwd, reviewInput.base);
+}
+
+function finalizeReviewLimitTerminalFromCli(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (reviewInput.issue !== '76')
+    return 'Review-limit terminal finalization is limited to Issue #76.';
+  return finalizeReviewLimitTerminal(reviewInput.cwd, reviewInput.base);
+}
+
+function reconcileReservationFromApproval(reviewInput: IndependentReviewInput) {
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  const reportedHead = argumentsByName.get('reported-reservation-head');
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!reportedHead || !decisionUrl) {
+    return 'Reserved-review reconciliation requires --reported-reservation-head and --human-decision-url.';
+  }
+  return reconcileReservedReview(reviewInput.cwd, reviewInput.base, reportedHead, decisionUrl);
 }
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {

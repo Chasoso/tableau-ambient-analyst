@@ -1,5 +1,14 @@
 export const reviewResults = ['PASS', 'CHANGES_REQUIRED', 'HUMAN_DECISION_REQUIRED'] as const;
 export const findingClassifications = ['AUTO_FIX', 'HUMAN_DECISION_REQUIRED', 'BLOCKED'] as const;
+export const reviewExecutionFailureKinds = [
+  'LAUNCH_FAILURE',
+  'TIMEOUT',
+  'NONZERO_EXIT',
+  'MALFORMED_OUTPUT',
+  'INTERRUPTED',
+  'UNCERTAIN',
+] as const;
+export type ReviewExecutionFailureKind = (typeof reviewExecutionFailureKinds)[number];
 export const maxReviewInvocations = 16;
 export const maxAutoFixCycles = 8;
 export const repeatedRuleThreshold = 3;
@@ -51,6 +60,25 @@ export type ReviewTerminationEvidence = {
 
 export const reviewRecoveryHumanDecisions = ['resume'] as const;
 export type ReviewRecoveryHumanDecision = (typeof reviewRecoveryHumanDecisions)[number];
+export const reviewerFailureRecoveryHumanDecisions = ['retry-review'] as const;
+export type ReviewerFailureRecoveryHumanDecision =
+  (typeof reviewerFailureRecoveryHumanDecisions)[number];
+export const reviewReservationReconciliationHumanDecisions = ['reconcile-reserved-review'] as const;
+export type ReviewReservationReconciliationHumanDecision =
+  (typeof reviewReservationReconciliationHumanDecisions)[number];
+export const reviewLimitTerminalFinalizationHumanDecisions = ['finalize-review-limit'] as const;
+export type ReviewLimitTerminalFinalizationHumanDecision =
+  (typeof reviewLimitTerminalFinalizationHumanDecisions)[number];
+export const reviewReservationReconciliationProvenances = [
+  'REPORTED_RESERVATION_HEAD_NOT_DURABLE_EVIDENCE',
+] as const;
+export type ReviewReservationReconciliationProvenance =
+  (typeof reviewReservationReconciliationProvenances)[number];
+export const reviewReservationReconciliationEvidenceReasons = [
+  'NO_DURABLE_EXECUTION_EVIDENCE',
+] as const;
+export type ReviewReservationReconciliationEvidenceReason =
+  (typeof reviewReservationReconciliationEvidenceReasons)[number];
 export type ReviewTerminationRecovery = ReviewTerminationEvidence & {
   humanDecision: ReviewRecoveryHumanDecision;
   issue?: string | undefined;
@@ -64,6 +92,22 @@ export type ReviewCycleRecord = {
   generalizedRules: string[];
   findingIdentities?: string[];
   repositoryChanged: boolean | null;
+};
+
+export const reviewEpochEvidenceCoverageVersion = 'review-epoch-evidence-v1' as const;
+export const reviewEpochEvidenceKinds = [
+  'CYCLE_RESULT',
+  'REVIEWER_EXECUTION_FAILURE',
+  'RESERVATION_RECONCILIATION',
+] as const;
+export type ReviewEpochEvidenceKind = (typeof reviewEpochEvidenceKinds)[number];
+export type ReviewEpochEvidenceCoverageEntry = {
+  reviewInvocation: number;
+  evidenceKind: ReviewEpochEvidenceKind;
+};
+export type ReviewEpochEvidenceCoverage = {
+  version: typeof reviewEpochEvidenceCoverageVersion;
+  entries: ReviewEpochEvidenceCoverageEntry[];
 };
 
 export type ReviewEpochHistory = {
@@ -87,13 +131,24 @@ export type ReviewEpochHistory = {
   resumeAfterPolicyChange?: string | undefined;
   migrationCompatibility?: string | undefined;
   terminationEvidence?: ReviewTerminationEvidence | undefined;
+  reviewLimitTerminalEvidence?: ReviewAccounting['reviewLimitTerminalEvidence'] | undefined;
+  reviewExecutionFailures?: ReviewAccounting['reviewExecutionFailures'] | undefined;
+  reviewerFailureRecovery?: ReviewAccounting['reviewerFailureRecovery'] | undefined;
+  reviewerFailureRecoveryHistory?: ReviewAccounting['reviewerFailureRecoveryHistory'] | undefined;
+  reconciledReviewReservations?: ReviewAccounting['reconciledReviewReservations'] | undefined;
+  invocationEvidenceCoverage?: ReviewEpochEvidenceCoverage | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
 };
 
 export type ReviewResumeApproval = {
   id: string;
-  approvalType: 'review-limit-resume' | 'review-termination-recovery';
+  approvalType:
+    | 'review-limit-resume'
+    | 'review-termination-recovery'
+    | 'reviewer-failure-recovery'
+    | 'review-reservation-reconciliation'
+    | 'review-limit-terminal-finalization';
   targetRepository: 'Chasoso/tableau-ambient-analyst';
   branch: string;
   base: string;
@@ -104,11 +159,28 @@ export type ReviewResumeApproval = {
   consumed: boolean;
   headSha: string;
   consumedAt?: string | undefined;
-  originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | undefined;
+  originalTerminationReason?: 'BLOCKED' | 'NO_PROGRESS' | 'REVIEWER_FAILURE' | undefined;
   recoveryReason?: ReviewRecoveryReason | undefined;
   recoveryEvidence?: string | undefined;
-  humanDecision?: ReviewRecoveryHumanDecision | undefined;
+  schemaFingerprint?: string | undefined;
+  failedReviewInvocation?: number | undefined;
+  failedReviewKind?: ReviewExecutionFailureKind | undefined;
+  humanDecision?:
+    | ReviewRecoveryHumanDecision
+    | ReviewerFailureRecoveryHumanDecision
+    | ReviewReservationReconciliationHumanDecision
+    | ReviewLimitTerminalFinalizationHumanDecision
+    | undefined;
+  reconciliationInvocation?: number | undefined;
+  reconciliationReason?: 'PRE_REVIEW_ACCOUNTING_FAILURE' | undefined;
+  reportedReservationHeadSha?: string | undefined;
+  reportedReservationHeadProvenance?: ReviewReservationReconciliationProvenance | undefined;
+  executionEvidence?: ReviewReservationReconciliationEvidenceReason | undefined;
+  humanDecisionUrl?: string | undefined;
+  humanDecisionVerification?: 'GITHUB_COMMENT_VERIFIED' | undefined;
   issue?: string | undefined;
+  finalizationReviewInvocation?: number | undefined;
+  finalizationResult?: 'CHANGES_REQUIRED' | undefined;
 };
 
 export type ReviewAccounting = {
@@ -131,6 +203,74 @@ export type ReviewAccounting = {
   resumeAuthorizationSource?: 'human-explicit' | undefined;
   resumedFromEpoch?: number | undefined;
   terminationEvidence?: ReviewTerminationEvidence | undefined;
+  pendingReview?:
+    | {
+        reviewInvocation: number;
+        status: 'RESERVED' | 'STARTED';
+        /** Captured before reviewer execution; absent only in legacy state. */
+        headSha?: string | undefined;
+      }
+    | undefined;
+  reviewExecutionFailures?: Array<{
+    reviewInvocation: number;
+    kind: ReviewExecutionFailureKind;
+    diagnostic: string;
+    evidenceVersion?: 'reviewer-failure-v1' | 'reviewer-failure-v2' | undefined;
+    executionPhase?: 'REVIEW' | undefined;
+    reviewEpoch?: number | undefined;
+    headSha?: string | undefined;
+    schemaFingerprint?: string | undefined;
+  }>;
+  reviewerFailureRecovery?: {
+    approvalId: string;
+    authorizedAt: string;
+    authorizationSource: 'human-explicit';
+    reviewEpoch: number;
+    failedReviewInvocation: number;
+    failureKind?: ReviewExecutionFailureKind | undefined;
+    headSha: string;
+    schemaFingerprint: string;
+  };
+  reviewerFailureRecoveryHistory?: Array<{
+    approvalId: string;
+    authorizedAt: string;
+    archivedAt: string;
+    authorizationSource: 'human-explicit';
+    reviewEpoch: number;
+    failedReviewInvocation: number;
+    failureKind?: ReviewExecutionFailureKind | undefined;
+    headSha: string;
+    schemaFingerprint: string;
+  }>;
+  reconciledReviewReservations?: Array<{
+    reconciliationId: string;
+    approvalId: string;
+    repository: 'Chasoso/tableau-ambient-analyst';
+    branch: string;
+    base: string;
+    headSha: string;
+    reviewEpoch: number;
+    reservedInvocation: number;
+    status: 'RESERVED_NOT_STARTED';
+    reasonCode: 'PRE_REVIEW_ACCOUNTING_FAILURE';
+    reportedReservationHeadSha: string;
+    reportedReservationHeadProvenance: ReviewReservationReconciliationProvenance;
+    executionEvidence: ReviewReservationReconciliationEvidenceReason;
+    humanDecisionUrl: string;
+    humanDecisionVerification: 'GITHUB_COMMENT_VERIFIED';
+    schemaFingerprint: string;
+    reconciledAt: string;
+  }>;
+  reviewLimitTerminalEvidence?: {
+    approvalId: string;
+    finalizedAt: string;
+    authorizationSource: 'human-explicit';
+    headSha: string;
+    schemaFingerprint: string;
+    reviewEpoch: number;
+    reviewInvocation: number;
+    lastCycleResult: 'CHANGES_REQUIRED';
+  };
 };
 
 export type ReviewGateResult = {
@@ -140,6 +280,7 @@ export type ReviewGateResult = {
   escalationRequired: boolean;
   executionStatus?: 'COMPLETED' | 'FAILED';
   executionPhase?: 'PRE_REVIEW' | 'VALIDATION' | 'REVIEW';
+  executionFailureKind?: ReviewExecutionFailureKind;
   accounting?: ReviewAccounting;
   terminationReason?: TerminationReason;
   maintainability?: MaintainabilityResult;
@@ -154,7 +295,16 @@ const isFindingClassification = (value: unknown): value is FindingClassification
 const isReviewFinding = (value: unknown): value is ReviewFinding => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const finding = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'severity',
+    'classification',
+    'finding',
+    'generalized_rule',
+    'affected_locations',
+    'recommended_fix',
+  ]);
   return (
+    Object.keys(finding).every((key) => allowedKeys.has(key)) &&
     (finding.severity === 'blocking' || finding.severity === 'non-blocking') &&
     isFindingClassification(finding.classification) &&
     typeof finding.finding === 'string' &&
@@ -165,8 +315,8 @@ const isReviewFinding = (value: unknown): value is ReviewFinding => {
   );
 };
 
-const isFindingArray = (value: unknown): value is ReviewFindingValue[] =>
-  Array.isArray(value) && value.every((item) => typeof item === 'string' || isReviewFinding(item));
+const isFindingArray = (value: unknown): value is ReviewFinding[] =>
+  Array.isArray(value) && value.every((item) => isReviewFinding(item));
 
 const isReviewResultName = (value: unknown): value is ReviewResultName =>
   typeof value === 'string' && reviewResults.includes(value as ReviewResultName);
@@ -210,6 +360,10 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('PASS cannot include blocking findings or escalation.');
   }
 
+  if (result === 'CHANGES_REQUIRED' && blockingFindings.length === 0) {
+    return malformedResult('CHANGES_REQUIRED must include at least one blocking finding.');
+  }
+
   if (
     blockingFindings.some(
       (finding) => typeof finding !== 'string' && finding.severity !== 'blocking',
@@ -237,6 +391,10 @@ export function parseReviewResult(raw: string): ReviewGateResult {
     return malformedResult('Human decision and blocked findings must require escalation.');
   }
 
+  if (escalationRequired && !hasHumanFinding) {
+    return malformedResult('Escalation requires a human or blocked finding.');
+  }
+
   return {
     result,
     blockingFindings,
@@ -251,6 +409,7 @@ export function parseReviewResult(raw: string): ReviewGateResult {
 export function reviewerInvocationFailure(
   message: string,
   executionPhase: 'PRE_REVIEW' | 'REVIEW' = 'PRE_REVIEW',
+  executionFailureKind: ReviewExecutionFailureKind = 'UNCERTAIN',
 ): ReviewGateResult {
   return {
     result: 'HUMAN_DECISION_REQUIRED',
@@ -268,6 +427,7 @@ export function reviewerInvocationFailure(
     escalationRequired: true,
     executionStatus: 'FAILED',
     executionPhase,
+    ...(executionPhase === 'REVIEW' ? { executionFailureKind } : {}),
   };
 }
 
@@ -444,5 +604,7 @@ function malformedResult(message: string): ReviewGateResult {
     nonBlockingFindings: [],
     escalationRequired: true,
     executionStatus: 'FAILED',
+    executionPhase: 'REVIEW',
+    executionFailureKind: 'MALFORMED_OUTPUT',
   };
 }

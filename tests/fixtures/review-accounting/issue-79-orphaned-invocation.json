@@ -1,0 +1,14 @@
+{
+  "branch": "feature/review",
+  "base": "main",
+  "legacyReviewInvocations": 0,
+  "legacyAutoFixCycles": 0,
+  "accountingEpochStart": "issue-29-accounting-v2",
+  "reviewInvocationCount": 1,
+  "autoFixCycleCount": 0,
+  "generalizedRuleHistory": [],
+  "consecutiveRepeatCount": 0,
+  "lastFixChangedRepository": null,
+  "cycleResults": [],
+  "terminationHistory": []
+}
