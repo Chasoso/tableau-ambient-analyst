@@ -33,6 +33,8 @@ export interface AnalysisClient {
   replay(scenario: DebugScenario): Promise<ReplayState>;
 }
 
+export type AnalysisRunEnvelope = ReplayState & { runId: string };
+
 export const scenarios: readonly DebugScenario[] = [
   {
     id: 'verified-intervention',
@@ -159,6 +161,24 @@ export class FixtureAnalysisClient implements AnalysisClient {
         ...(scenario.error ? ['flow.failed'] : ['analysis.completed', 'audit.recorded']),
       ],
     };
+  }
+}
+
+export class HttpAnalysisClient implements AnalysisClient {
+  constructor(private readonly baseUrl = '') {}
+
+  async replay(scenario: DebugScenario): Promise<ReplayState> {
+    const response = await fetch(`${this.baseUrl}/api/analysis-runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scenarioId: scenario.id }),
+    });
+    if (!response.ok) throw new Error('ANALYSIS_RUN_REQUEST_FAILED');
+    const value = (await response.json()) as Partial<AnalysisRunEnvelope>;
+    if (typeof value.runId !== 'string' || !value.scenario || !Array.isArray(value.audit)) {
+      throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
+    }
+    return value as AnalysisRunEnvelope;
   }
 }
 
