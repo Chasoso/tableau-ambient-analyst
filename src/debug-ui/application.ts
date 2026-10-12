@@ -183,7 +183,7 @@ function project(
     ),
     stage(
       'Analysis',
-      types.has('tableau-analysis-started') && !failedStage,
+      types.has('tableau-analysis-started') && failedStage !== 'analysis',
       failedStage === 'analysis',
       'Derived from the agentic analysis boundary.',
     ),

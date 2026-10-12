@@ -128,7 +128,9 @@ describe('debug UI analysis API', () => {
         method: 'POST', body: JSON.stringify({ scenarioId: 'verified-intervention' }),
       });
       expect(response.status).toBe(200);
-      expect((await response.json()).status).toBe('failed');
+      const body = await response.json();
+      expect(body.status).toBe('failed');
+      expect(body.scenario.stages.find((stage: { name: string }) => stage.name === 'Analysis').status).toBe('complete');
     } finally {
       await closeServer(server);
     }
