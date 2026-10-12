@@ -1225,6 +1225,8 @@ import {
   authorizeReviewReservationReconciliationAtPath,
   reconcileReservedReviewAtPath,
   reconcileReservedReview,
+  authorizeIssue79OrphanedInvocationReconciliationAtPath,
+  reconcileIssue79OrphanedInvocationAtPath,
   reserveReviewCycleAtPath,
   resumeReviewAfterLimitAtPath,
   resumeReviewTerminationRecoveryAtPath,
@@ -1427,6 +1429,106 @@ function createCanonicalIndependentReviewWorkspace(
   };
 }
 
+function createIssue79OrphanedWorkspace(directory: string): {
+  cwd: string;
+  statePath: string;
+  approvalPath: string;
+  headSha: string;
+  schemaFingerprint: string;
+} {
+  const worktreePath = join(directory, '.worktrees', 'issue-79');
+  mkdirSync(join(directory, 'src/review'), { recursive: true });
+  mkdirSync(join(directory, '.worktrees'), { recursive: true });
+  copyFileSync(
+    join(process.cwd(), 'src/review/review-result.schema.json'),
+    join(directory, 'src/review/review-result.schema.json'),
+  );
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ private: true }), 'utf8');
+  execFileSync('git', ['init'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'review-fixture'], { cwd: directory });
+  execFileSync('git', ['config', 'user.email', 'review-fixture@example.invalid'], {
+    cwd: directory,
+  });
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/Chasoso/tableau-ambient-analyst.git'],
+    {
+      cwd: directory,
+    },
+  );
+  execFileSync('git', ['add', 'package.json', 'src/review/review-result.schema.json'], {
+    cwd: directory,
+  });
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['branch', '-M', 'main'], { cwd: directory, stdio: 'ignore' });
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/issue-79', worktreePath, 'main'], {
+    cwd: directory,
+    stdio: 'ignore',
+  });
+  const cwd = realpathSync(worktreePath);
+  writeFileSync(join(cwd, 'changed.txt'), 'fixture\n', 'utf8');
+  execFileSync('git', ['add', 'changed.txt'], { cwd });
+  execFileSync('git', ['commit', '-m', 'issue 79 fixture'], { cwd, stdio: 'ignore' });
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  const statePath = resolve(
+    cwd,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-state.json'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  const approvalPath = resolve(
+    cwd,
+    execFileSync('git', ['rev-parse', '--git-path', 'tableau-ambient-review-approval.json'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim(),
+  );
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      entries: [
+        {
+          branch: 'feat/issue-79',
+          base: 'main',
+          legacyReviewInvocations: 0,
+          legacyAutoFixCycles: 0,
+          accountingEpochStart: 'issue-29-accounting-v2',
+          reviewInvocationCount: 1,
+          autoFixCycleCount: 0,
+          generalizedRuleHistory: [],
+          consecutiveRepeatCount: 0,
+          lastFixChangedRepository: null,
+          cycleResults: [],
+          terminationHistory: [],
+        },
+      ],
+    }),
+    'utf8',
+  );
+  const schemaFingerprint = createHash('sha256')
+    .update(readFileSync(join(cwd, 'src/review/review-result.schema.json')))
+    .digest('hex');
+  return { cwd, statePath, approvalPath, headSha, schemaFingerprint };
+}
+
+function issue79HumanDecisionBody(workspace: {
+  headSha: string;
+  statePath: string;
+  schemaFingerprint: string;
+}): string {
+  const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+  return [
+    'Issue #79 Orphaned Invocation Reconciliation',
+    '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
+    `Current HEAD: ${workspace.headSha}`,
+    'Effective review epoch: 1',
+    `Accounting state preimage SHA-256: ${statePreimage}`,
+    `Reviewer Schema fingerprint: ${workspace.schemaFingerprint}`,
+    '実accountingへの監査記録追加・改変',
+  ].join('\n');
+}
+
 let builtCliReady = false;
 
 function runBuiltReviewCli(
@@ -1516,6 +1618,8 @@ const structuredAutoFix = {
 const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445';
+const issue79OrphanedHumanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116633116';
 
 function completedReviewCycles(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -1647,6 +1751,189 @@ function prepareReservedReviewReconciliationFixture(workspace: {
       .digest('hex'),
   };
 }
+
+describe('Issue #79 orphaned invocation reconciliation', () => {
+  it('rejects the orphaned state through normal read and reservation without mutation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-normal-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const before = readFileSync(workspace.statePath, 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toThrow('Review accounting state is invalid');
+      expect(reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-79', 'main')).toContain(
+        'Review accounting state is invalid',
+      );
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reconciles once, preserves invocation 1, and permits the next reservation as invocation 2', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-success-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
+      const issued = authorizeIssue79OrphanedInvocationReconciliationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        statePreimage,
+        null,
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(issued).not.toBeTypeOf('string');
+      const approvalPreimage = testSha256(readFileSync(workspace.approvalPath, 'utf8'));
+      expect(
+        reconcileIssue79OrphanedInvocationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          '0'.repeat(64),
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('approval preimage');
+      const reconciled = reconcileIssue79OrphanedInvocationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        approvalPreimage,
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(reconciled).not.toBeTypeOf('string');
+      if (typeof reconciled === 'string') return;
+      expect(reconciled.reviewInvocationCount).toBe(1);
+      expect(reconciled.orphanedInvocationReconciliations).toHaveLength(1);
+      expect(reconciled.orphanedInvocationReconciliations?.[0]).toMatchObject({
+        reviewInvocation: 1,
+        status: 'UNRESOLVED_NO_DURABLE_EVIDENCE',
+        evidenceKind: 'ORPHANED_INVOCATION_RECONCILIATION',
+      });
+      const approvals = JSON.parse(readFileSync(workspace.approvalPath, 'utf8')) as {
+        approvals: Array<Record<string, unknown>>;
+      };
+      expect(approvals.approvals).toHaveLength(1);
+      expect(approvals.approvals[0]?.consumed).toBe(true);
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).not.toThrow();
+      expect(
+        reserveReviewCycleAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toBeUndefined();
+      const next = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main');
+      expect(next.reviewInvocationCount).toBe(2);
+      expect(next.pendingReview?.reviewInvocation).toBe(2);
+      const replay = reconcileIssue79OrphanedInvocationAtPath(
+        workspace.statePath,
+        workspace.approvalPath,
+        'feat/issue-79',
+        'main',
+        workspace.headSha,
+        workspace.schemaFingerprint,
+        testSha256(readFileSync(workspace.approvalPath, 'utf8')),
+        issue79OrphanedHumanDecisionUrl,
+        workspace.cwd,
+      );
+      expect(replay).toMatch(/invalid|orphaned|pending|matching/i);
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects wrong scope, stale preimages, and malformed transaction markers without mutation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-orphaned-reject-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const before = readFileSync(workspace.statePath, 'utf8');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-76',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('limited to Issue #79');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          'a'.repeat(40),
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('HEAD');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          '0'.repeat(64),
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('prerequisites');
+      writeFileSync(workspace.statePath, `${before}\n`, 'utf8');
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          testSha256(before),
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('preimage');
+      writeFileSync(workspace.statePath, before, 'utf8');
+      const marker = `${workspace.statePath}.issue-79-orphaned-invocation-reconciliation-transaction`;
+      writeFileSync(marker, '{}', 'utf8');
+      expect(() =>
+        readReviewAccountingAtPath(workspace.statePath, 'feat/issue-79', 'main'),
+      ).toThrow('Issue #79 reconciliation transaction is invalid');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('built independent-review CLI integration', () => {
   it('rejects missing issue arguments without touching isolated state', () => {

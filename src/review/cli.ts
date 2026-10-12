@@ -11,6 +11,8 @@ import {
   resumeReviewerFailureRecovery,
   authorizeReviewReservationReconciliation,
   reconcileReservedReview,
+  authorizeIssue79OrphanedInvocationReconciliation,
+  reconcileIssue79OrphanedInvocation,
   authorizeReviewLimitTerminalFinalization,
   finalizeReviewLimitTerminal,
   type IndependentReviewInput,
@@ -51,6 +53,12 @@ const authorizeReservationReconciliation = rawArguments.includes(
   '--authorize-reservation-reconciliation',
 );
 const reconcileReservation = rawArguments.includes('--reconcile-reserved-review');
+const authorizeIssue79OrphanedInvocation = rawArguments.includes(
+  '--authorize-issue-79-orphaned-invocation-reconciliation',
+);
+const reconcileIssue79OrphanedInvocationMode = rawArguments.includes(
+  '--reconcile-issue-79-orphaned-invocation',
+);
 const authorizeReviewLimitTerminal = rawArguments.includes('--authorize-review-limit-terminal');
 const finalizeReviewLimitTerminalMode = rawArguments.includes('--finalize-review-limit-terminal');
 const existingPullRequest = argumentsByName.get('update-pr');
@@ -91,6 +99,14 @@ if (hasAuthorizationResumeConflict(rawArguments)) {
   if (typeof finalizationResult === 'string') process.exitCode = 1;
 } else if (reconcileReservation) {
   const reconciliationResult = reconcileReservationFromApproval(input);
+  console.log(JSON.stringify(reconciliationResult, null, 2));
+  if (typeof reconciliationResult === 'string') process.exitCode = 1;
+} else if (authorizeIssue79OrphanedInvocation) {
+  const authorizationResult = authorizeIssue79OrphanedInvocationFromCli(input);
+  console.log(JSON.stringify(authorizationResult, null, 2));
+  if (typeof authorizationResult === 'string') process.exitCode = 1;
+} else if (reconcileIssue79OrphanedInvocationMode) {
+  const reconciliationResult = reconcileIssue79OrphanedInvocationFromCli(input);
   console.log(JSON.stringify(reconciliationResult, null, 2));
   if (typeof reconciliationResult === 'string') process.exitCode = 1;
 } else if (resumeAfterReviewerFailure) {
@@ -249,6 +265,39 @@ function reconcileReservationFromApproval(reviewInput: IndependentReviewInput) {
     return 'Reserved-review reconciliation requires --reported-reservation-head and --human-decision-url.';
   }
   return reconcileReservedReview(reviewInput.cwd, reviewInput.base, reportedHead, decisionUrl);
+}
+
+function authorizeIssue79OrphanedInvocationFromCli(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '79') {
+    return 'Issue #79 orphaned invocation reconciliation is limited to Issue #79.';
+  }
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  if (!rawArguments.includes('--confirm-human-authorization')) {
+    return 'Human authorization requires --confirm-human-authorization.';
+  }
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!decisionUrl) {
+    return 'Issue #79 orphaned invocation reconciliation requires --human-decision-url.';
+  }
+  return authorizeIssue79OrphanedInvocationReconciliation(
+    reviewInput.cwd,
+    reviewInput.base,
+    decisionUrl,
+  );
+}
+
+function reconcileIssue79OrphanedInvocationFromCli(reviewInput: IndependentReviewInput) {
+  if (reviewInput.issue !== '79') {
+    return 'Issue #79 orphaned invocation reconciliation is limited to Issue #79.';
+  }
+  const branchError = validateIssueBranch(reviewInput);
+  if (branchError) return branchError;
+  const decisionUrl = argumentsByName.get('human-decision-url');
+  if (!decisionUrl) {
+    return 'Issue #79 orphaned invocation reconciliation requires --human-decision-url.';
+  }
+  return reconcileIssue79OrphanedInvocation(reviewInput.cwd, reviewInput.base, decisionUrl);
 }
 
 function validateIssueBranch(reviewInput: IndependentReviewInput): string | undefined {

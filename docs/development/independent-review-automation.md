@@ -213,7 +213,22 @@ result, termination evidence, execution-failure evidence, or pending marker.
 This is not a supported legacy format. A read of the state, a new reservation,
 and the same checks after a process restart must all fail closed without
 rewriting the file, guessing the missing reason, or resetting or refunding the
-counter.
+counter. Issue #79 now has a separate, Issue-specific reconciliation design
+for this exact shape. Its implementation is limited to isolated fixtures
+until a later Human Decision authorizes execution against the real accounting.
+
+The dedicated `issue-79-orphaned-invocation-reconciliation` approval and
+`ORPHANED_INVOCATION_RECONCILIATION` audit record preserve invocation 1 as
+consumed and record only `UNRESOLVED_NO_DURABLE_EVIDENCE`; they never create a
+cycle result, failure evidence, or inferred reservation. The API binds the
+repository, Issue 79 branch/base, canonical worktree, exact HEAD, effective
+epoch 1, invocation count 1, state and approval preimages, Schema fingerprint,
+Human Decision URL, approval ID, and transaction identity. The dedicated
+operation does not reserve or execute a review; after a successful isolated
+reconciliation, the ordinary next reservation is invocation 2. Approval
+issuance and consumption are single-use and transaction-backed, and stale,
+cross-Issue, cross-worktree, duplicate, or partially modified states remain
+fail-closed.
 
 This is distinct from the explicitly supported Issue #29 migration shape. That
 shape is recognized only by its exact repository, branch, base, legacy counter,

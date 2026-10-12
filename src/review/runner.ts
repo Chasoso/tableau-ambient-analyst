@@ -42,6 +42,7 @@ import {
   reviewReservationReconciliationHumanDecisions,
   reviewReservationReconciliationProvenances,
   reviewReservationReconciliationEvidenceReasons,
+  orphanedInvocationReconciliationHumanDecisions,
   reviewLimitTerminalFinalizationHumanDecisions,
   type ReviewFinding,
   type ReviewGateResult,
@@ -55,6 +56,7 @@ import {
   reviewEpochEvidenceKinds,
   type ReviewEpochEvidenceCoverage,
   type ReviewEpochEvidenceKind,
+  type OrphanedInvocationReconciliationHumanDecision,
 } from './gate.js';
 import {
   runCiFeedbackLoop,
@@ -104,8 +106,12 @@ const reviewReservationReconciliationTransactionSuffix =
   '.review-reservation-reconciliation-transaction';
 const reviewLimitTerminalFinalizationTransactionSuffix =
   '.review-limit-terminal-finalization-transaction';
+const issue79OrphanedInvocationReconciliationTransactionSuffix =
+  '.issue-79-orphaned-invocation-reconciliation-transaction';
 const issue76HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
+const issue79HumanDecisionUrlPattern =
+  /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/79#issuecomment-([0-9]+)$/;
 const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
 const gitCommitShaPattern = /^[a-f0-9]{40}$/;
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
@@ -3057,6 +3063,432 @@ export function reconcileReservedReview(
   );
 }
 
+function validateIssue79OrphanedInvocationScope(
+  cwd: string,
+  branch: string,
+  base: string,
+): string | undefined {
+  if (branch !== 'feat/issue-79' || base !== 'main') {
+    return 'Orphaned invocation reconciliation is limited to Issue #79 on main.';
+  }
+  if (resolve(cwd) !== canonicalIssueWorktreePath(cwd, '79')) {
+    return 'Orphaned invocation reconciliation requires the canonical Issue #79 worktree.';
+  }
+  if (currentBranch(cwd) !== branch) {
+    return 'Orphaned invocation reconciliation branch does not match the current Git branch.';
+  }
+  try {
+    const remote = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+    if (
+      remote !== 'https://github.com/Chasoso/tableau-ambient-analyst.git' &&
+      remote !== 'git@github.com:Chasoso/tableau-ambient-analyst.git'
+    ) {
+      return 'Orphaned invocation reconciliation repository does not match the target repository.';
+    }
+    execFileSync('git', ['rev-parse', '--verify', 'main^{commit}'], {
+      cwd,
+      encoding: 'utf8',
+    });
+    if (
+      execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+        cwd,
+        encoding: 'utf8',
+      }).trim()
+    ) {
+      return 'Orphaned invocation reconciliation requires a clean canonical worktree.';
+    }
+  } catch {
+    return 'Orphaned invocation reconciliation repository or base could not be verified.';
+  }
+  return undefined;
+}
+
+function readIssue79OrphanedInvocationState(statePath: string): ReviewAccounting | string {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(statePath, 'utf8')) as unknown;
+  } catch {
+    return 'Issue #79 orphaned accounting could not be read.';
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return 'Issue #79 orphaned accounting state is invalid.';
+  }
+  const entries = (value as Record<string, unknown>).entries;
+  if (!Array.isArray(entries) || entries.length !== 1) {
+    return 'Issue #79 orphaned accounting state is invalid.';
+  }
+  const entry = entries[0];
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    return 'Issue #79 orphaned accounting state is invalid.';
+  }
+  const state = entry as Record<string, unknown>;
+  const expectedKeys = new Set([
+    'branch',
+    'base',
+    'legacyReviewInvocations',
+    'legacyAutoFixCycles',
+    'accountingEpochStart',
+    'reviewInvocationCount',
+    'autoFixCycleCount',
+    'generalizedRuleHistory',
+    'consecutiveRepeatCount',
+    'lastFixChangedRepository',
+    'cycleResults',
+    'terminationHistory',
+  ]);
+  if (
+    Object.keys(state).some((key) => !expectedKeys.has(key)) ||
+    state.branch !== 'feat/issue-79' ||
+    state.base !== 'main' ||
+    state.legacyReviewInvocations !== 0 ||
+    state.legacyAutoFixCycles !== 0 ||
+    state.accountingEpochStart !== currentAccountingEpoch ||
+    state.reviewInvocationCount !== 1 ||
+    state.autoFixCycleCount !== 0 ||
+    !Array.isArray(state.generalizedRuleHistory) ||
+    state.generalizedRuleHistory.length !== 0 ||
+    state.consecutiveRepeatCount !== 0 ||
+    state.lastFixChangedRepository !== null ||
+    !Array.isArray(state.cycleResults) ||
+    state.cycleResults.length !== 0 ||
+    !Array.isArray(state.terminationHistory) ||
+    state.terminationHistory.length !== 0
+  ) {
+    return 'Issue #79 accounting is not the exact orphaned invocation state.';
+  }
+  return state as unknown as ReviewAccounting;
+}
+
+function verifyIssue79HumanDecisionComment(
+  cwd: string,
+  humanDecisionUrl: string,
+  headSha: string,
+  schemaFingerprint: string,
+  statePreimageSha256: string,
+): string | undefined {
+  const match = issue79HumanDecisionUrlPattern.exec(humanDecisionUrl);
+  if (!match) return 'Issue #79 reconciliation requires its canonical Human Decision URL.';
+  const result = spawnSync(
+    'gh',
+    ['api', `repos/Chasoso/tableau-ambient-analyst/issues/comments/${match[1]}`],
+    { cwd, encoding: 'utf8', env: reviewerEnvironment(), maxBuffer: 1024 * 1024 },
+  );
+  if (result.status !== 0) {
+    return 'Issue #79 Human Decision comment could not be verified.';
+  }
+  try {
+    const comment = JSON.parse(result.stdout) as {
+      html_url?: unknown;
+      user?: { login?: unknown };
+      body?: unknown;
+    };
+    if (
+      comment.html_url !== humanDecisionUrl ||
+      comment.user?.login !== 'Chasoso' ||
+      typeof comment.body !== 'string'
+    ) {
+      return 'Issue #79 Human Decision comment identity is invalid.';
+    }
+    const requiredEvidence = [
+      'Issue #79 Orphaned Invocation Reconciliation',
+      '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
+      `Current HEAD: ${headSha}`,
+      'Effective review epoch: 1',
+      `Accounting state preimage SHA-256: ${statePreimageSha256}`,
+      `Reviewer Schema fingerprint: ${schemaFingerprint}`,
+      '実accountingへの監査記録追加・改変',
+    ];
+    const body = comment.body;
+    return requiredEvidence.every((value) => body.includes(value))
+      ? undefined
+      : 'Issue #79 Human Decision comment content does not match the reconciliation scope.';
+  } catch {
+    return 'Issue #79 Human Decision comment could not be parsed.';
+  }
+}
+
+export function authorizeIssue79OrphanedInvocationReconciliationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string | null,
+  humanDecisionUrl: string,
+  workspaceCwd: string,
+): ReviewResumeApproval | string {
+  const scopeError = validateIssue79OrphanedInvocationScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  const canonicalPath = canonicalIssueWorktreePath(workspaceCwd, '79');
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalPath
+  ) {
+    return 'Issue #79 reconciliation paths must resolve to the canonical worktree.';
+  }
+  if (!gitCommitShaPattern.test(headSha) || readHeadSha(workspaceCwd) !== headSha) {
+    return 'Issue #79 reconciliation HEAD does not match the current Git HEAD.';
+  }
+  if (!/^[a-f0-9]{64}$/.test(schemaFingerprint)) {
+    return 'Issue #79 reconciliation Schema fingerprint is invalid.';
+  }
+  if (
+    fileFingerprint(statePath) !== statePreimageSha256 ||
+    fileFingerprint(approvalPath) !== approvalPreimageSha256
+  ) {
+    return 'Issue #79 reconciliation authorization preimage does not match current state.';
+  }
+  const orphaned = readIssue79OrphanedInvocationState(statePath);
+  if (typeof orphaned === 'string') return orphaned;
+  if (
+    !isIssue79HumanDecisionUrl(humanDecisionUrl) ||
+    !isFileFingerprint(approvalPreimageSha256) ||
+    reviewerSchemaFingerprint(workspaceCwd) !== schemaFingerprint
+  ) {
+    return 'Issue #79 reconciliation prerequisites do not match the canonical workspace.';
+  }
+  const humanDecisionError = verifyIssue79HumanDecisionComment(
+    workspaceCwd,
+    humanDecisionUrl,
+    headSha,
+    schemaFingerprint,
+    statePreimageSha256,
+  );
+  if (humanDecisionError) return humanDecisionError;
+  try {
+    return withAccountingLock(statePath, () => {
+      if (
+        fileFingerprint(statePath) !== statePreimageSha256 ||
+        fileFingerprint(approvalPath) !== approvalPreimageSha256
+      ) {
+        return 'Issue #79 reconciliation authorization preimage changed; human recovery is required.';
+      }
+      const current = readIssue79OrphanedInvocationState(statePath);
+      if (typeof current === 'string') return current;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      if (
+        approvals.some(
+          (approval) =>
+            approval.approvalType === 'issue-79-orphaned-invocation-reconciliation' &&
+            approval.issue === '79' &&
+            !approval.consumed,
+        )
+      ) {
+        return 'An unconsumed Issue #79 orphaned reconciliation approval already exists.';
+      }
+      const approval: ReviewResumeApproval = {
+        id: randomUUID(),
+        approvalType: 'issue-79-orphaned-invocation-reconciliation',
+        targetRepository,
+        branch,
+        base,
+        reviewEpoch: 1,
+        exhaustedReviewInvocationCount: 1,
+        approvedAt: new Date().toISOString(),
+        authorizationSource: 'human-explicit',
+        consumed: false,
+        headSha,
+        schemaFingerprint,
+        humanDecision: 'reconcile-orphaned-invocation',
+        reconciliationInvocation: 1,
+        reconciliationReason: 'ORPHANED_INVOCATION',
+        humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
+        issue: '79',
+        statePreimageSha256,
+        approvalPreimageSha256,
+        transactionId: randomUUID(),
+        canonicalWorktreePath: canonicalPath,
+      };
+      writeReviewApprovalsAtPath(approvalPath, [...approvals, approval]);
+      return approval;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist Issue #79 approval.';
+  }
+}
+
+export function authorizeIssue79OrphanedInvocationReconciliation(
+  cwd: string,
+  base: string,
+  humanDecisionUrl: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath) return 'Could not resolve Issue #79 review state paths.';
+  if (!headSha || !schemaFingerprint) return 'Could not resolve Issue #79 review prerequisites.';
+  return authorizeIssue79OrphanedInvocationReconciliationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    fileFingerprint(statePath) ?? '',
+    fileFingerprint(approvalPath),
+    humanDecisionUrl,
+    cwd,
+  );
+}
+
+export function reconcileIssue79OrphanedInvocationAtPath(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  headSha: string,
+  schemaFingerprint: string,
+  approvalPreimageSha256: string,
+  humanDecisionUrl: string,
+  workspaceCwd: string,
+): ReviewAccounting | string {
+  const scopeError = validateIssue79OrphanedInvocationScope(workspaceCwd, branch, base);
+  if (scopeError) return scopeError;
+  const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
+  const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
+  if (
+    !canonicalStatePath ||
+    !canonicalApprovalPath ||
+    resolve(statePath) !== resolve(canonicalStatePath) ||
+    resolve(approvalPath) !== resolve(canonicalApprovalPath) ||
+    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '79')
+  ) {
+    return 'Issue #79 reconciliation paths must resolve to the canonical worktree.';
+  }
+  if (
+    readHeadSha(workspaceCwd) !== headSha ||
+    reviewerSchemaFingerprint(workspaceCwd) !== schemaFingerprint
+  ) {
+    return 'Issue #79 reconciliation HEAD or Schema fingerprint changed.';
+  }
+  if (fileFingerprint(approvalPath) !== approvalPreimageSha256) {
+    return 'Issue #79 reconciliation approval preimage does not match current state.';
+  }
+  try {
+    return withAccountingLock(statePath, () => {
+      const statePreimageSha256 = fileFingerprint(statePath);
+      if (!statePreimageSha256) return 'Issue #79 accounting state is missing.';
+      const current = readIssue79OrphanedInvocationState(statePath);
+      if (typeof current === 'string') return current;
+      const approvals = readReviewApprovalsAtPath(approvalPath);
+      const approval = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'issue-79-orphaned-invocation-reconciliation' &&
+          candidate.targetRepository === targetRepository &&
+          candidate.branch === branch &&
+          candidate.base === base &&
+          candidate.reviewEpoch === 1 &&
+          candidate.exhaustedReviewInvocationCount === 1 &&
+          candidate.headSha === headSha &&
+          candidate.schemaFingerprint === schemaFingerprint &&
+          candidate.issue === '79' &&
+          candidate.reconciliationInvocation === 1 &&
+          candidate.reconciliationReason === 'ORPHANED_INVOCATION' &&
+          candidate.humanDecisionUrl === humanDecisionUrl &&
+          candidate.humanDecisionVerification === verifiedHumanDecisionMarker &&
+          candidate.humanDecision === 'reconcile-orphaned-invocation' &&
+          candidate.statePreimageSha256 === statePreimageSha256 &&
+          !candidate.consumed,
+      );
+      if (!approval || !approval.transactionId || !approval.canonicalWorktreePath) {
+        return 'No matching unconsumed Issue #79 reconciliation approval exists.';
+      }
+      const existing = approvals.find(
+        (candidate) =>
+          candidate.approvalType === 'issue-79-orphaned-invocation-reconciliation' &&
+          candidate.issue === '79' &&
+          candidate.consumed,
+      );
+      if (existing) return 'Issue #79 orphaned invocation reconciliation was already consumed.';
+      const reconciledAt = new Date().toISOString();
+      const record: NonNullable<ReviewAccounting['orphanedInvocationReconciliations']>[number] = {
+        reconciliationId: randomUUID(),
+        approvalId: approval.id,
+        repository: targetRepository,
+        issue: '79',
+        branch: 'feat/issue-79',
+        base: 'main',
+        canonicalWorktreePath: approval.canonicalWorktreePath,
+        headSha,
+        reviewEpoch: 1,
+        reviewInvocation: 1,
+        status: 'UNRESOLVED_NO_DURABLE_EVIDENCE',
+        reasonCode: 'ORPHANED_INVOCATION',
+        evidenceKind: 'ORPHANED_INVOCATION_RECONCILIATION',
+        statePreimageSha256,
+        approvalPreimageSha256: approval.approvalPreimageSha256 ?? null,
+        schemaFingerprint,
+        humanDecisionUrl,
+        humanDecisionVerification: verifiedHumanDecisionMarker,
+        transactionId: approval.transactionId,
+        reconciledAt,
+      };
+      const accounting: ReviewAccounting = {
+        ...current,
+        orphanedInvocationReconciliations: [record],
+      };
+      const nextApprovals = approvals.map((candidate) =>
+        candidate.id === approval.id
+          ? { ...candidate, consumed: true, consumedAt: reconciledAt }
+          : candidate,
+      );
+      persistIssue79OrphanedInvocationReconciliationTransaction(
+        statePath,
+        approvalPath,
+        branch,
+        base,
+        accounting,
+        nextApprovals,
+        approval.id,
+        approval.transactionId,
+        statePreimageSha256,
+        approvalPreimageSha256,
+      );
+      return accounting;
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Could not persist Issue #79 reconciliation.';
+  }
+}
+
+export function reconcileIssue79OrphanedInvocation(
+  cwd: string,
+  base: string,
+  humanDecisionUrl: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  const approvalPreimageSha256 = approvalPath ? fileFingerprint(approvalPath) : null;
+  if (!statePath || !approvalPath || !headSha || !schemaFingerprint || !approvalPreimageSha256) {
+    return 'Could not resolve Issue #79 reconciliation prerequisites.';
+  }
+  return reconcileIssue79OrphanedInvocationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    approvalPreimageSha256,
+    humanDecisionUrl,
+    cwd,
+  );
+}
+
 /** Consume a matching reviewer-failure approval without resetting accounting. */
 export function resumeReviewerFailureRecoveryAtPath(
   statePath: string,
@@ -3673,6 +4105,7 @@ export function resumeReviewAfterLimitAtPath(
         reviewerFailureRecovery: accounting.reviewerFailureRecovery,
         reviewerFailureRecoveryHistory: accounting.reviewerFailureRecoveryHistory,
         reconciledReviewReservations: accounting.reconciledReviewReservations,
+        orphanedInvocationReconciliations: accounting.orphanedInvocationReconciliations,
         invocationEvidenceCoverage: buildReviewEpochEvidenceCoverage(accounting),
         recoveryReason: approval.recoveryReason,
         recoveryEvidence: approval.recoveryEvidence,
@@ -4085,6 +4518,7 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
+    'orphanedInvocationReconciliations',
     'invocationEvidenceCoverage',
   ]);
   if (
@@ -4161,6 +4595,14 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
             (record) => (record as Record<string, unknown>).reservedInvocation,
           ),
         ).size !== state.reconciledReviewReservations.length)) ||
+    (state.orphanedInvocationReconciliations !== undefined &&
+      (!Array.isArray(state.orphanedInvocationReconciliations) ||
+        !state.orphanedInvocationReconciliations.every(isOrphanedInvocationReconciliation) ||
+        new Set(
+          state.orphanedInvocationReconciliations.map(
+            (record) => (record as Record<string, unknown>).reconciliationId,
+          ),
+        ).size !== state.orphanedInvocationReconciliations.length)) ||
     (state.reviewLimitTerminalEvidence !== undefined &&
       (!isReviewLimitTerminalEvidence(state.reviewLimitTerminalEvidence) ||
         !reviewLimitTerminalEvidenceIsConsistent(state)))
@@ -4226,6 +4668,9 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
     ...(pendingReview ? [pendingReview.reviewInvocation] : []),
     ...(state.reconciledReviewReservations ?? []).map(
       (record) => (record as { reservedInvocation: number }).reservedInvocation,
+    ),
+    ...(state.orphanedInvocationReconciliations ?? []).map(
+      (record) => (record as { reviewInvocation: number }).reviewInvocation,
     ),
   ]);
   const explicitIncompleteEvidence =
@@ -4316,6 +4761,13 @@ function parseAccountingStateEntry(state: Record<string, unknown>): AccountingSt
       : {
           reconciledReviewReservations: state.reconciledReviewReservations as NonNullable<
             ReviewAccounting['reconciledReviewReservations']
+          >,
+        }),
+    ...(state.orphanedInvocationReconciliations === undefined
+      ? {}
+      : {
+          orphanedInvocationReconciliations: state.orphanedInvocationReconciliations as NonNullable<
+            ReviewAccounting['orphanedInvocationReconciliations']
           >,
         }),
     ...(state.reviewLimitTerminalEvidence === undefined
@@ -4608,6 +5060,7 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     'reviewerFailureRecovery',
     'reviewerFailureRecoveryHistory',
     'reconciledReviewReservations',
+    'orphanedInvocationReconciliations',
     'invocationEvidenceCoverage',
     'recoveryReason',
     'recoveryEvidence',
@@ -4668,6 +5121,9 @@ function isReviewEpochHistory(value: unknown): value is ReviewEpochHistory {
     (history.reconciledReviewReservations === undefined ||
       (Array.isArray(history.reconciledReviewReservations) &&
         history.reconciledReviewReservations.every(isReconciledReviewReservation))) &&
+    (history.orphanedInvocationReconciliations === undefined ||
+      (Array.isArray(history.orphanedInvocationReconciliations) &&
+        history.orphanedInvocationReconciliations.every(isOrphanedInvocationReconciliation))) &&
     (history.invocationEvidenceCoverage === undefined ||
       (isReviewEpochEvidenceCoverage(history.invocationEvidenceCoverage, history) &&
         (history.terminationReason !== 'MAX_REVIEW_INVOCATIONS' ||
@@ -4707,6 +5163,9 @@ function isReviewEpochEvidenceCoverage(
   const reconciliations = Array.isArray(history.reconciledReviewReservations)
     ? history.reconciledReviewReservations
     : [];
+  const orphanedReconciliations = Array.isArray(history.orphanedInvocationReconciliations)
+    ? history.orphanedInvocationReconciliations
+    : [];
   for (const cycle of cycles) {
     if (!isReviewCycleRecord(cycle) || !addEvidence(cycle.reviewInvocation, 'CYCLE_RESULT')) {
       return false;
@@ -4726,6 +5185,15 @@ function isReviewEpochEvidenceCoverage(
     if (
       !isReconciledReviewReservation(reconciliation) ||
       !addEvidence(record.reservedInvocation as number, 'RESERVATION_RECONCILIATION')
+    ) {
+      return false;
+    }
+  }
+  for (const reconciliation of orphanedReconciliations) {
+    const record = reconciliation as Record<string, unknown>;
+    if (
+      !isOrphanedInvocationReconciliation(reconciliation) ||
+      !addEvidence(record.reviewInvocation as number, 'ORPHANED_INVOCATION_RECONCILIATION')
     ) {
       return false;
     }
@@ -4785,6 +5253,9 @@ function buildReviewEpochEvidenceCoverage(
   );
   (accounting.reconciledReviewReservations ?? []).forEach((reconciliation) =>
     addEvidence(reconciliation.reservedInvocation, 'RESERVATION_RECONCILIATION'),
+  );
+  (accounting.orphanedInvocationReconciliations ?? []).forEach((reconciliation) =>
+    addEvidence(reconciliation.reviewInvocation, 'ORPHANED_INVOCATION_RECONCILIATION'),
   );
   const expectedInvocations = Array.from(
     { length: accounting.reviewInvocationCount },
@@ -5159,6 +5630,10 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
     'humanDecisionUrl',
     'humanDecisionVerification',
     'issue',
+    'statePreimageSha256',
+    'approvalPreimageSha256',
+    'transactionId',
+    'canonicalWorktreePath',
     'finalizationReviewInvocation',
     'finalizationResult',
   ]);
@@ -5170,6 +5645,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.approvalType === 'review-termination-recovery' ||
       approval.approvalType === 'reviewer-failure-recovery' ||
       approval.approvalType === 'review-reservation-reconciliation' ||
+      approval.approvalType === 'issue-79-orphaned-invocation-reconciliation' ||
       approval.approvalType === 'review-limit-terminal-finalization'
     ) ||
     approval.targetRepository !== targetRepository ||
@@ -5284,6 +5760,37 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.issue === '76' &&
       approval.finalizationReviewInvocation === maxReviewInvocations &&
       approval.finalizationResult === 'CHANGES_REQUIRED'
+    );
+  }
+  if (approval.approvalType === 'issue-79-orphaned-invocation-reconciliation') {
+    return (
+      approval.branch === 'feat/issue-79' &&
+      approval.base === 'main' &&
+      approval.reviewEpoch === 1 &&
+      approval.exhaustedReviewInvocationCount === 1 &&
+      approval.originalTerminationReason === undefined &&
+      approval.recoveryReason === undefined &&
+      approval.recoveryEvidence === undefined &&
+      typeof approval.schemaFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.schemaFingerprint) &&
+      approval.failedReviewInvocation === undefined &&
+      approval.failedReviewKind === undefined &&
+      approval.reconciliationInvocation === 1 &&
+      approval.reconciliationReason === 'ORPHANED_INVOCATION' &&
+      approval.issue === '79' &&
+      typeof approval.humanDecisionUrl === 'string' &&
+      isIssue79HumanDecisionUrl(approval.humanDecisionUrl) &&
+      approval.humanDecisionVerification === verifiedHumanDecisionMarker &&
+      typeof approval.humanDecision === 'string' &&
+      orphanedInvocationReconciliationHumanDecisions.includes(
+        approval.humanDecision as OrphanedInvocationReconciliationHumanDecision,
+      ) &&
+      typeof approval.statePreimageSha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(approval.statePreimageSha256) &&
+      isFileFingerprint(approval.approvalPreimageSha256) &&
+      typeof approval.transactionId === 'string' &&
+      gitCommitShaPattern.test(approval.headSha) &&
+      typeof approval.canonicalWorktreePath === 'string'
     );
   }
   return (
@@ -5447,8 +5954,62 @@ function isReconciledReviewReservation(value: unknown): boolean {
   );
 }
 
+function isOrphanedInvocationReconciliation(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'reconciliationId',
+    'approvalId',
+    'repository',
+    'issue',
+    'branch',
+    'base',
+    'canonicalWorktreePath',
+    'headSha',
+    'reviewEpoch',
+    'reviewInvocation',
+    'status',
+    'reasonCode',
+    'evidenceKind',
+    'statePreimageSha256',
+    'approvalPreimageSha256',
+    'schemaFingerprint',
+    'humanDecisionUrl',
+    'humanDecisionVerification',
+    'transactionId',
+    'reconciledAt',
+  ]);
+  return (
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    typeof record.reconciliationId === 'string' &&
+    typeof record.approvalId === 'string' &&
+    record.repository === targetRepository &&
+    record.issue === '79' &&
+    record.branch === 'feat/issue-79' &&
+    record.base === 'main' &&
+    typeof record.canonicalWorktreePath === 'string' &&
+    isGitCommitSha(record.headSha) &&
+    record.reviewEpoch === 1 &&
+    record.reviewInvocation === 1 &&
+    record.status === 'UNRESOLVED_NO_DURABLE_EVIDENCE' &&
+    record.reasonCode === 'ORPHANED_INVOCATION' &&
+    record.evidenceKind === 'ORPHANED_INVOCATION_RECONCILIATION' &&
+    /^[a-f0-9]{64}$/.test(record.statePreimageSha256 as string) &&
+    isFileFingerprint(record.approvalPreimageSha256) &&
+    /^[a-f0-9]{64}$/.test(record.schemaFingerprint as string) &&
+    isIssue79HumanDecisionUrl(record.humanDecisionUrl) &&
+    record.humanDecisionVerification === verifiedHumanDecisionMarker &&
+    typeof record.transactionId === 'string' &&
+    typeof record.reconciledAt === 'string'
+  );
+}
+
 function isIssue76HumanDecisionUrl(value: unknown): value is string {
   return typeof value === 'string' && issue76HumanDecisionUrlPattern.test(value);
+}
+
+function isIssue79HumanDecisionUrl(value: unknown): value is string {
+  return typeof value === 'string' && issue79HumanDecisionUrlPattern.test(value);
 }
 
 function verifyIssue76HumanDecisionComment(
@@ -5642,12 +6203,64 @@ function readReviewAccountingAtPathUnsafe(
     reviewerFailureRecoveryApprovalStateIsConsistent(statePath, branch, base, accounting);
     reviewReservationReconciliationApprovalStateIsConsistent(statePath, branch, base, accounting);
     reviewLimitTerminalFinalizationApprovalStateIsConsistent(statePath, branch, base, accounting);
+    orphanedInvocationReconciliationStateIsConsistent(statePath, branch, base, accounting);
     reviewHistoryEvidenceIsConsistent(statePath, branch, base, accounting);
     return accounting;
   } catch (error) {
     throw new Error('Review accounting state is invalid; human recovery is required.', {
       cause: error,
     });
+  }
+}
+
+function orphanedInvocationReconciliationStateIsConsistent(
+  statePath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+): void {
+  const records = accounting.orphanedInvocationReconciliations ?? [];
+  if (records.length === 0) return;
+  if (branch !== 'feat/issue-79' || base !== 'main' || records.length !== 1) {
+    throw new Error(
+      'Issue #79 orphaned invocation reconciliation scope is inconsistent; human recovery is required.',
+    );
+  }
+  const record = records[0];
+  if (!record || !isOrphanedInvocationReconciliation(record)) {
+    throw new Error(
+      'Issue #79 orphaned invocation reconciliation record is invalid; human recovery is required.',
+    );
+  }
+  const approvals = readReviewApprovalsAtPath(canonicalResumeApprovalPath(statePath));
+  const approval = approvals.find((candidate) => candidate.id === record.approvalId);
+  if (
+    !approval ||
+    approval.approvalType !== 'issue-79-orphaned-invocation-reconciliation' ||
+    approval.targetRepository !== targetRepository ||
+    approval.branch !== record.branch ||
+    approval.base !== record.base ||
+    approval.reviewEpoch !== 1 ||
+    approval.exhaustedReviewInvocationCount !== 1 ||
+    approval.reconciliationInvocation !== 1 ||
+    approval.reconciliationReason !== 'ORPHANED_INVOCATION' ||
+    approval.issue !== '79' ||
+    approval.headSha !== record.headSha ||
+    approval.schemaFingerprint !== record.schemaFingerprint ||
+    approval.statePreimageSha256 !== record.statePreimageSha256 ||
+    approval.approvalPreimageSha256 !== record.approvalPreimageSha256 ||
+    approval.transactionId !== record.transactionId ||
+    approval.canonicalWorktreePath !== record.canonicalWorktreePath ||
+    approval.humanDecisionUrl !== record.humanDecisionUrl ||
+    approval.humanDecisionVerification !== verifiedHumanDecisionMarker ||
+    approval.authorizationSource !== 'human-explicit' ||
+    approval.humanDecision !== 'reconcile-orphaned-invocation' ||
+    approval.consumed !== true ||
+    approval.consumedAt !== record.reconciledAt
+  ) {
+    throw new Error(
+      'Issue #79 orphaned invocation reconciliation approval state is inconsistent; human recovery is required.',
+    );
   }
 }
 
@@ -5984,6 +6597,19 @@ type ReviewReservationReconciliationTransaction = {
   approvalState: unknown;
 };
 
+type Issue79OrphanedInvocationReconciliationTransaction = {
+  transactionId: string;
+  statePath: string;
+  approvalPath: string;
+  branch: 'feat/issue-79';
+  base: 'main';
+  approvalId: string;
+  statePreimageSha256: string;
+  approvalPreimageSha256: string;
+  accountingState: unknown;
+  approvalState: unknown;
+};
+
 type ReviewLimitTerminalFinalizationTransaction = {
   statePath: string;
   approvalPath: string;
@@ -6029,6 +6655,10 @@ function reviewReservationReconciliationTransactionPath(statePath: string): stri
 
 function reviewLimitTerminalFinalizationTransactionPath(statePath: string): string {
   return `${statePath}${reviewLimitTerminalFinalizationTransactionSuffix}`;
+}
+
+function issue79OrphanedInvocationReconciliationTransactionPath(statePath: string): string {
+  return `${statePath}${issue79OrphanedInvocationReconciliationTransactionSuffix}`;
 }
 
 function canonicalResumeApprovalPath(statePath: string): string {
@@ -6258,6 +6888,150 @@ function persistReviewReservationReconciliationTransaction(
   } satisfies ReviewReservationReconciliationTransaction);
   writeJsonAtomically(statePath, accountingState);
   writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function persistIssue79OrphanedInvocationReconciliationTransaction(
+  statePath: string,
+  approvalPath: string,
+  branch: string,
+  base: string,
+  accounting: ReviewAccounting,
+  approvals: ReviewResumeApproval[],
+  approvalId: string,
+  transactionId: string,
+  statePreimageSha256: string,
+  approvalPreimageSha256: string,
+): void {
+  const currentValue = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+  const entries = currentValue.entries;
+  if (!Array.isArray(entries)) {
+    throw new Error('Issue #79 reconciliation state is invalid; human recovery is required.');
+  }
+  const accountingState = {
+    entries: entries.map((entry) => {
+      if (
+        typeof entry === 'object' &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        (entry as Record<string, unknown>).branch === branch &&
+        (entry as Record<string, unknown>).base === base
+      ) {
+        return { branch, base, ...accounting };
+      }
+      return entry;
+    }),
+  };
+  parseAccountingStateEntry({ branch, base, ...accounting });
+  approvals.forEach((approval) => {
+    if (!isReviewResumeApproval(approval)) {
+      throw new Error('Review approval state is invalid; human recovery is required.');
+    }
+  });
+  const approvalState = { approvals };
+  const transactionPath = issue79OrphanedInvocationReconciliationTransactionPath(statePath);
+  writeJsonAtomically(transactionPath, {
+    transactionId,
+    statePath,
+    approvalPath,
+    branch: 'feat/issue-79',
+    base: 'main',
+    approvalId,
+    statePreimageSha256,
+    approvalPreimageSha256,
+    accountingState,
+    approvalState,
+  } satisfies Issue79OrphanedInvocationReconciliationTransaction);
+  writeJsonAtomically(statePath, accountingState);
+  writeJsonAtomically(approvalPath, approvalState);
+  unlinkSync(transactionPath);
+}
+
+function recoverPendingIssue79OrphanedInvocationReconciliationTransaction(statePath: string): void {
+  const transactionPath = issue79OrphanedInvocationReconciliationTransactionPath(statePath);
+  if (!existsSync(transactionPath)) return;
+  const transaction = JSON.parse(
+    readFileSync(transactionPath, 'utf8'),
+  ) as Partial<Issue79OrphanedInvocationReconciliationTransaction>;
+  if (
+    typeof transaction.transactionId !== 'string' ||
+    transaction.statePath !== statePath ||
+    transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
+    transaction.branch !== 'feat/issue-79' ||
+    transaction.base !== 'main' ||
+    typeof transaction.approvalId !== 'string' ||
+    typeof transaction.statePreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.statePreimageSha256) ||
+    typeof transaction.approvalPreimageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(transaction.approvalPreimageSha256) ||
+    transaction.accountingState === undefined ||
+    transaction.approvalState === undefined
+  ) {
+    throw new Error('Issue #79 reconciliation transaction is invalid; human recovery is required.');
+  }
+  const approvalState = transaction.approvalState as Record<string, unknown>;
+  if (
+    !Array.isArray(approvalState.approvals) ||
+    !approvalState.approvals.every(isReviewResumeApproval) ||
+    new Set(approvalState.approvals.map((approval) => (approval as ReviewResumeApproval).id))
+      .size !== approvalState.approvals.length
+  ) {
+    throw new Error(
+      'Issue #79 reconciliation transaction approvals are invalid; human recovery is required.',
+    );
+  }
+  const accountingEntries = accountingStateEntries(transaction.accountingState);
+  const entry = accountingEntries.find(
+    (candidate) => candidate.branch === 'feat/issue-79' && candidate.base === 'main',
+  );
+  const record = entry?.accounting.orphanedInvocationReconciliations?.find(
+    (candidate) => candidate.transactionId === transaction.transactionId,
+  );
+  const approval = (approvalState.approvals as ReviewResumeApproval[]).find(
+    (candidate) => candidate.id === transaction.approvalId,
+  );
+  if (
+    !entry ||
+    !record ||
+    !approval ||
+    record.transactionId !== transaction.transactionId ||
+    record.approvalId !== transaction.approvalId ||
+    approval.approvalType !== 'issue-79-orphaned-invocation-reconciliation' ||
+    approval.consumed !== true ||
+    approval.transactionId !== transaction.transactionId
+  ) {
+    throw new Error(
+      'Issue #79 reconciliation transaction semantics are invalid; human recovery is required.',
+    );
+  }
+  const currentStateSha256 = fileFingerprint(statePath);
+  const currentApprovalSha256 = fileFingerprint(transaction.approvalPath);
+  const expectedStateSha256 = jsonFingerprint(transaction.accountingState);
+  const expectedApprovalSha256 = jsonFingerprint(transaction.approvalState);
+  const preimageMatches =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const postimageMatches =
+    currentStateSha256 === expectedStateSha256 && currentApprovalSha256 === expectedApprovalSha256;
+  const statePartiallyApplied =
+    currentStateSha256 === expectedStateSha256 &&
+    currentApprovalSha256 === transaction.approvalPreimageSha256;
+  const approvalPartiallyApplied =
+    currentStateSha256 === transaction.statePreimageSha256 &&
+    currentApprovalSha256 === expectedApprovalSha256;
+  if (postimageMatches) {
+    unlinkSync(transactionPath);
+    return;
+  }
+  if (!preimageMatches && !statePartiallyApplied && !approvalPartiallyApplied) {
+    throw new Error(
+      'Issue #79 reconciliation encountered an unexpected external change; human recovery is required.',
+    );
+  }
+  if (!statePartiallyApplied) writeJsonAtomically(statePath, transaction.accountingState);
+  if (!approvalPartiallyApplied) {
+    writeJsonAtomically(transaction.approvalPath, transaction.approvalState);
+  }
   unlinkSync(transactionPath);
 }
 
@@ -6776,6 +7550,7 @@ function withAccountingLock<T>(statePath: string, operation: () => T): T {
     recoverPendingReviewerFailureRecoveryTransaction(statePath);
     recoverPendingReviewReservationReconciliationTransaction(statePath);
     recoverPendingReviewLimitTerminalFinalizationTransaction(statePath);
+    recoverPendingIssue79OrphanedInvocationReconciliationTransaction(statePath);
     return operation();
   } finally {
     if (lockHandle !== undefined) {
