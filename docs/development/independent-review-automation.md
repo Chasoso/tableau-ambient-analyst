@@ -188,6 +188,11 @@ refunding the invocation. If failure recording cannot be persisted, the runner
 returns a fail-closed human escalation and does not claim that the reservation
 was recovered; the incomplete state remains for explicit human recovery. A
 subsequent reservation is rejected while `pendingReview` remains present.
+The reservation also captures the exact HEAD before reviewer execution. Start,
+success, and failure accounting must use that immutable value; if the current
+HEAD differs when execution is recorded, accounting fails closed and retains
+the incomplete reservation for explicit human handling rather than binding
+evidence to a different commit.
 
 The regression fixture
 `tests/fixtures/review-accounting/incomplete-review-reservation.json` preserves

@@ -1791,6 +1791,43 @@ describe('built independent-review CLI integration', () => {
     }
   });
 
+  it('fails closed when HEAD changes while the reviewer is running', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-head-change-'));
+    try {
+      const workspace = createCanonicalIndependentReviewWorkspace(
+        directory,
+        'git commit --allow-empty -m concurrent >/dev/null 2>&1; exit 1',
+      );
+      const reservedHead = workspace.headSha;
+      const cli = runBuiltReviewCli(workspace.cwd, workspace.binDirectory, [
+        '--review-only',
+        '--issue',
+        '76',
+        '--base',
+        'main',
+        '--cwd',
+        workspace.cwd,
+      ]);
+
+      expect(cli.exitCode).toBe(1);
+      expect(cli.stdout).not.toContain(reservedHead);
+      const currentHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: workspace.cwd,
+        encoding: 'utf8',
+      }).trim();
+      expect(currentHead).not.toBe(reservedHead);
+      const accounting = readReviewAccountingAtPath(workspace.statePath, 'feat/issue-76', 'main');
+      expect(accounting).toMatchObject({
+        reviewInvocationCount: 1,
+        pendingReview: { reviewInvocation: 1, status: 'STARTED', headSha: reservedHead },
+      });
+      expect(accounting.reviewExecutionFailures ?? []).toHaveLength(0);
+      expect(accounting.terminationReason).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('runs reservation reconciliation through the built CLI and preserves durable evidence', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ambient-built-cli-reconciliation-'));
     try {

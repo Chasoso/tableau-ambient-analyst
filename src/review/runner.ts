@@ -2549,15 +2549,18 @@ function validateReviewScope(cwd: string, base: string): string | undefined {
 function reserveReviewCycle(cwd: string, base: string): string | undefined {
   const statePath = resolveReviewStatePath(cwd);
   if (!statePath) return 'Could not resolve the repository git directory for review state.';
-  return reserveReviewInvocationAtPath(statePath, currentBranch(cwd), base);
+  const headSha = readHeadSha(cwd);
+  if (!headSha) return 'Could not resolve the review reservation HEAD.';
+  return reserveReviewInvocationAtPath(statePath, currentBranch(cwd), base, headSha);
 }
 
 export function reserveReviewCycleAtPath(
   statePath: string,
   branch: string,
   base: string,
+  reservationHeadSha?: string,
 ): string | undefined {
-  return reserveReviewInvocationAtPath(statePath, branch, base);
+  return reserveReviewInvocationAtPath(statePath, branch, base, reservationHeadSha);
 }
 
 /**
@@ -4384,11 +4387,14 @@ function isPendingReview(value: unknown): value is NonNullable<ReviewAccounting[
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const pending = value as Record<string, unknown>;
   return (
-    Object.keys(pending).every((key) => key === 'reviewInvocation' || key === 'status') &&
+    Object.keys(pending).every(
+      (key) => key === 'reviewInvocation' || key === 'status' || key === 'headSha',
+    ) &&
     Number.isInteger(pending.reviewInvocation) &&
     (pending.reviewInvocation as number) >= 1 &&
     (pending.reviewInvocation as number) <= maxReviewInvocations &&
-    (pending.status === 'RESERVED' || pending.status === 'STARTED')
+    (pending.status === 'RESERVED' || pending.status === 'STARTED') &&
+    (pending.headSha === undefined || isGitCommitSha(pending.headSha))
   );
 }
 
@@ -6805,6 +6811,12 @@ function recordReviewAccounting(
   review: ReviewGateResult,
 ): ReviewAccounting {
   return updateAccounting(cwd, base, (accounting) => {
+    if (
+      !accounting.pendingReview?.headSha ||
+      readHeadSha(cwd) !== accounting.pendingReview.headSha
+    ) {
+      throw new Error('Review execution HEAD changed; accounting is incomplete and fail-closed.');
+    }
     const findings = [...review.blockingFindings, ...review.nonBlockingFindings];
     const rules = findings
       .filter((finding) => typeof finding !== 'string')
@@ -6867,9 +6879,9 @@ function recordReviewFailureAccounting(
       throw new Error('Review accounting reservation is missing; human recovery is required.');
     }
     const kind: ReviewExecutionFailureKind = review.executionFailureKind ?? 'UNCERTAIN';
-    const headSha = readHeadSha(cwd);
+    const headSha = accounting.pendingReview.headSha;
     const schemaFingerprint = reviewerSchemaFingerprint(cwd);
-    if (!headSha || !schemaFingerprint) {
+    if (!headSha || readHeadSha(cwd) !== headSha || !schemaFingerprint) {
       throw new Error('Reviewer failure evidence is incomplete; human recovery is required.');
     }
     const failure = {
@@ -6963,6 +6975,7 @@ function reserveReviewInvocationAtPath(
   statePath: string,
   branch: string,
   base: string,
+  reservationHeadSha?: string,
 ): string | undefined {
   try {
     return withAccountingLock(statePath, () => {
@@ -6981,6 +6994,7 @@ function reserveReviewInvocationAtPath(
         pendingReview: {
           reviewInvocation: accounting.reviewInvocationCount + 1,
           status: 'RESERVED' as const,
+          ...(reservationHeadSha ? { headSha: reservationHeadSha } : {}),
         },
       };
       if (accounting.reviewerFailureRecovery) {
@@ -7020,6 +7034,14 @@ function markReviewStarted(cwd: string, base: string): string | undefined {
       if (!accounting.pendingReview || accounting.pendingReview.status !== 'RESERVED') {
         throw new Error(
           'Review accounting reservation is not in a startable state; human recovery is required.',
+        );
+      }
+      if (
+        !accounting.pendingReview.headSha ||
+        readHeadSha(cwd) !== accounting.pendingReview.headSha
+      ) {
+        throw new Error(
+          'Review reservation HEAD changed or is unavailable; human recovery is required.',
         );
       }
       writeAccountingAtPath(statePath, branch, base, {

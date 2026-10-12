@@ -207,6 +207,8 @@ export type ReviewAccounting = {
     | {
         reviewInvocation: number;
         status: 'RESERVED' | 'STARTED';
+        /** Captured before reviewer execution; absent only in legacy state. */
+        headSha?: string | undefined;
       }
     | undefined;
   reviewExecutionFailures?: Array<{
