@@ -66,6 +66,34 @@ describe('debug UI analysis API', () => {
     },
   );
 
+  it('runs hold-insufficient through the application flow and preserves its audit trace', async () => {
+    const { server, base } = await withServer();
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'hold-insufficient' }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        status: string;
+        audit: string[];
+      };
+      expect(body.status).toBe('insufficient-evidence');
+      expect(body.audit).toEqual(
+        expect.arrayContaining([
+          'trigger-detected',
+          'analysis-contract-created',
+          'tableau-analysis-started',
+          'evidence-collected',
+          'verification-insufficient',
+          'intervention-hold',
+        ]),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('fails closed for malformed input and runner failure without exposing details', async () => {
     const failingClient: AnalysisClient = {
       replay: async () => {

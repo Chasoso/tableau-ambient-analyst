@@ -79,7 +79,10 @@ export const scenarios: readonly DebugScenario[] = [
     description: 'A positive trigger where required evidence remains unresolved.',
     utterances: [
       { speaker: 'Morgan', text: 'Revenue fell after the price change.' },
-      { speaker: 'Aki', text: 'We should roll back based on that result.' },
+      {
+        speaker: 'Aki',
+        text: 'We should decide whether to roll back based on the price-change assumption.',
+      },
     ],
     trigger: {
       decision: 'ANALYZE',
