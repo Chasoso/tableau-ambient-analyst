@@ -167,7 +167,7 @@ npm ci
 npm run debug:ui
 ```
 
-Open the printed `http://127.0.0.1:4173` URL. Select a fixture scenario and
+Open the printed `http://localhost:4173` URL. Select a fixture scenario and
 choose `Replay` to inspect transcript, trigger, Analysis Contract questions,
 progress, evidence/provenance, verifier state, intervention, errors, and the
 audit timeline. The console uses a fixture-driven mock client only: it does

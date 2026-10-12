@@ -7,7 +7,7 @@ initialization is isolated in `src/debug-ui/host-adapter.ts`.
 ## Development configuration
 
 1. Install dependencies with `npm ci`.
-2. Start the UI with `npm run debug:ui` (default: `http://127.0.0.1:4173`).
+2. Start the UI with `npm run debug:ui` (default: `http://localhost:4173`).
 3. Use [`extensions/ambient-analyst-dev.trex`](../../extensions/ambient-analyst-dev.trex)
    in Tableau Desktop's dashboard Extension object.
 4. Select the local manifest, allow the localhost extension if Tableau asks,
@@ -52,7 +52,8 @@ If Tableau refuses the extension, shows a blank zone, or reports a trust or
 security error:
 
 - Confirm that `npm run debug:ui` is still listening and that the manifest URL
-  exactly matches the local server URL. Do not silently switch to a different
+  exactly matches the local server URL. If `PORT` is changed, update the
+  manifest source URL to the same port. Do not silently switch to a different
   host or port.
 - Remove and re-add the extension after changing the manifest. Tableau loads
   manifest changes when the extension is added again; a browser refresh alone
