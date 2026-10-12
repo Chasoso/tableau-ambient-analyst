@@ -53,6 +53,38 @@ function boundedText(value: unknown, max: number, fallback: string): string {
   return typeof value === 'string' && value.length <= max ? value : fallback;
 }
 
+function validClientResult(result: Awaited<ReturnType<AnalysisClient['replay']>>): boolean {
+  if (!['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(result.status))
+    return false;
+  if (
+    !Array.isArray(result.audit) ||
+    result.audit.length > 64 ||
+    result.audit.some((item) => typeof item !== 'string')
+  )
+    return false;
+  const scenario = result.scenario;
+  if (!scenario || !scenarios.some(({ id }) => id === scenario.id)) return false;
+  if (
+    !Array.isArray(scenario.questions) ||
+    scenario.questions.length > 32 ||
+    scenario.questions.some((item) => typeof item !== 'string')
+  )
+    return false;
+  if (!Array.isArray(scenario.evidence) || scenario.evidence.length > 64) return false;
+  if (
+    !Array.isArray(scenario.stages) ||
+    scenario.stages.length > 16 ||
+    scenario.stages.some(
+      (stage) => !['pending', 'active', 'complete', 'failed', 'skipped'].includes(stage.status),
+    )
+  )
+    return false;
+  if (!['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(scenario.verifier.status)) return false;
+  return (
+    scenario.intervention === null || ['HOLD', 'INTERVENE'].includes(scenario.intervention.decision)
+  );
+}
+
 function sanitizeRun(
   runId: string,
   requestedId: string,
@@ -122,6 +154,10 @@ export function createDebugUiRequestHandler(
           return;
         }
         const runResult = await withTimeout(client.replay(scenarioById(body.scenarioId)));
+        if (!validClientResult(runResult)) {
+          send(response, 502, { error: 'Analysis run failed safely.' });
+          return;
+        }
         const run = sanitizeRun(createRunId(), body.scenarioId, runResult);
         runs.set(run.runId, run);
         while (runs.size > maxStoredRuns) runs.delete(runs.keys().next().value as string);

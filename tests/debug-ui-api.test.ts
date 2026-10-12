@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { createDebugUiRequestHandler } from '../src/debug-ui/server.js';
 import { FixtureAnalysisClient, scenarioById, type AnalysisClient } from '../src/debug-ui/model.js';
+import { ApplicationAnalysisClient, deterministicDependencies } from '../src/debug-ui/application.js';
 
 async function withServer(client?: AnalysisClient) {
   const server = createServer(createDebugUiRequestHandler(client));
@@ -107,6 +108,29 @@ describe('debug UI analysis API', () => {
       expect(response.status).toBe(502);
     } finally {
       await closeServer(timed.server);
+    }
+  });
+
+  it('fails closed when the real replay boundary receives malformed tool data', async () => {
+    const malformed = new ApplicationAnalysisClient((scenarioId) => {
+      const dependencies = deterministicDependencies(scenarioId);
+      return {
+        ...dependencies,
+        tools: {
+          ...dependencies.tools,
+          callTool: async () => ({ modelEvidence: null as never, summary: dependencies.tools.callTool ? await dependencies.tools.callTool('query_datasource', {}) .then(({ summary }) => summary) : null as never }),
+        },
+      };
+    });
+    const { server, base } = await withServer(malformed);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST', body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).status).toBe('failed');
+    } finally {
+      await closeServer(server);
     }
   });
 });

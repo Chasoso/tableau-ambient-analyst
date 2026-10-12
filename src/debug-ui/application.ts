@@ -37,7 +37,7 @@ function response(output: readonly Record<string, unknown>[], id: string): Agent
   };
 }
 
-function deterministicDependencies(scenarioId: string) {
+export function deterministicDependencies(scenarioId: string) {
   let call = 0;
   const model: AgenticAnalysisModel = {
     async respond() {
@@ -172,10 +172,16 @@ function project(
 }
 
 export class ApplicationAnalysisClient implements AnalysisClient {
+  constructor(
+    private readonly dependencyFactory: (
+      scenarioId: string,
+    ) => ReturnType<typeof deterministicDependencies> = deterministicDependencies,
+  ) {}
+
   async replay(scenario: DebugScenario): Promise<ReplayState> {
     const flow = await runTranscriptInterventionFlow(
       sourceFor(scenario),
-      deterministicDependencies(scenario.id),
+      this.dependencyFactory(scenario.id),
     );
     return project(scenario, flow);
   }

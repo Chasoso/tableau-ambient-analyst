@@ -182,7 +182,21 @@ export class HttpAnalysisClient implements AnalysisClient {
       !Array.isArray(value.audit) ||
       value.audit.length > 64 ||
       value.audit.some((item) => typeof item !== 'string' || item.length > 200) ||
-      !['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status ?? '')
+      !['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status ?? '') ||
+      !['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(value.scenario.verifier?.status ?? '') ||
+      !Array.isArray(value.scenario.questions) ||
+      value.scenario.questions.length > 8 ||
+      value.scenario.questions.some((item) => typeof item !== 'string' || item.length > 300) ||
+      !Array.isArray(value.scenario.evidence) ||
+      value.scenario.evidence.length > 20 ||
+      value.scenario.evidence.some(
+        (item) =>
+          typeof item?.source !== 'string' ||
+          typeof item?.detail !== 'string' ||
+          typeof item?.provenance !== 'string',
+      ) ||
+      !Array.isArray(value.scenario.stages) ||
+      value.scenario.stages.length > 16
     ) {
       throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
     }
