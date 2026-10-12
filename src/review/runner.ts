@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -173,6 +174,7 @@ export type ReviewRunnerDependencies = {
   ) => ReviewGateResult;
   currentBranch: (cwd: string) => string;
   readAccounting: (cwd: string, base: string) => ReviewAccounting | string;
+  runBrowserE2e?: (cwd: string, expectedHeadSha: string) => string | undefined;
   recordReview: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordReviewFailure: (cwd: string, base: string, review: ReviewGateResult) => ReviewAccounting;
   recordAutoFix: (cwd: string, base: string, changedRepository: boolean) => ReviewAccounting;
@@ -421,6 +423,37 @@ findings.
 
 This is scope context only; independently assess the complete diff, acceptance
 criteria, implementation, tests, and safety boundaries.
+`;
+  }
+  if (issue === '79') {
+    return `Review scope context for Issue #79:
+The Issue body remains authoritative for the Playwright Chromium E2E
+acceptance criteria and its stated non-goals. The following Human Decision
+references are approved scope context only and are not authorization,
+authentication, a PASS guarantee, or a waiver of independent review:
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116633116
+  approves the Issue #79-specific, single-use, fail-closed orphaned-invocation
+  reconciliation API, CLI/validator, accounting bindings, transaction contract,
+  and isolated regression fixtures; it does not authorize execution by itself.
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6117284006
+  approves the Issue #79-specific Execution Authorization identity validation,
+  trusted GitHub API identity checks, and isolated fixtures; it does not
+  authorize real approval issuance or reconciliation.
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116932871
+  and https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6117617056
+  are execution-authorization decisions for the already bounded recovery
+  operation, not general permission to change the Review Runner or other Issues.
+- https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6118154748
+  approves only this reviewer-context and Chromium-E2E-evidence input fix.
+
+The reconciliation implementation is Issue #79-specific. Independently verify
+that every changed path matches one of these approved boundaries, that generic
+Review Runner and other-Issue behavior is unchanged, and that the Issue's
+non-goals remain enforced. Human Decisions do not suppress findings or force
+PASS; unresolved scope conflicts remain HUMAN_DECISION_REQUIRED.
+
+This is scope context only; independently assess the complete diff, acceptance
+criteria, implementation, tests, validation evidence, and safety boundaries.
 `;
   }
   if (issue !== '17') return '';
@@ -1567,6 +1600,19 @@ export function runReviewControlFlow(
     return reviewerInvocationFailure('Issue body could not be retrieved.');
   }
 
+  const browserEvidence =
+    input.issue === '79'
+      ? (dependencies.runBrowserE2e ?? runIssue79ChromiumE2e)(
+          input.cwd,
+          readHeadSha(input.cwd) ?? '',
+        )
+      : undefined;
+  if (input.issue === '79' && browserEvidence === undefined) {
+    return validationFailure(
+      'Issue #79 Chromium E2E evidence is unavailable, failed, or not bound to the current HEAD.',
+    );
+  }
+
   const cycleError = dependencies.reserveCycle(input.cwd, input.base);
 
   if (cycleError) {
@@ -1580,7 +1626,10 @@ export function runReviewControlFlow(
   if (startError) return reviewerInvocationFailure(startError, 'PRE_REVIEW');
 
   const branch = dependencies.currentBranch(input.cwd);
-  const validationEvidence = ['npm run validate: passed (executed by review runner)'];
+  const validationEvidence = [
+    'npm run validate: passed (executed by review runner)',
+    ...(browserEvidence === undefined ? [] : [browserEvidence]),
+  ];
 
   try {
     return dependencies.invokeReviewer(input, issue, validationEvidence, branch);
@@ -7945,6 +7994,78 @@ function markReviewStarted(cwd: string, base: string): string | undefined {
       ? error.message
       : 'Could not persist the reviewer execution start state.';
   }
+}
+
+export function formatIssue79ChromiumE2eEvidence(
+  headSha: string,
+  status: number | null,
+  stdout: string,
+  stderr: string,
+  startedAt: string,
+  completedAt: string,
+): string | undefined {
+  if (status !== 0 || !gitCommitShaPattern.test(headSha)) return undefined;
+  const output = `${stdout}\n${stderr}`;
+  const totalMatch = output.match(/Running\s+(\d+)\s+tests?\s+using\s+/i);
+  const passedMatch = output.match(/(?:^|\s)(\d+)\s+passed\s+\(/im);
+  if (!totalMatch || !passedMatch) return undefined;
+  const testCount = Number(totalMatch[1]);
+  const passedCount = Number(passedMatch[1]);
+  if (!Number.isInteger(testCount) || testCount <= 0 || passedCount !== testCount) {
+    return undefined;
+  }
+  return [
+    'npm run test:e2e: passed',
+    `head=${headSha}`,
+    'browser=Playwright Chromium (chromium project)',
+    `os=${process.platform}/${process.arch}`,
+    `tests=${passedCount}/${testCount}`,
+    'exitStatus=0',
+    'result=PASS',
+    `startedAt=${startedAt}`,
+    `completedAt=${completedAt}`,
+  ].join('; ');
+}
+
+function runIssue79ChromiumE2e(cwd: string, expectedHeadSha: string): string | undefined {
+  if (!gitCommitShaPattern.test(expectedHeadSha) || readHeadSha(cwd) !== expectedHeadSha) {
+    return undefined;
+  }
+  const generatedPaths = ['playwright-report', 'test-results'].map((path) => resolve(cwd, path));
+  if (generatedPaths.some((path) => existsSync(path))) return undefined;
+  const startedAt = new Date().toISOString();
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnSync('npm', ['run', 'test:e2e'], {
+      cwd,
+      encoding: 'utf8',
+      env: reviewerEnvironment(),
+      maxBuffer: 1024 * 1024,
+      timeout: reviewerTimeoutForProcess(),
+    });
+  } catch {
+    return undefined;
+  } finally {
+    generatedPaths.forEach((path) => {
+      if (!existsSync(path)) return;
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch {
+        // A generated artifact that cannot be removed keeps evidence unavailable.
+      }
+    });
+  }
+  const completedAt = new Date().toISOString();
+  if (generatedPaths.some((path) => existsSync(path))) return undefined;
+  if (readHeadSha(cwd) !== expectedHeadSha) return undefined;
+  return formatIssue79ChromiumE2eEvidence(
+    expectedHeadSha,
+    result.status,
+    String(result.stdout ?? ''),
+    String(result.stderr ?? ''),
+    startedAt,
+    completedAt,
+  );
 }
 
 function runDeterministicValidation(cwd: string): { passed: boolean } {

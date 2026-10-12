@@ -1250,6 +1250,7 @@ import {
   buildAutoFixPrompt,
   buildImplementerPrompt,
   buildReviewerPrompt,
+  formatIssue79ChromiumE2eEvidence,
   extractFinalReviewerMessage,
   authorizeReviewReservationReconciliation,
   authorizeReviewReservationReconciliationAtPath,
@@ -4117,6 +4118,65 @@ describe('independent review runner control flow', () => {
     expect(result.accounting?.reviewInvocationCount).toBe(1);
   });
 
+  it('supplies Issue #79 Chromium E2E evidence to the reviewer before reservation', () => {
+    const issue79Input = { ...input, issue: '79' };
+    let suppliedValidation: string[] = [];
+    const result = runReviewControlFlow(
+      issue79Input,
+      dependencies({
+        runBrowserE2e: () =>
+          'npm run test:e2e: passed; head=' +
+          'a'.repeat(40) +
+          '; browser=Playwright Chromium; os=darwin/arm64; tests=5/5; exitStatus=0; result=PASS; startedAt=start; completedAt=finish',
+        invokeReviewer: (_input, _issue, validation) => {
+          suppliedValidation = validation;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          );
+        },
+      }),
+    );
+
+    expect(result.result).toBe('PASS');
+    expect(suppliedValidation).toEqual([
+      'npm run validate: passed (executed by review runner)',
+      expect.stringContaining('npm run test:e2e: passed; head='),
+    ]);
+  });
+
+  it('fails closed before reservation when Issue #79 E2E evidence is unavailable', () => {
+    let reviewerInvocations = 0;
+    const result = runReviewControlFlow(
+      { ...input, issue: '79' },
+      dependencies({
+        runBrowserE2e: () => undefined,
+        invokeReviewer: () => {
+          reviewerInvocations += 1;
+          return parseReviewResult(
+            JSON.stringify({
+              result: 'PASS',
+              blockingFindings: [],
+              nonBlockingFindings: [],
+              escalationRequired: false,
+              maintainability: 'NO_DRIFT',
+            }),
+          );
+        },
+      }),
+    );
+
+    expect(result.executionPhase).toBe('VALIDATION');
+    expect(result.result).not.toBe('PASS');
+    expect(reviewerInvocations).toBe(0);
+    expect(result.accounting).toBeUndefined();
+  });
+
   it('review-only returns AUTO_FIX findings without applying them', () => {
     let reviews = 0;
     const result = runReadOnlyReview(
@@ -5197,6 +5257,65 @@ describe('independent review scope context', () => {
     expect(prompt).toMatch(/new\s+contract\s+violations/);
     expect(prompt).not.toContain('invocation 17+');
     expect(prompt).not.toContain('return PASS');
+  });
+
+  it('provides Issue #79 decisions without treating them as authorization or PASS', () => {
+    const prompt = buildReviewerPrompt(
+      { cwd: '/repo', base: 'main', issue: '79' },
+      {
+        title: 'Playwright E2E',
+        body: 'Acceptance criteria and non-goals',
+        url: 'https://example.test/issues/79',
+      },
+      ['npm run validate: passed'],
+      'feat/issue-79',
+    );
+
+    expect(prompt).toContain('issuecomment-6116633116');
+    expect(prompt).toContain('issuecomment-6117284006');
+    expect(prompt).toContain('issuecomment-6118154748');
+    expect(prompt).toContain('Issue #79-specific');
+    expect(prompt).toContain('non-goals');
+    expect(prompt).toContain('not authorization');
+    expect(prompt).toContain('do not suppress findings or force');
+    expect(prompt).toContain('HUMAN_DECISION_REQUIRED');
+    expect(prompt).not.toContain('return PASS');
+  });
+
+  it('formats only complete current-head Chromium E2E evidence', () => {
+    const head = 'a'.repeat(40);
+    const valid = formatIssue79ChromiumE2eEvidence(
+      head,
+      0,
+      'Running 5 tests using 5 workers\n5 passed (4.1s)',
+      '',
+      '2026-10-12T00:00:00.000Z',
+      '2026-10-12T00:00:04.100Z',
+    );
+    expect(valid).toContain(`head=${head}`);
+    expect(valid).toContain('browser=Playwright Chromium');
+    expect(valid).toContain('tests=5/5');
+    expect(valid).toContain('result=PASS');
+    expect(
+      formatIssue79ChromiumE2eEvidence(
+        head,
+        1,
+        'Running 5 tests using 5 workers\n4 passed (4.1s)',
+        '',
+        'start',
+        'finish',
+      ),
+    ).toBeUndefined();
+    expect(
+      formatIssue79ChromiumE2eEvidence(
+        head,
+        0,
+        'Running 5 tests using 5 workers',
+        '',
+        'start',
+        'finish',
+      ),
+    ).toBeUndefined();
   });
 
   it('requires bounded integration-boundary and adversarial seam review', () => {
