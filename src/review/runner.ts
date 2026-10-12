@@ -112,6 +112,8 @@ const issue76HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/76#issuecomment-([0-9]+)$/;
 const issue79HumanDecisionUrlPattern =
   /^https:\/\/github\.com\/Chasoso\/tableau-ambient-analyst\/issues\/79#issuecomment-([0-9]+)$/;
+const issue79ExecutionAuthorizationUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116932871';
 const verifiedHumanDecisionMarker = 'GITHUB_COMMENT_VERIFIED' as const;
 const gitCommitShaPattern = /^[a-f0-9]{40}$/;
 const legacyReviewerFailureEvidenceVersion = 'reviewer-failure-v1' as const;
@@ -3169,6 +3171,9 @@ function verifyIssue79HumanDecisionComment(
   schemaFingerprint: string,
   statePreimageSha256: string,
 ): string | undefined {
+  if (humanDecisionUrl !== issue79ExecutionAuthorizationUrl) {
+    return 'Issue #79 reconciliation requires the canonical execution authorization comment.';
+  }
   const match = issue79HumanDecisionUrlPattern.exec(humanDecisionUrl);
   if (!match) return 'Issue #79 reconciliation requires its canonical Human Decision URL.';
   const result = spawnSync(
@@ -3193,13 +3198,28 @@ function verifyIssue79HumanDecisionComment(
       return 'Issue #79 Human Decision comment identity is invalid.';
     }
     const requiredEvidence = [
-      'Issue #79 Orphaned Invocation Reconciliation',
-      '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
-      `Current HEAD: ${headSha}`,
-      'Effective review epoch: 1',
-      `Accounting state preimage SHA-256: ${statePreimageSha256}`,
-      `Reviewer Schema fingerprint: ${schemaFingerprint}`,
-      '実accountingへの監査記録追加・改変',
+      '## Human Decision: Issue #79 Orphaned Invocation Reconciliation — Execution Authorization',
+      'この承認は対象状態に限定した単回復旧実行のみ',
+      '- Repository: `Chasoso/tableau-ambient-analyst`',
+      '- Issue: `79`',
+      '- Branch: `feat/issue-79` / Base: `main`',
+      `- Implementation HEAD: \`${headSha}\``,
+      '- Effective review epoch: `1`',
+      '- Consumed invocation: `1`',
+      '- `reviewInvocationCount: 1` / `autoFixCycleCount: 0`',
+      '- `accountingEpochStart: issue-29-accounting-v2`',
+      '- `cycleResults: []` / `terminationHistory: []`',
+      '- `pendingReview` / `terminationReason`: なし',
+      `- Accounting preimage SHA-256: \`${statePreimageSha256}\``,
+      `- Reviewer Schema fingerprint: \`${schemaFingerprint}\``,
+      '- 既存approval・transaction/lock: なし',
+      '### 明示的に承認する操作',
+      '`issue-79-orphaned-invocation-reconciliation` approvalを**対象に対して一度だけ**発行する',
+      '正規の専用CLI/APIから`ORPHANED_INVOCATION_RECONCILIATION`を**一度だけ**実行',
+      '`reviewInvocationCount: 1`、effective epoch `1`を維持',
+      '### 禁止事項',
+      'Count reset/refund',
+      '本決定は**実装HEAD',
     ];
     const body = comment.body;
     return requiredEvidence.every((value) => body.includes(value))

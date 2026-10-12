@@ -1519,13 +1519,28 @@ function issue79HumanDecisionBody(workspace: {
 }): string {
   const statePreimage = testSha256(readFileSync(workspace.statePath, 'utf8'));
   return [
-    'Issue #79 Orphaned Invocation Reconciliation',
-    '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
-    `Current HEAD: ${workspace.headSha}`,
-    'Effective review epoch: 1',
-    `Accounting state preimage SHA-256: ${statePreimage}`,
-    `Reviewer Schema fingerprint: ${workspace.schemaFingerprint}`,
-    '実accountingへの監査記録追加・改変',
+    '## Human Decision: Issue #79 Orphaned Invocation Reconciliation — Execution Authorization',
+    'この承認は対象状態に限定した単回復旧実行のみ',
+    '- Repository: `Chasoso/tableau-ambient-analyst`',
+    '- Issue: `79`',
+    '- Branch: `feat/issue-79` / Base: `main`',
+    `- Implementation HEAD: \`${workspace.headSha}\``,
+    '- Effective review epoch: `1`',
+    '- Consumed invocation: `1`',
+    '- `reviewInvocationCount: 1` / `autoFixCycleCount: 0`',
+    '- `accountingEpochStart: issue-29-accounting-v2`',
+    '- `cycleResults: []` / `terminationHistory: []`',
+    '- `pendingReview` / `terminationReason`: なし',
+    `- Accounting preimage SHA-256: \`${statePreimage}\``,
+    `- Reviewer Schema fingerprint: \`${workspace.schemaFingerprint}\``,
+    '- 既存approval・transaction/lock: なし',
+    '### 明示的に承認する操作',
+    '`issue-79-orphaned-invocation-reconciliation` approvalを**対象に対して一度だけ**発行する',
+    '正規の専用CLI/APIから`ORPHANED_INVOCATION_RECONCILIATION`を**一度だけ**実行',
+    '`reviewInvocationCount: 1`、effective epoch `1`を維持',
+    '### 禁止事項',
+    'Count reset/refund',
+    '本決定は**実装HEAD',
   ].join('\n');
 }
 
@@ -1619,6 +1634,8 @@ const reportedReservationHead = '91a4ea9e7608071c4709fd7991189db02aa22b45';
 const humanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/76#issuecomment-6107011445';
 const issue79OrphanedHumanDecisionUrl =
+  'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116932871';
+const issue79ImplementationHumanDecisionUrl =
   'https://github.com/Chasoso/tableau-ambient-analyst/issues/79#issuecomment-6116633116';
 
 function completedReviewCycles(count: number) {
@@ -1930,6 +1947,89 @@ describe('Issue #79 orphaned invocation reconciliation', () => {
       expect(readFileSync(workspace.statePath, 'utf8')).toBe(before);
       expect(existsSync(workspace.approvalPath)).toBe(false);
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the execution authorization contract and comment identity', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'issue-79-execution-authorization-'));
+    try {
+      const workspace = createIssue79OrphanedWorkspace(directory);
+      const stateBefore = readFileSync(workspace.statePath, 'utf8');
+      const statePreimage = testSha256(stateBefore);
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'Chasoso',
+        body: [
+          'Issue #79 Orphaned Invocation Reconciliation',
+          '専用復旧機構の設計・コード実装・隔離fixture検証のみを承認',
+          `Current HEAD: ${workspace.headSha}`,
+          'Effective review epoch: 1',
+          `Accounting state preimage SHA-256: ${statePreimage}`,
+          `Reviewer Schema fingerprint: ${workspace.schemaFingerprint}`,
+          '実accountingへの監査記録追加・改変',
+        ].join('\n'),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('content');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79OrphanedHumanDecisionUrl,
+        author: 'not-the-owner',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79OrphanedHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('identity');
+      expect(readFileSync(workspace.statePath, 'utf8')).toBe(stateBefore);
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+
+      childProcessTestHooks.humanDecisionComment = {
+        url: issue79ImplementationHumanDecisionUrl,
+        author: 'Chasoso',
+        body: issue79HumanDecisionBody(workspace),
+      };
+      expect(
+        authorizeIssue79OrphanedInvocationReconciliationAtPath(
+          workspace.statePath,
+          workspace.approvalPath,
+          'feat/issue-79',
+          'main',
+          workspace.headSha,
+          workspace.schemaFingerprint,
+          statePreimage,
+          null,
+          issue79ImplementationHumanDecisionUrl,
+          workspace.cwd,
+        ),
+      ).toContain('canonical execution authorization');
+      expect(existsSync(workspace.approvalPath)).toBe(false);
+    } finally {
+      childProcessTestHooks.humanDecisionComment = undefined;
       rmSync(directory, { recursive: true, force: true });
     }
   });
