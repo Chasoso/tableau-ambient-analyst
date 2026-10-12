@@ -48,11 +48,22 @@ test.describe('Ambient Analyst debug console', () => {
     await page.getByLabel('Scenario').selectOption('hold-insufficient');
     await page.getByRole('button', { name: 'Replay' }).click();
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('INSUFFICIENT EVIDENCE');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveAttribute(
+      'data-status',
+      'insufficient-evidence',
+    );
+    await expect(
+      page.getByText('HOLD: Required evidence is incomplete or invalid.', { exact: true }),
+    ).toBeVisible();
     await expect(badge).toHaveCount(0);
 
     await page.getByLabel('Scenario').selectOption('ignored');
     await page.getByRole('button', { name: 'Replay' }).click();
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('IGNORED');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveAttribute(
+      'data-status',
+      'ignored',
+    );
     await expect(badge).toHaveCount(0);
   });
 
@@ -62,6 +73,10 @@ test.describe('Ambient Analyst debug console', () => {
     await page.getByRole('button', { name: 'Replay' }).click();
 
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('FAILED');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveAttribute(
+      'data-status',
+      'failed',
+    );
     await expect(page.getByText('FIXTURE_INVALID:', { exact: false })).toBeVisible();
   });
 
@@ -75,9 +90,14 @@ test.describe('Ambient Analyst debug console', () => {
 
     await page.getByLabel('Scenario').selectOption('ignored');
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('IDLE');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByTestId('intervention-badge')).toHaveCount(0);
     await page.getByRole('button', { name: 'Replay' }).click();
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('IGNORED');
+    await expect(page.locator('[data-testid="run-status"]')).toHaveAttribute(
+      'data-status',
+      'ignored',
+    );
     await expect(page.getByTestId('intervention-badge')).toHaveCount(0);
   });
 });
