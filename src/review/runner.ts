@@ -3815,7 +3815,7 @@ function validateReviewerFailureRecoveryScope(
   return undefined;
 }
 
-function validateReviewLimitTerminalFinalizationScope(
+function validateReviewLimitTerminalFinalizationScopeForIssue(
   workspaceCwd: string,
   statePath: string,
   approvalPath: string,
@@ -3823,22 +3823,36 @@ function validateReviewLimitTerminalFinalizationScope(
   base: string,
   headSha: string,
   schemaFingerprint: string,
+  issue: '69' | '76',
 ): string | undefined {
-  if (branch !== 'feat/issue-76' || base !== 'main') {
-    return 'Review-limit terminal finalization is limited to Issue #76 on main.';
+  const expectedBranch = `feat/issue-${issue}`;
+  if (branch !== expectedBranch || base !== 'main') {
+    return `Review-limit terminal finalization is limited to Issue #${issue} on main.`;
   }
-  const scopeError = validateReviewerFailureRecoveryScope(workspaceCwd, branch, base);
-  if (scopeError) return scopeError;
+  const actualBranch = currentBranch(workspaceCwd);
+  if (actualBranch !== expectedBranch) {
+    return `Review-limit terminal finalization branch must be ${expectedBranch}.`;
+  }
+  if (resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, issue)) {
+    return `Review-limit terminal finalization requires the canonical Issue #${issue} worktree.`;
+  }
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], {
+      cwd: workspaceCwd,
+      encoding: 'utf8',
+    });
+  } catch {
+    return 'Review-limit terminal finalization base could not be verified.';
+  }
   const canonicalStatePath = resolveReviewStatePath(workspaceCwd);
   const canonicalApprovalPath = resolveReviewApprovalPath(workspaceCwd);
   if (
     !canonicalStatePath ||
     !canonicalApprovalPath ||
-    resolve(workspaceCwd) !== canonicalIssueWorktreePath(workspaceCwd, '76') ||
     resolve(statePath) !== resolve(canonicalStatePath) ||
     resolve(approvalPath) !== resolve(canonicalApprovalPath)
   ) {
-    return 'Review-limit terminal finalization requires the canonical Issue #76 worktree.';
+    return `Review-limit terminal finalization requires the canonical Issue #${issue} worktree.`;
   }
   if (!isGitCommitSha(headSha) || readHeadSha(workspaceCwd) !== headSha) {
     return 'Review-limit terminal finalization HEAD does not match the current Git HEAD.';
@@ -3877,8 +3891,9 @@ export function authorizeReviewLimitTerminalFinalizationAtPath(
   headSha: string,
   schemaFingerprint: string,
   workspaceCwd: string,
+  issue: '69' | '76' = '76',
 ): ReviewResumeApproval | string {
-  const scopeError = validateReviewLimitTerminalFinalizationScope(
+  const scopeError = validateReviewLimitTerminalFinalizationScopeForIssue(
     workspaceCwd,
     statePath,
     approvalPath,
@@ -3886,6 +3901,7 @@ export function authorizeReviewLimitTerminalFinalizationAtPath(
     base,
     headSha,
     schemaFingerprint,
+    issue,
   );
   if (scopeError) return scopeError;
   try {
@@ -3901,7 +3917,8 @@ export function authorizeReviewLimitTerminalFinalizationAtPath(
             approval.approvalType === 'review-limit-terminal-finalization' &&
             approval.branch === branch &&
             approval.base === base &&
-            approval.reviewEpoch === (accounting.reviewEpoch ?? 1),
+            approval.reviewEpoch === (accounting.reviewEpoch ?? 1) &&
+            approval.issue === issue,
         )
       ) {
         return 'An unconsumed review-limit terminal finalization approval already exists.';
@@ -3920,7 +3937,7 @@ export function authorizeReviewLimitTerminalFinalizationAtPath(
         headSha,
         schemaFingerprint,
         humanDecision: reviewLimitTerminalFinalizationHumanDecisions[0],
-        issue: '76',
+        issue,
         finalizationReviewInvocation: maxReviewInvocations,
         finalizationResult: 'CHANGES_REQUIRED',
       };
@@ -3955,6 +3972,30 @@ export function authorizeReviewLimitTerminalFinalization(
   );
 }
 
+export function authorizeIssue69ReviewLimitTerminalFinalization(
+  cwd: string,
+  base: string,
+): ReviewResumeApproval | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for Issue #69 review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return authorizeReviewLimitTerminalFinalizationAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+    '69',
+  );
+}
+
 export function finalizeReviewLimitTerminalAtPath(
   statePath: string,
   approvalPath: string,
@@ -3963,8 +4004,9 @@ export function finalizeReviewLimitTerminalAtPath(
   headSha: string,
   schemaFingerprint: string,
   workspaceCwd: string,
+  issue: '69' | '76' = '76',
 ): ReviewAccounting | string {
-  const scopeError = validateReviewLimitTerminalFinalizationScope(
+  const scopeError = validateReviewLimitTerminalFinalizationScopeForIssue(
     workspaceCwd,
     statePath,
     approvalPath,
@@ -3972,6 +4014,7 @@ export function finalizeReviewLimitTerminalAtPath(
     base,
     headSha,
     schemaFingerprint,
+    issue,
   );
   if (scopeError) return scopeError;
   try {
@@ -3991,7 +4034,7 @@ export function finalizeReviewLimitTerminalAtPath(
           candidate.headSha === headSha &&
           candidate.schemaFingerprint === schemaFingerprint &&
           candidate.humanDecision === reviewLimitTerminalFinalizationHumanDecisions[0] &&
-          candidate.issue === '76' &&
+          candidate.issue === issue &&
           candidate.finalizationReviewInvocation === maxReviewInvocations &&
           candidate.finalizationResult === 'CHANGES_REQUIRED' &&
           !candidate.consumed,
@@ -4055,6 +4098,30 @@ export function finalizeReviewLimitTerminal(cwd: string, base: string): ReviewAc
     headSha,
     schemaFingerprint,
     cwd,
+  );
+}
+
+export function finalizeIssue69ReviewLimitTerminal(
+  cwd: string,
+  base: string,
+): ReviewAccounting | string {
+  const statePath = resolveReviewStatePath(cwd);
+  const approvalPath = resolveReviewApprovalPath(cwd);
+  const headSha = readHeadSha(cwd);
+  const schemaFingerprint = reviewerSchemaFingerprint(cwd);
+  if (!statePath || !approvalPath)
+    return 'Could not resolve the repository git directory for Issue #69 review state.';
+  if (!headSha) return 'Could not resolve the current feature branch head.';
+  if (!schemaFingerprint) return 'Reviewer Schema is not compatible with Structured Outputs.';
+  return finalizeReviewLimitTerminalAtPath(
+    statePath,
+    approvalPath,
+    currentBranch(cwd),
+    base,
+    headSha,
+    schemaFingerprint,
+    cwd,
+    '69',
   );
 }
 
@@ -5877,7 +5944,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
   }
   if (approval.approvalType === 'review-limit-terminal-finalization') {
     return (
-      approval.branch === 'feat/issue-76' &&
+      (approval.branch === 'feat/issue-76' || approval.branch === 'feat/issue-69') &&
       approval.base === 'main' &&
       approval.reviewEpoch === 1 &&
       approval.exhaustedReviewInvocationCount === maxReviewInvocations &&
@@ -5896,7 +5963,7 @@ function isReviewResumeApproval(value: unknown): value is ReviewResumeApproval {
       approval.humanDecisionUrl === undefined &&
       approval.humanDecisionVerification === undefined &&
       approval.humanDecision === 'finalize-review-limit' &&
-      approval.issue === '76' &&
+      approval.issue === (approval.branch === 'feat/issue-69' ? '69' : '76') &&
       approval.finalizationReviewInvocation === maxReviewInvocations &&
       approval.finalizationResult === 'CHANGES_REQUIRED'
     );
@@ -6556,7 +6623,7 @@ function reviewLimitTerminalFinalizationApprovalStateIsConsistent(
 ): void {
   const evidence = accounting.reviewLimitTerminalEvidence;
   if (evidence === undefined) return;
-  if (branch !== 'feat/issue-76' || base !== 'main') {
+  if ((branch !== 'feat/issue-76' && branch !== 'feat/issue-69') || base !== 'main') {
     throw new Error(
       'Review-limit terminal evidence scope is inconsistent; human recovery is required.',
     );
@@ -6575,7 +6642,7 @@ function reviewLimitTerminalFinalizationApprovalStateIsConsistent(
     approval.schemaFingerprint !== evidence.schemaFingerprint ||
     approval.authorizationSource !== 'human-explicit' ||
     approval.humanDecision !== 'finalize-review-limit' ||
-    approval.issue !== '76' ||
+    approval.issue !== (branch === 'feat/issue-69' ? '69' : '76') ||
     approval.finalizationReviewInvocation !== evidence.reviewInvocation ||
     approval.finalizationResult !== evidence.lastCycleResult ||
     approval.consumedAt !== evidence.finalizedAt ||
@@ -7518,7 +7585,7 @@ function recoverPendingReviewLimitTerminalFinalizationTransaction(statePath: str
   if (
     transaction.statePath !== statePath ||
     transaction.approvalPath !== canonicalResumeApprovalPath(statePath) ||
-    transaction.branch !== 'feat/issue-76' ||
+    (transaction.branch !== 'feat/issue-76' && transaction.branch !== 'feat/issue-69') ||
     transaction.base !== 'main' ||
     typeof transaction.approvalId !== 'string' ||
     !(
@@ -7613,7 +7680,7 @@ function validateReviewLimitTerminalFinalizationTransactionSemantics(
     approval.headSha !== evidence.headSha ||
     approval.schemaFingerprint !== evidence.schemaFingerprint ||
     approval.humanDecision !== 'finalize-review-limit' ||
-    approval.issue !== '76' ||
+    approval.issue !== (transaction.branch === 'feat/issue-69' ? '69' : '76') ||
     approval.finalizationReviewInvocation !== maxReviewInvocations ||
     approval.finalizationResult !== 'CHANGES_REQUIRED' ||
     evidence.approvalId !== transaction.approvalId ||
