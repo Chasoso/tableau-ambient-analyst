@@ -2,7 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scenarioById, scenarios, type AnalysisClient, type AnalysisRunEnvelope } from './model.js';
+import {
+  hasValidReplayStateInvariants,
+  scenarioById,
+  scenarios,
+  type AnalysisClient,
+  type AnalysisRunEnvelope,
+} from './model.js';
 import { ApplicationAnalysisClient } from './application.js';
 
 const port = Number(process.env.PORT ?? 4173);
@@ -98,33 +104,9 @@ function validClientResult(
     !['HOLD', 'INTERVENE'].includes(scenario.intervention.decision)
   )
     return false;
-  if (result.status === 'ignored') {
-    if (
-      scenario.trigger.decision !== 'IGNORE' ||
-      scenario.verifier.status !== 'NOT_RUN' ||
-      scenario.intervention !== null
-    )
-      return false;
-  }
-  if (result.status === 'insufficient-evidence') {
-    if (
-      scenario.trigger.decision !== 'ANALYZE' ||
-      scenario.verifier.status !== 'INSUFFICIENT' ||
-      scenario.intervention?.decision !== 'HOLD'
-    )
-      return false;
-  }
-  if (result.status === 'completed') {
-    if (
-      scenario.trigger.decision !== 'ANALYZE' ||
-      scenario.verifier.status !== 'VERIFIED' ||
-      scenario.intervention === null
-    )
-      return false;
-  }
   if (result.status === 'failed' && !scenario.error) return false;
   if (scenario.error !== undefined && result.status !== 'failed') return false;
-  return true;
+  return hasValidReplayStateInvariants(result.status, scenario);
 }
 
 function sanitizeRun(

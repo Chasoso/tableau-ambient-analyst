@@ -77,6 +77,23 @@ not infer a successful embedded smoke test from browser or CI evidence. Any
 request to change organization trust, security, or permission policy remains a
 Human Decision.
 
+## Fault isolation
+
+Use the first failing boundary as the diagnosis boundary:
+
+- Frontend/static failure: the page or debug sections do not render; check the
+  browser console and `/debug-ui/*.js` asset requests.
+- Local API failure: inspect the POST response. `400` indicates request
+  validation, `429` indicates bounded active-run capacity, and `502` indicates
+  a timeout or application flow that failed closed. The API stores at most 32
+  runs in memory and does not persist them across process restarts.
+- Application-flow result: `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` with
+  stages and audit events means transport succeeded; inspect those events and
+  the sanitized result for the failing boundary.
+- Tableau host failure: if standalone browser checks pass but the extension is
+  blank or unavailable, compare the manifest source URL/port and inspect the
+  Desktop log paths above. Do not infer Desktop support from Chromium CI.
+
 ## Compatibility boundary
 
 Tableau's Dashboard Extensions API support baseline is Tableau Desktop 2018.2

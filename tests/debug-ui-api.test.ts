@@ -91,6 +91,29 @@ describe('debug UI analysis API', () => {
     }
   });
 
+  it('fails closed when a replaceable client recommends intervention after failure', async () => {
+    const unsafeClient: AnalysisClient = {
+      replay: async () => ({
+        status: 'failed',
+        scenario: {
+          ...scenarioById('failed'),
+          intervention: { decision: 'INTERVENE' as const, reason: 'unsafe recommendation' },
+        },
+        audit: ['flow.failed'],
+      }),
+    };
+    const { server, base } = await withServer(unsafeClient);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'failed' }),
+      });
+      expect(response.status).toBe(502);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('rejects cross-origin API requests while allowing the same local origin', async () => {
     const { server, base } = await withServer();
     try {
@@ -260,6 +283,16 @@ describe('HttpAnalysisClient response boundary', () => {
     [
       'malformed error',
       (value: Record<string, unknown>) => ((value.scenario as Record<string, unknown>).error = 42),
+    ],
+    [
+      'failed intervention',
+      (value: Record<string, unknown>) => {
+        value.status = 'failed';
+        (value.scenario as Record<string, unknown>).error = 'The application flow failed closed.';
+        (
+          (value.scenario as Record<string, unknown>).intervention as Record<string, unknown>
+        ).decision = 'INTERVENE';
+      },
     ],
   ])('fails closed for %s', async (_label, mutate) => {
     const scenario = scenarioById('verified-intervention');

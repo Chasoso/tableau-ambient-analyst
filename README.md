@@ -194,6 +194,21 @@ for standalone pages. See the [Tableau Desktop extension guide](docs/development
 for the localhost manifest, manual smoke-test steps, configuration boundary,
 and the current **UNVERIFIED** Desktop status.
 
+### Local fault isolation
+
+- If the page does not load, check that `npm run debug:ui` is listening on the
+  manifest URL and that the browser console has no static asset error.
+- A `400` is a malformed request, `429` means the two-run active capacity or
+  32-run in-memory retention bound was reached, and `502` means the application
+  flow failed closed or exceeded its bounded timeout. Refreshing does not
+  recover old in-memory runs.
+- A visible `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` result is an
+  application-flow outcome; inspect its stages and audit timeline rather than
+  treating it as a frontend transport failure.
+- For Tableau-only failures, compare the manifest URL and port first, then
+  inspect the Desktop log paths in the extension guide. Browser/CI success does
+  not establish Desktop success.
+
 ## Validation and CI
 
 GitHub Actions installs with `npm ci`, runs `npm run validate`, provisions

@@ -172,6 +172,42 @@ function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length <= max;
 }
 
+export function hasValidReplayStateInvariants(
+  status: ReplayState['status'],
+  scenario: {
+    trigger: DebugScenario['trigger'];
+    verifier: DebugScenario['verifier'];
+    intervention: DebugScenario['intervention'];
+    error?: string;
+  },
+): boolean {
+  if (status === 'ignored') {
+    return (
+      scenario.trigger.decision === 'IGNORE' &&
+      scenario.verifier.status === 'NOT_RUN' &&
+      scenario.intervention === null &&
+      scenario.error === undefined
+    );
+  }
+  if (status === 'insufficient-evidence') {
+    return (
+      scenario.trigger.decision === 'ANALYZE' &&
+      scenario.verifier.status === 'INSUFFICIENT' &&
+      scenario.intervention?.decision === 'HOLD' &&
+      scenario.error === undefined
+    );
+  }
+  if (status === 'completed') {
+    return (
+      scenario.trigger.decision === 'ANALYZE' &&
+      scenario.verifier.status === 'VERIFIED' &&
+      scenario.intervention !== null &&
+      scenario.error === undefined
+    );
+  }
+  return scenario.intervention === null || scenario.intervention.decision === 'HOLD';
+}
+
 function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
   if (!isRecord(value)) return false;
   if (!isBoundedString(value.runId, 100) || !isBoundedString(value.status, 32)) return false;
@@ -250,7 +286,13 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
     )
       return false;
   }
-  return scenario.error === undefined || isBoundedString(scenario.error, 200);
+  if (scenario.error !== undefined && !isBoundedString(scenario.error, 200)) return false;
+  return hasValidReplayStateInvariants(value.status as ReplayState['status'], {
+    trigger: scenario.trigger as DebugScenario['trigger'],
+    verifier: scenario.verifier as DebugScenario['verifier'],
+    intervention: scenario.intervention as DebugScenario['intervention'],
+    ...(scenario.error !== undefined ? { error: scenario.error as string } : {}),
+  });
 }
 
 export class HttpAnalysisClient implements AnalysisClient {
