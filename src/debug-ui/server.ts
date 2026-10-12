@@ -62,7 +62,10 @@ function boundedText(value: unknown, max: number, fallback: string): string {
   return typeof value === 'string' && value.length <= max ? value : fallback;
 }
 
-function validClientResult(result: Awaited<ReturnType<AnalysisClient['replay']>>): boolean {
+function validClientResult(
+  result: Awaited<ReturnType<AnalysisClient['replay']>>,
+  requestedId: string,
+): boolean {
   if (!['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(result.status))
     return false;
   if (
@@ -72,7 +75,8 @@ function validClientResult(result: Awaited<ReturnType<AnalysisClient['replay']>>
   )
     return false;
   const scenario = result.scenario;
-  if (!scenario || !scenarios.some(({ id }) => id === scenario.id)) return false;
+  if (!scenario || scenario.id !== requestedId || !scenarios.some(({ id }) => id === scenario.id))
+    return false;
   if (
     !Array.isArray(scenario.questions) ||
     scenario.questions.length > 32 ||
@@ -89,9 +93,38 @@ function validClientResult(result: Awaited<ReturnType<AnalysisClient['replay']>>
   )
     return false;
   if (!['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(scenario.verifier.status)) return false;
-  return (
-    scenario.intervention === null || ['HOLD', 'INTERVENE'].includes(scenario.intervention.decision)
-  );
+  if (
+    scenario.intervention !== null &&
+    !['HOLD', 'INTERVENE'].includes(scenario.intervention.decision)
+  )
+    return false;
+  if (result.status === 'ignored') {
+    if (
+      scenario.trigger.decision !== 'IGNORE' ||
+      scenario.verifier.status !== 'NOT_RUN' ||
+      scenario.intervention !== null
+    )
+      return false;
+  }
+  if (result.status === 'insufficient-evidence') {
+    if (
+      scenario.trigger.decision !== 'ANALYZE' ||
+      scenario.verifier.status !== 'INSUFFICIENT' ||
+      scenario.intervention?.decision !== 'HOLD'
+    )
+      return false;
+  }
+  if (result.status === 'completed') {
+    if (
+      scenario.trigger.decision !== 'ANALYZE' ||
+      scenario.verifier.status !== 'VERIFIED' ||
+      scenario.intervention === null
+    )
+      return false;
+  }
+  if (result.status === 'failed' && !scenario.error) return false;
+  if (scenario.error !== undefined && result.status !== 'failed') return false;
+  return true;
 }
 
 function sanitizeRun(
@@ -207,14 +240,8 @@ export function createDebugUiRequestHandler(
           client.replay(scenarioById(body.scenarioId)),
         );
         void runPromise.then(release, release);
-        let runResult: Awaited<ReturnType<AnalysisClient['replay']>>;
-        try {
-          runResult = await withTimeout(runPromise);
-        } catch (error) {
-          release();
-          throw error;
-        }
-        if (!validClientResult(runResult)) {
+        const runResult = await withTimeout(runPromise);
+        if (!validClientResult(runResult, body.scenarioId)) {
           send(response, 502, { error: 'Analysis run failed safely.' });
           return;
         }

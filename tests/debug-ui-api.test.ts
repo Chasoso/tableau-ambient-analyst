@@ -116,10 +116,10 @@ describe('debug UI analysis API', () => {
 
   it('sanitizes replaceable client data and bounds hanging runs', async () => {
     const unsafeClient: AnalysisClient = {
-      replay: async (scenario) => ({
+      replay: async () => ({
         status: 'completed',
         scenario: {
-          ...scenario,
+          ...scenarioById('verified-intervention'),
           evidence: [
             { source: 'secret-provider-token', detail: 'x'.repeat(10_000), provenance: 'secret' },
           ],
@@ -132,12 +132,12 @@ describe('debug UI analysis API', () => {
     try {
       const response = await fetch(`${unsafe.base}/api/analysis-runs`, {
         method: 'POST',
-        body: JSON.stringify({ scenarioId: 'ignored' }),
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
       });
       const body = await response.json();
       expect(body.scenario.evidence[0].source).toBe('local-analysis');
       expect(body.scenario.evidence[0].detail).toBe('Evidence detail unavailable.');
-      expect(body.scenario.utterances).toEqual(scenarioById('ignored').utterances);
+      expect(body.scenario.utterances).toEqual(scenarioById('verified-intervention').utterances);
     } finally {
       await closeServer(unsafe.server);
     }
@@ -145,15 +145,23 @@ describe('debug UI analysis API', () => {
     const timeoutClient: AnalysisClient = { replay: () => new Promise(() => {}) };
     const timed = await withServer(timeoutClient);
     try {
-      const response = await fetch(`${timed.base}/api/analysis-runs`, {
+      const requests = [1, 2].map(() =>
+        fetch(`${timed.base}/api/analysis-runs`, {
+          method: 'POST',
+          body: JSON.stringify({ scenarioId: 'ignored' }),
+        }),
+      );
+      const responses = await Promise.all(requests);
+      expect(responses.map((response) => response.status)).toEqual([502, 502]);
+      const capacity = await fetch(`${timed.base}/api/analysis-runs`, {
         method: 'POST',
         body: JSON.stringify({ scenarioId: 'ignored' }),
       });
-      expect(response.status).toBe(502);
+      expect(capacity.status).toBe(429);
     } finally {
       await closeServer(timed.server);
     }
-  });
+  }, 10_000);
 
   it('fails closed when the real replay boundary receives malformed tool data', async () => {
     const malformed = new ApplicationAnalysisClient((scenarioId) => {
