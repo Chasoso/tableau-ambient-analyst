@@ -1,13 +1,15 @@
 # Tableau Desktop Extension development
 
-Issue #68 loads the existing standalone debug console as a Tableau Dashboard
-Extension. The UI and fixture analysis client remain shared; Tableau-specific
+Issue #69 loads the standalone debug console and its local same-origin Node
+analysis API as a Tableau Dashboard Extension. The UI and application analysis
+client remain shared; Tableau-specific
 initialization is isolated in `src/debug-ui/host-adapter.ts`.
 
 ## Development configuration
 
 1. Install dependencies with `npm ci`.
-2. Start the UI with `npm run debug:ui` (default: `http://localhost:4173`).
+2. Start the UI and local API with `npm run debug:ui` (default:
+   `http://localhost:4173`).
 3. Use [`extensions/ambient-analyst-dev.trex`](../../extensions/ambient-analyst-dev.trex)
    in Tableau Desktop's dashboard Extension object.
 4. Select the local manifest, allow the localhost extension if Tableau asks,
@@ -15,17 +17,28 @@ initialization is isolated in `src/debug-ui/host-adapter.ts`.
 
 The manifest is the environment-specific source configuration. A future
 production manifest should replace only its `<source-location><url>` with the
-approved HTTPS hosting URL; UI and analysis code do not need a production URL
-rewrite. The development manifest requests no full-data permission because this
-Issue does not access workbook data.
+approved HTTPS hosting URL. The browser continues using relative `/api`
+requests, so the future HTTPS host or approved reverse proxy must route `/api`
+to the backend and enforce the approved origin/CORS policy. UI and analysis
+code do not hardcode an AWS URL. The development manifest requests no full-data
+permission because this Issue does not access workbook data.
 
 ## Host boundary
+
+The local API permits only an explicit HTTP loopback origin (`localhost`,
+`127.0.0.1`, or `::1`) on the request's loopback port. The two loopback
+hostnames may differ because both are explicitly constrained to loopback; it
+does not derive trust from an arbitrary `Host` header and rejects
+non-loopback or mismatched-port pairs with `403`.
 
 The browser adapter treats a top-level page as `standalone` and does not load
 or initialize Tableau there. In an embedded frame it loads the Tableau
 Extensions API library only for that host, calls `tableau.extensions.initializeAsync()`,
 and reports `tableau`, `tableau-unavailable`, or `tableau-error` status. The
-standalone fixture replay remains usable when Tableau globals are absent.
+standalone replay remains usable when Tableau globals are absent. Both hosts
+call the same local API and application-layer replay path. The API uses
+bounded in-memory results and safe error responses, so failed runs do not
+expose provider/tool payloads or affect the host page.
 
 The adapter is intentionally not a View Action implementation. Worksheet,
 filter, and parameter operations remain in the future #71 boundary. No live
@@ -43,7 +56,7 @@ On a supported Tableau Desktop installation:
 3. Add a Dashboard Extension object and select the development `.trex` file.
 4. If prompted, explicitly approve the localhost/trust permission for this
    test extension. Record the exact prompt and Desktop version.
-5. Confirm the debug console renders, choose a deterministic fixture, and run
+5. Confirm the debug console renders, choose a deterministic scenario, and run
    Replay. Confirm the visible status, stages, evidence, and mock intervention
    behavior match the standalone browser.
 6. Remove the extension or restore the original dashboard state after testing.
@@ -69,6 +82,29 @@ If Desktop or the safe test workbook is unavailable, record `UNVERIFIED`; do
 not infer a successful embedded smoke test from browser or CI evidence. Any
 request to change organization trust, security, or permission policy remains a
 Human Decision.
+
+## Fault isolation
+
+Use the first failing boundary as the diagnosis boundary:
+
+- Frontend/static failure: the page or debug sections do not render; check the
+  browser console and `/debug-ui/*.js` asset requests.
+- Local API failure: inspect the POST response. `400` indicates request
+  validation, `429` indicates bounded active-run capacity, and `502` indicates
+  a timeout or application flow that failed closed. The API stores at most 32
+  runs in memory, evicts the oldest run beyond that bound (`GET` then returns
+  `404`), and does not persist runs across process restarts.
+- A timeout response does not release an active-run slot while its underlying
+  analysis remains pending. With both slots occupied, new POST requests receive
+  `429`; capacity recovers only after the underlying promise settles. A
+  permanently pending operation therefore remains fail-closed until it settles
+  or the local service is restarted.
+- Application-flow result: `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` with
+  stages and audit events means transport succeeded; inspect those events and
+  the sanitized result for the failing boundary.
+- Tableau host failure: if standalone browser checks pass but the extension is
+  blank or unavailable, compare the manifest source URL/port and inspect the
+  Desktop log paths above. Do not infer Desktop support from Chromium CI.
 
 ## Compatibility boundary
 

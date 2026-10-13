@@ -33,6 +33,8 @@ export interface AnalysisClient {
   replay(scenario: DebugScenario): Promise<ReplayState>;
 }
 
+export type AnalysisRunEnvelope = ReplayState & { runId: string };
+
 export const scenarios: readonly DebugScenario[] = [
   {
     id: 'verified-intervention',
@@ -77,7 +79,10 @@ export const scenarios: readonly DebugScenario[] = [
     description: 'A positive trigger where required evidence remains unresolved.',
     utterances: [
       { speaker: 'Morgan', text: 'Revenue fell after the price change.' },
-      { speaker: 'Aki', text: 'We should roll back based on that result.' },
+      {
+        speaker: 'Aki',
+        text: 'We should decide whether to roll back based on the price-change assumption.',
+      },
     ],
     trigger: {
       decision: 'ANALYZE',
@@ -150,15 +155,247 @@ export class FixtureAnalysisClient implements AnalysisClient {
         : scenario.verifier.status === 'INSUFFICIENT'
           ? 'insufficient-evidence'
           : 'completed';
-    return {
-      status,
-      scenario,
-      audit: [
-        'replay.started',
-        `trigger.${scenario.trigger.decision.toLowerCase()}`,
-        ...(scenario.error ? ['flow.failed'] : ['analysis.completed', 'audit.recorded']),
-      ],
-    };
+    const audit = [
+      'replay.started',
+      scenario.error
+        ? 'flow-failed'
+        : scenario.trigger.decision === 'IGNORE'
+          ? 'trigger-ignored'
+          : 'trigger-detected',
+      ...(status === 'completed'
+        ? [
+            'analysis-contract-created',
+            'tableau-analysis-started',
+            'evidence-collected',
+            'verification-complete',
+            'intervention-recommended',
+          ]
+        : status === 'insufficient-evidence'
+          ? [
+              'analysis-contract-created',
+              'tableau-analysis-started',
+              'evidence-collected',
+              'verification-insufficient',
+              'intervention-hold',
+            ]
+          : []),
+    ];
+    return { status, scenario, audit };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max;
+}
+
+export function hasValidReplayStateInvariants(
+  status: ReplayState['status'],
+  scenario: {
+    trigger: DebugScenario['trigger'];
+    verifier: DebugScenario['verifier'];
+    intervention: DebugScenario['intervention'];
+    error?: string;
+  },
+): boolean {
+  if (status === 'ignored') {
+    return (
+      scenario.trigger.decision === 'IGNORE' &&
+      scenario.verifier.status === 'NOT_RUN' &&
+      scenario.intervention === null &&
+      scenario.error === undefined
+    );
+  }
+  if (status === 'insufficient-evidence') {
+    return (
+      scenario.trigger.decision === 'ANALYZE' &&
+      scenario.verifier.status === 'INSUFFICIENT' &&
+      scenario.intervention?.decision === 'HOLD' &&
+      scenario.error === undefined
+    );
+  }
+  if (status === 'completed') {
+    return (
+      scenario.trigger.decision === 'ANALYZE' &&
+      scenario.verifier.status === 'VERIFIED' &&
+      scenario.intervention?.decision === 'INTERVENE' &&
+      scenario.error === undefined
+    );
+  }
+  return scenario.intervention === null || scenario.intervention.decision === 'HOLD';
+}
+
+const replayStageNames = [
+  'Trigger',
+  'Analysis Contract',
+  'Analysis',
+  'Evidence',
+  'Verifier',
+  'Intervention',
+] as const;
+
+export function hasValidReplayTraceInvariants(
+  status: ReplayState['status'],
+  scenario: Pick<DebugScenario, 'stages'> & Parameters<typeof hasValidReplayStateInvariants>[1],
+  audit: readonly string[],
+): boolean {
+  if (!hasValidReplayStateInvariants(status, scenario)) return false;
+  const stages = new Map(scenario.stages.map((stage) => [stage.name, stage.status]));
+  if (replayStageNames.some((name) => !stages.has(name))) return false;
+
+  const requiredAuditByStatus: Record<ReplayState['status'], readonly string[]> = {
+    completed: [
+      'trigger-detected',
+      'analysis-contract-created',
+      'tableau-analysis-started',
+      'evidence-collected',
+      'verification-complete',
+      'intervention-recommended',
+    ],
+    'insufficient-evidence': [
+      'trigger-detected',
+      'analysis-contract-created',
+      'tableau-analysis-started',
+      'evidence-collected',
+      'verification-insufficient',
+      'intervention-hold',
+    ],
+    ignored: ['trigger-ignored'],
+    failed: [],
+  };
+  if (status === 'failed') {
+    if (!audit.includes('flow-failed') && !audit.includes('flow.failed')) return false;
+  } else if (requiredAuditByStatus[status].some((event) => !audit.includes(event))) {
+    return false;
+  }
+
+  if (status === 'completed' || status === 'insufficient-evidence') {
+    return replayStageNames.every((name) => stages.get(name) === 'complete');
+  }
+  if (status === 'ignored') {
+    return (
+      stages.get('Trigger') === 'complete' &&
+      replayStageNames.slice(1).every((name) => stages.get(name) === 'skipped')
+    );
+  }
+  return replayStageNames.some((name) => stages.get(name) === 'failed');
+}
+
+function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.runId, 100) || !isBoundedString(value.status, 32)) return false;
+  if (!['completed', 'failed', 'ignored', 'insufficient-evidence'].includes(value.status))
+    return false;
+  if (!Array.isArray(value.audit) || value.audit.length > 64) return false;
+  if (!value.audit.every((item) => isBoundedString(item, 200))) return false;
+
+  const scenario = value.scenario;
+  if (!isRecord(scenario)) return false;
+  if (
+    !isBoundedString(scenario.id, 100) ||
+    !scenarios.some(({ id }) => id === scenario.id) ||
+    !isBoundedString(scenario.name, 200) ||
+    !isBoundedString(scenario.description, 500)
+  )
+    return false;
+
+  if (!Array.isArray(scenario.utterances) || scenario.utterances.length > 100) return false;
+  if (
+    !scenario.utterances.every(
+      (item) =>
+        isRecord(item) && isBoundedString(item.speaker, 100) && isBoundedString(item.text, 500),
+    )
+  )
+    return false;
+
+  const trigger = scenario.trigger;
+  if (
+    !isRecord(trigger) ||
+    !['ANALYZE', 'IGNORE'].includes(trigger.decision as string) ||
+    !isBoundedString(trigger.reason, 100) ||
+    (trigger.claim !== undefined && !isBoundedString(trigger.claim, 300))
+  )
+    return false;
+
+  if (!Array.isArray(scenario.questions) || scenario.questions.length > 8) return false;
+  if (!scenario.questions.every((item) => isBoundedString(item, 300))) return false;
+
+  if (!Array.isArray(scenario.evidence) || scenario.evidence.length > 20) return false;
+  if (
+    !scenario.evidence.every(
+      (item) =>
+        isRecord(item) &&
+        isBoundedString(item.source, 100) &&
+        isBoundedString(item.detail, 500) &&
+        isBoundedString(item.provenance, 100),
+    )
+  )
+    return false;
+
+  if (!isRecord(scenario.verifier)) return false;
+  if (
+    !['VERIFIED', 'INSUFFICIENT', 'NOT_RUN'].includes(scenario.verifier.status as string) ||
+    !isBoundedString(scenario.verifier.detail, 500)
+  )
+    return false;
+
+  if (!Array.isArray(scenario.stages) || scenario.stages.length > 16) return false;
+  if (
+    !scenario.stages.every(
+      (item) =>
+        isRecord(item) &&
+        isBoundedString(item.name, 100) &&
+        ['pending', 'active', 'complete', 'failed', 'skipped'].includes(item.status as string) &&
+        isBoundedString(item.detail, 500),
+    )
+  )
+    return false;
+
+  if (scenario.intervention !== null) {
+    if (!isRecord(scenario.intervention)) return false;
+    if (
+      !['HOLD', 'INTERVENE'].includes(scenario.intervention.decision as string) ||
+      !isBoundedString(scenario.intervention.reason, 500)
+    )
+      return false;
+  }
+  if (scenario.error !== undefined && !isBoundedString(scenario.error, 200)) return false;
+  return hasValidReplayTraceInvariants(
+    value.status as ReplayState['status'],
+    {
+      trigger: scenario.trigger as DebugScenario['trigger'],
+      verifier: scenario.verifier as DebugScenario['verifier'],
+      intervention: scenario.intervention as DebugScenario['intervention'],
+      stages: scenario.stages as DebugScenario['stages'],
+      ...(scenario.error !== undefined ? { error: scenario.error as string } : {}),
+    },
+    value.audit as string[],
+  );
+}
+
+export class HttpAnalysisClient implements AnalysisClient {
+  constructor(private readonly baseUrl = '') {}
+
+  async replay(scenario: DebugScenario): Promise<ReplayState> {
+    const response = await fetch(`${this.baseUrl}/api/analysis-runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scenarioId: scenario.id }),
+    });
+    if (!response.ok) throw new Error('ANALYSIS_RUN_REQUEST_FAILED');
+    let value: unknown;
+    try {
+      value = await response.json();
+    } catch {
+      throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
+    }
+    if (!isAnalysisRunEnvelope(value) || value.scenario.id !== scenario.id) {
+      throw new Error('ANALYSIS_RUN_RESPONSE_INVALID');
+    }
+    return value;
   }
 }
 

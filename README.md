@@ -167,17 +167,31 @@ npm ci
 npm run debug:ui
 ```
 
-Open the printed `http://localhost:4173` URL. Select a fixture scenario and
+Open the printed `http://localhost:4173` URL. Select a deterministic scenario and
 choose `Replay` to inspect transcript, trigger, Analysis Contract questions,
 progress, evidence/provenance, verifier state, intervention, errors, and the
-audit timeline. The console uses a fixture-driven mock client only: it does
-not require Tableau, credentials, an LLM, or a live network service. Set
+audit timeline. The browser calls the same-origin local Node API, which runs
+the existing transcript intervention flow with deterministic no-network model
+and tool boundaries. Results are sanitized and retained only in memory (up to
+32 runs), so refresh and repeated runs are bounded. It does not require
+Tableau, credentials, an LLM, or a live network service. Set
 `PORT=4300` (or `$env:PORT = 4300` in PowerShell) to use another local port.
 
 The browser-facing model is host-independent and keeps the future Tableau
-adapter behind the small `AnalysisClient` boundary. The `INTERVENE` fixture
+adapter behind the small `AnalysisClient` boundary. The `INTERVENE` scenario
 shows a deterministic `!` badge; it records a mock debug event only and never
 invokes Tableau APIs or mutates a dashboard.
+
+The local API accepts browser origins only when both the request `Host` and
+the `Origin` are explicit HTTP loopback addresses (`localhost`, `127.0.0.1`,
+or `::1`) on the same port. The two loopback hostnames may differ because
+both are explicitly constrained to loopback; non-loopback or mismatched-port
+origins fail closed with `403`.
+
+For a future AWS HTTPS deployment, the browser continues using relative `/api`
+paths. The approved HTTPS host or reverse proxy must route those paths to the
+backend and enforce the approved origin/CORS policy; no deployment URL or
+production credential is hardcoded by this Issue.
 
 The same page can be loaded as a Tableau Dashboard Extension with the
 development manifest at [`extensions/ambient-analyst-dev.trex`](extensions/ambient-analyst-dev.trex).
@@ -185,6 +199,26 @@ Tableau-specific initialization is isolated in the host adapter and is skipped
 for standalone pages. See the [Tableau Desktop extension guide](docs/development/tableau-extension.md)
 for the localhost manifest, manual smoke-test steps, configuration boundary,
 and the current **UNVERIFIED** Desktop status.
+
+### Local fault isolation
+
+- If the page does not load, check that `npm run debug:ui` is listening on the
+  manifest URL and that the browser console has no static asset error.
+- A `400` is a malformed request, `429` means the two-run active capacity was
+  reached, and `502` means the application flow failed closed or exceeded its
+  bounded timeout. Retention evicts the oldest run; a later GET for that run
+  returns `404`. Refreshing does not recover old in-memory runs.
+- A timeout response does not release an active-run slot while the underlying
+  analysis is still pending. If both slots remain pending, new POST requests
+  receive `429`; a slot becomes available only after its underlying promise
+  settles. A permanently pending operation therefore fails closed until it
+  settles or the local service is restarted.
+- A visible `FAILED`, `IGNORED`, or `INSUFFICIENT EVIDENCE` result is an
+  application-flow outcome; inspect its stages and audit timeline rather than
+  treating it as a frontend transport failure.
+- For Tableau-only failures, compare the manifest URL and port first, then
+  inspect the Desktop log paths in the extension guide. Browser/CI success does
+  not establish Desktop success.
 
 ## Validation and CI
 

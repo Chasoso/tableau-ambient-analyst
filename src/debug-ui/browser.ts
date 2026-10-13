@@ -1,5 +1,5 @@
 import {
-  FixtureAnalysisClient,
+  HttpAnalysisClient,
   recordMockInterventionEvent,
   scenarioById,
   scenarios,
@@ -8,7 +8,7 @@ import {
 } from './model.js';
 import { initializeTableauHost } from './host-adapter.js';
 
-const client = new FixtureAnalysisClient();
+const client = new HttpAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run')!;
 const status = document.querySelector<HTMLElement>('#status')!;
@@ -156,9 +156,18 @@ runButton.addEventListener('click', async () => {
   runButton.disabled = true;
   status.textContent = 'RUNNING';
   status.dataset.status = 'running';
-  await new Promise((resolve) => setTimeout(resolve, 120));
-  render(await client.replay(selectedScenario()));
-  runButton.disabled = false;
+  try {
+    render(await client.replay(selectedScenario()));
+  } catch {
+    status.textContent = 'FAILED';
+    status.dataset.status = 'failed';
+    const error = document.createElement('p');
+    error.className = 'error';
+    error.textContent = 'The local analysis service could not complete this run.';
+    content.replaceChildren(error);
+  } finally {
+    runButton.disabled = false;
+  }
 });
 
 renderIdle(selectedScenario());

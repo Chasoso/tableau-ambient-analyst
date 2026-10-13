@@ -26,12 +26,21 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.locator('[data-testid="run-status"]')).toHaveText('COMPLETED');
     const analysisStage = page
       .locator('.stages li')
-      .filter({ hasText: 'Fixture analysis completed.' });
+      .filter({ hasText: 'Derived from the agentic analysis boundary.' });
     await expect(analysisStage).toHaveAttribute('data-status', 'complete');
     await expect(analysisStage).toContainText('Analysis');
-    await expect(page.getByText('Baseline conversion: 12%', { exact: true })).toBeVisible();
     await expect(
-      page.getByText('VERIFIED: Required evidence is complete and contradictory.', { exact: true }),
+      page
+        .getByText(
+          'Deterministic fixture evidence was collected through the application boundary.',
+          {
+            exact: true,
+          },
+        )
+        .first(),
+    ).toBeVisible();
+    await expect(
+      page.getByText('VERIFIED: Verification completed.', { exact: true }),
     ).toBeVisible();
     await expect(page.getByText('INTERVENE:', { exact: false })).toBeVisible();
     const badge = page.getByTestId('intervention-badge');
@@ -77,7 +86,9 @@ test.describe('Ambient Analyst debug console', () => {
       'data-status',
       'failed',
     );
-    await expect(page.getByText('FIXTURE_INVALID:', { exact: false })).toBeVisible();
+    await expect(
+      page.getByText('The application flow failed closed.', { exact: true }),
+    ).toBeVisible();
   });
 
   test('clears intervention state when changing scenarios and replaying again', async ({
