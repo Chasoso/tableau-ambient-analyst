@@ -56,7 +56,12 @@ export type ViewActionValidation =
 export type ViewActionReceipt = {
   proposal: ViewActionProposal;
   previous:
-    | { type: 'filter'; target: SetFilterAction['target']; values: readonly string[] }
+    | {
+        type: 'filter';
+        target: SetFilterAction['target'];
+        values: readonly ViewActionScalar[];
+        allSelected: boolean;
+      }
     | { type: 'parameter'; target: SetParameterAction['target']; value: ViewActionScalar };
 };
 
@@ -294,7 +299,12 @@ export class MockViewActionAdapter implements ViewActionAdapter {
       this.applied.push(proposal);
       return {
         proposal,
-        previous: { type: 'filter', target: proposal.action.target, values: previous },
+        previous: {
+          type: 'filter',
+          target: proposal.action.target,
+          values: previous,
+          allSelected: false,
+        },
       };
     }
     const key = proposal.action.target.name;
@@ -312,7 +322,7 @@ export class MockViewActionAdapter implements ViewActionAdapter {
     if (receipt.previous.type === 'filter') {
       const key = `${receipt.previous.target.worksheet}.${receipt.previous.target.field}`;
       if (!this.state.filters[key]) throw new ViewActionFailure('STALE_FILTER_TARGET', false);
-      this.state.filters[key] = [...receipt.previous.values];
+      this.state.filters[key] = receipt.previous.values.map(String);
     } else {
       if (this.state.parameters[receipt.previous.target.name] === undefined) {
         throw new ViewActionFailure('STALE_PARAMETER_TARGET', false);
@@ -347,6 +357,7 @@ export type TableauWorksheet = {
     values: readonly string[],
     updateType: unknown,
   ) => Promise<void>;
+  clearFilterAsync?: (field: string) => Promise<void>;
 };
 
 export type TableauParameter = {
@@ -536,17 +547,22 @@ function scalarFrom(value: unknown): ViewActionScalar | undefined {
   return undefined;
 }
 
-async function currentFilterValues(filter: TableauFilter): Promise<string[]> {
+async function currentFilterState(
+  filter: TableauFilter,
+): Promise<{ values: ViewActionScalar[]; allSelected: boolean }> {
   const values = filter.getAppliedValues ? await filter.getAppliedValues() : filter.appliedValues;
   if (!values || values.length > 32) throw new ViewActionFailure('FILTER_STATE_UNAVAILABLE', false);
   const normalized = values.map(scalarFrom);
   if (normalized.some((value) => value === undefined)) {
     throw new ViewActionFailure('FILTER_STATE_UNAVAILABLE', false);
   }
-  return normalized.map(String);
+  return { values: normalized as ViewActionScalar[], allSelected: values.length === 0 };
 }
 
-function hasSameValues(left: readonly string[], right: readonly string[]): boolean {
+function hasSameValues(
+  left: readonly ViewActionScalar[],
+  right: readonly ViewActionScalar[],
+): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
@@ -594,7 +610,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         (candidate) => candidate.fieldName === action.target.field,
       );
       if (!filter) throw new ViewActionFailure('FILTER_NOT_FOUND', false);
-      const previous = await currentFilterValues(filter);
+      const previous = await currentFilterState(filter);
       const domain = await filterDomainValues(filter);
       if (action.values.some((value) => !domain.some((candidate) => sameValue(candidate, value)))) {
         throw new ViewActionFailure('FILTER_VALUE_NOT_CURRENTLY_SUPPORTED', false);
@@ -611,7 +627,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       }
       return {
         proposal,
-        previous: { type: 'filter', target: action.target, values: previous },
+        previous: { type: 'filter', target: action.target, ...previous },
       };
     }
     const parameter = (await this.api.dashboard.getParametersAsync()).find(
@@ -647,23 +663,35 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         (candidate) => candidate.fieldName === previous.target.field,
       );
       if (!filter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
-      const current = await currentFilterValues(filter);
+      const current = await currentFilterState(filter);
       const expected = receipt.proposal.action;
-      if (expected.type !== 'set-filter' || !hasSameValues(current, expected.values.map(String))) {
+      if (
+        expected.type !== 'set-filter' ||
+        current.allSelected ||
+        !hasSameValues(current.values, expected.values)
+      ) {
         throw new ViewActionFailure('UNDO_EXTERNAL_STATE_DIVERGED', true);
       }
       const domain = await filterDomainValues(filter);
       if (
+        !previous.allSelected &&
         previous.values.some((value) => !domain.some((candidate) => sameValue(candidate, value)))
       ) {
         throw new ViewActionFailure('UNDO_PREVIOUS_VALUE_UNAVAILABLE', true);
       }
       try {
-        await worksheet.applyFilterAsync(
-          previous.target.field,
-          [...previous.values],
-          this.api.filterUpdateTypeReplace,
-        );
+        if (previous.allSelected) {
+          if (!worksheet.clearFilterAsync) {
+            throw new ViewActionFailure('FILTER_ALL_RESTORE_UNAVAILABLE', true);
+          }
+          await worksheet.clearFilterAsync(previous.target.field);
+        } else {
+          await worksheet.applyFilterAsync(
+            previous.target.field,
+            previous.values.map(String),
+            this.api.filterUpdateTypeReplace,
+          );
+        }
       } catch {
         throw new ViewActionFailure('FILTER_UNDO_PARTIAL_OR_UNKNOWN', true);
       }

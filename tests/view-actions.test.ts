@@ -305,7 +305,12 @@ describe('validated view action boundary', () => {
     adapter.undo = vi.fn(async () => {
       await originalUndo({
         proposal: filterProposal,
-        previous: { type: 'filter', target: filterTarget, values: ['Unexpected'] },
+        previous: {
+          type: 'filter',
+          target: filterTarget,
+          values: ['Unexpected'],
+          allSelected: false,
+        },
       });
       throw new ViewActionFailure('UNDO_UNKNOWN', true);
     });
@@ -377,6 +382,75 @@ describe('validated view action boundary', () => {
         ],
       } as unknown as ViewActionPolicy),
     ).toEqual({ ok: false, error: 'View action configuration is malformed.' });
+  });
+
+  it('restores typed filter values and All selection through the supported API', async () => {
+    let typedValues: string[] = ['1'];
+    const typedApply = vi.fn(async (_field: string, values: readonly string[]) => {
+      typedValues = [...values];
+    });
+    const typedWorksheet = {
+      name: 'Typed',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Score',
+          getAppliedValues: async () => typedValues.map(Number),
+          getDomainAsync: async () => ({ values: [1, 2] }),
+        },
+      ],
+      applyFilterAsync: typedApply,
+    };
+    const typedAdapter = new TableauViewActionAdapter({
+      dashboard: { worksheets: [typedWorksheet], getParametersAsync: async () => [] },
+      filterUpdateTypeReplace: 'REPLACE',
+    });
+    const typedProposal = {
+      ...filterProposal,
+      action: {
+        type: 'set-filter' as const,
+        target: { kind: 'worksheet-field' as const, worksheet: 'Typed', field: 'Score' },
+        values: [2],
+      },
+    };
+    const typedReceipt = await typedAdapter.apply(typedProposal);
+    await typedAdapter.undo(typedReceipt);
+    expect(typedApply).toHaveBeenLastCalledWith('Score', ['1'], 'REPLACE');
+
+    let allValues: string[] = [];
+    const clearFilterAsync = vi.fn(async () => {
+      allValues = [];
+    });
+    const allApply = vi.fn(async (_field: string, values: readonly string[]) => {
+      allValues = [...values];
+    });
+    const allWorksheet = {
+      name: 'AllState',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Region',
+          getAppliedValues: async () => allValues,
+          getDomainAsync: async () => ({ values: ['East', 'West'] }),
+        },
+      ],
+      applyFilterAsync: allApply,
+      clearFilterAsync,
+    };
+    const allAdapter = new TableauViewActionAdapter({
+      dashboard: { worksheets: [allWorksheet], getParametersAsync: async () => [] },
+      filterUpdateTypeReplace: 'REPLACE',
+    });
+    const allProposal = {
+      ...filterProposal,
+      action: {
+        type: 'set-filter' as const,
+        target: { kind: 'worksheet-field' as const, worksheet: 'AllState', field: 'Region' },
+        values: ['West'],
+      },
+    };
+    const allReceipt = await allAdapter.apply(allProposal);
+    await allAdapter.undo(allReceipt);
+    expect(clearFilterAsync).toHaveBeenCalledWith('Region');
+    expect(allApply).toHaveBeenCalledWith('Region', ['West'], 'REPLACE');
   });
 });
 
