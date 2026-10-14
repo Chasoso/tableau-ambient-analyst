@@ -410,7 +410,7 @@ export type TableauWorksheet = {
     values: readonly string[],
     updateType: unknown,
   ) => Promise<void>;
-  clearFiltersAsync?: (field: string) => Promise<void>;
+  clearFilterAsync?: (field: string) => Promise<void>;
 };
 
 export type TableauParameter = {
@@ -602,14 +602,14 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     globalThis as unknown as {
       tableau?: {
         extensions?: { dashboardContent?: { dashboard?: TableauDashboard } };
-        FilterUpdateType?: { REPLACE?: unknown };
-        FilterType?: { CATEGORICAL?: unknown };
+        FilterUpdateType?: { Replace?: unknown };
+        FilterType?: { Categorical?: unknown };
       };
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
-  const filterUpdateTypeReplace = tableau?.FilterUpdateType?.REPLACE;
-  const filterTypeCategorical = tableau?.FilterType?.CATEGORICAL;
+  const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
+  const filterTypeCategorical = tableau?.FilterType?.Categorical;
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
@@ -788,10 +788,10 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       }
       try {
         if (previous.allSelected) {
-          if (!worksheet.clearFiltersAsync) {
+          if (!worksheet.clearFilterAsync) {
             throw new ViewActionFailure('FILTER_ALL_RESTORE_UNAVAILABLE', true);
           }
-          await worksheet.clearFiltersAsync(previous.target.field);
+          await worksheet.clearFilterAsync(previous.target.field);
         } else {
           await worksheet.applyFilterAsync(
             previous.target.field,

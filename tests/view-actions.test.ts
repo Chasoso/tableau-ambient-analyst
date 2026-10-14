@@ -5,6 +5,7 @@ import {
   ViewActionController,
   ViewActionFailure,
   approvedViewActionConfigurationFromGlobal,
+  tableauViewActionApiFromGlobal,
   validateViewActionProposal,
   type ViewActionEligibility,
   type ViewActionPolicy,
@@ -194,7 +195,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: vi.fn(async () => [
         {
           fieldName: 'Region',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           isAllSelected: false,
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
@@ -221,8 +222,8 @@ describe('validated view action boundary', () => {
           worksheets: [worksheet],
           getParametersAsync: async () => [parameter],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('Orders', 'Region', 'string', ['West'], 'Threshold'),
     );
@@ -234,10 +235,10 @@ describe('validated view action boundary', () => {
         values: ['West'],
       },
     });
-    expect(applyFilterAsync).toHaveBeenCalledWith('Region', ['West'], 'REPLACE');
+    expect(applyFilterAsync).toHaveBeenCalledWith('Region', ['West'], 'replace');
     filterState = ['West'];
     await adapter.undo(filterReceipt);
-    expect(applyFilterAsync).toHaveBeenLastCalledWith('Region', ['East'], 'REPLACE');
+    expect(applyFilterAsync).toHaveBeenLastCalledWith('Region', ['East'], 'replace');
     const parameterReceipt = await adapter.apply(parameterProposalWith('Threshold'));
     expect(changeValueAsync).toHaveBeenCalledWith(1);
     expect(parameterState).toBe(1);
@@ -252,7 +253,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           isAllSelected: false,
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East'] }),
@@ -267,8 +268,8 @@ describe('validated view action boundary', () => {
           worksheets: [worksheet],
           getParametersAsync: async () => [],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -292,7 +293,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           isAllSelected: false,
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
@@ -307,8 +308,8 @@ describe('validated view action boundary', () => {
           worksheets: [worksheet],
           getParametersAsync: async () => [],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -345,8 +346,8 @@ describe('validated view action boundary', () => {
         worksheets: [worksheet],
         getParametersAsync: async () => [],
       },
-      filterUpdateTypeReplace: 'REPLACE',
-      filterTypeCategorical: 'CATEGORICAL',
+      filterUpdateTypeReplace: 'replace',
+      filterTypeCategorical: 'categorical',
     };
     const adapter = new TableauViewActionAdapter(
       api,
@@ -415,7 +416,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           isAllSelected: false,
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West', 'South'] }),
@@ -430,8 +431,8 @@ describe('validated view action boundary', () => {
           worksheets: [worksheet],
           getParametersAsync: async () => [],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -557,6 +558,32 @@ describe('validated view action boundary', () => {
     ).toEqual({ ok: false, error: 'View action configuration is malformed.' });
   });
 
+  it('resolves the exact Tableau enum members from the host global', () => {
+    const host = globalThis as typeof globalThis & { tableau?: unknown };
+    const original = host.tableau;
+    try {
+      host.tableau = {
+        FilterType: { Categorical: 'categorical' },
+        FilterUpdateType: { Replace: 'replace' },
+        extensions: {
+          dashboardContent: {
+            dashboard: {
+              name: 'fixture-dashboard',
+              worksheets: [],
+              getParametersAsync: async () => [],
+            },
+          },
+        },
+      };
+      expect(tableauViewActionApiFromGlobal()).toMatchObject({
+        filterTypeCategorical: 'categorical',
+        filterUpdateTypeReplace: 'replace',
+      });
+    } finally {
+      host.tableau = original;
+    }
+  });
+
   it('rejects a complete malformed target before any Tableau API call', async () => {
     const getFiltersAsync = vi.fn(async () => []);
     const applyFilterAsync = vi.fn(async () => undefined);
@@ -568,8 +595,8 @@ describe('validated view action boundary', () => {
           worksheets: [{ name: 'Orders', getFiltersAsync, applyFilterAsync }],
           getParametersAsync,
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       {
         ...policy,
@@ -604,7 +631,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Score',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           isAllSelected: false,
           getAppliedValues: async () => typedValues.map(Number),
           getDomainAsync: async () => ({ values: [1, 2] }),
@@ -619,8 +646,8 @@ describe('validated view action boundary', () => {
           worksheets: [typedWorksheet],
           getParametersAsync: async () => [],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('Typed', 'Score', 'number', [1, 2]),
     );
@@ -634,10 +661,10 @@ describe('validated view action boundary', () => {
     };
     const typedReceipt = await typedAdapter.apply(typedProposal);
     await typedAdapter.undo(typedReceipt);
-    expect(typedApply).toHaveBeenLastCalledWith('Score', ['1'], 'REPLACE');
+    expect(typedApply).toHaveBeenLastCalledWith('Score', ['1'], 'replace');
 
     let allValues: string[] = [];
-    const clearFiltersAsync = vi.fn(async () => {
+    const clearFilterAsync = vi.fn(async () => {
       allValues = [];
     });
     const allApply = vi.fn(async (_field: string, values: readonly string[]) => {
@@ -648,7 +675,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
-          filterType: 'CATEGORICAL',
+          filterType: 'categorical',
           get isAllSelected() {
             return allValues.length === 0;
           },
@@ -657,7 +684,7 @@ describe('validated view action boundary', () => {
         },
       ],
       applyFilterAsync: allApply,
-      clearFiltersAsync,
+      clearFilterAsync,
     };
     const allAdapter = new TableauViewActionAdapter(
       {
@@ -666,8 +693,8 @@ describe('validated view action boundary', () => {
           worksheets: [allWorksheet],
           getParametersAsync: async () => [],
         },
-        filterUpdateTypeReplace: 'REPLACE',
-        filterTypeCategorical: 'CATEGORICAL',
+        filterUpdateTypeReplace: 'replace',
+        filterTypeCategorical: 'categorical',
       },
       filterPolicy('AllState', 'Region', 'string', ['East', 'West']),
     );
@@ -681,8 +708,8 @@ describe('validated view action boundary', () => {
     };
     const allReceipt = await allAdapter.apply(allProposal);
     await allAdapter.undo(allReceipt);
-    expect(clearFiltersAsync).toHaveBeenCalledWith('Region');
-    expect(allApply).toHaveBeenCalledWith('Region', ['West'], 'REPLACE');
+    expect(clearFilterAsync).toHaveBeenCalledWith('Region');
+    expect(allApply).toHaveBeenCalledWith('Region', ['West'], 'replace');
   });
 });
 
