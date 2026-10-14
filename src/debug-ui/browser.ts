@@ -16,6 +16,7 @@ import {
   type ViewActionPolicy,
   type ViewActionProposal,
   type ViewActionAdapter,
+  isViewActionEligible,
 } from './view-actions.js';
 
 const client = new HttpAnalysisClient();
@@ -173,7 +174,7 @@ function render(state: ReplayState): void {
   const intervention = document.createElement('div');
   if (scenario.intervention) {
     intervention.append(text(`${scenario.intervention.decision}: ${scenario.intervention.reason}`));
-    if (scenario.intervention.decision === 'INTERVENE') {
+    if (scenario.intervention.decision === 'INTERVENE' && isViewActionEligible(state)) {
       const badge = document.createElement('button');
       badge.className = 'intervention-badge';
       badge.dataset.testid = 'intervention-badge';

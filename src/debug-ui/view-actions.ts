@@ -111,7 +111,7 @@ function isBoundedName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 200;
 }
 
-function isEligible(state: ViewActionEligibility): boolean {
+export function isViewActionEligible(state: ViewActionEligibility): boolean {
   return (
     state.status === 'completed' &&
     state.scenario.error === undefined &&
@@ -155,16 +155,22 @@ export function validateViewActionProposal(
   proposal: ViewActionProposal,
   policy: ViewActionPolicy,
 ): ViewActionValidation {
-  if (!isEligible(state)) return { ok: false, error: 'No verified intervention is actionable.' };
-  const policyError = validatePolicy(policy);
+  const parsedPolicy = parsePolicy(policy);
+  const parsedProposal = parseProposal(proposal);
+  if (!parsedPolicy || !parsedProposal) {
+    return { ok: false, error: 'View action configuration is malformed.' };
+  }
+  if (!isViewActionEligible(state))
+    return { ok: false, error: 'No verified intervention is actionable.' };
+  const policyError = validatePolicy(parsedPolicy);
   if (policyError) return { ok: false, error: policyError };
-  if (!isBoundedName(proposal.id) || !isBoundedName(proposal.evidenceRef)) {
+  if (!isBoundedName(parsedProposal.id) || !isBoundedName(parsedProposal.evidenceRef)) {
     return { ok: false, error: 'View action proposal identity is invalid.' };
   }
 
-  if (proposal.action.type === 'set-filter') {
-    const { target, values } = proposal.action;
-    const approved = policy.filterTargets.find(
+  if (parsedProposal.action.type === 'set-filter') {
+    const { target, values } = parsedProposal.action;
+    const approved = parsedPolicy.filterTargets.find(
       (candidate) => candidate.worksheet === target.worksheet && candidate.field === target.field,
     );
     if (!approved) return { ok: false, error: 'Filter target is not approved.' };
@@ -180,22 +186,23 @@ export function validateViewActionProposal(
     ) {
       return { ok: false, error: 'Filter value is not approved.' };
     }
-  } else if (proposal.action.type === 'set-parameter') {
-    const { target, value } = proposal.action;
-    const approved = policy.parameterTargets.find((candidate) => candidate.name === target.name);
+  } else if (parsedProposal.action.type === 'set-parameter') {
+    const { target, value } = parsedProposal.action;
+    const approved = parsedPolicy.parameterTargets.find(
+      (candidate) => candidate.name === target.name,
+    );
     if (!approved) return { ok: false, error: 'Parameter target is not approved.' };
     if (
       !isScalar(value) ||
       valueType(value) !== approved.valueType ||
-      (approved.allowedValues !== undefined &&
-        !approved.allowedValues.some((allowed) => sameValue(allowed, value)))
+      !approved.allowedValues.some((allowed) => sameValue(allowed, value))
     ) {
       return { ok: false, error: 'Parameter value is not approved.' };
     }
   } else {
     return { ok: false, error: 'View action type is not supported.' };
   }
-  return { ok: true, proposal };
+  return { ok: true, proposal: parsedProposal };
 }
 
 export class ViewActionController {
@@ -539,6 +546,10 @@ async function currentFilterValues(filter: TableauFilter): Promise<string[]> {
   return normalized.map(String);
 }
 
+function hasSameValues(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 async function filterDomainValues(filter: TableauFilter): Promise<ViewActionScalar[]> {
   if (!filter.getDomainAsync) {
     throw new ViewActionFailure('FILTER_DOMAIN_UNAVAILABLE', false);
@@ -628,7 +639,22 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       const worksheet = this.api.dashboard.worksheets.find(
         (candidate) => candidate.name === previous.target.worksheet,
       );
-      if (!worksheet) throw new ViewActionFailure('WORKSHEET_NOT_FOUND', false);
+      if (!worksheet) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
+      const filter = (await worksheet.getFiltersAsync()).find(
+        (candidate) => candidate.fieldName === previous.target.field,
+      );
+      if (!filter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
+      const current = await currentFilterValues(filter);
+      const expected = receipt.proposal.action;
+      if (expected.type !== 'set-filter' || !hasSameValues(current, expected.values.map(String))) {
+        throw new ViewActionFailure('UNDO_EXTERNAL_STATE_DIVERGED', true);
+      }
+      const domain = await filterDomainValues(filter);
+      if (
+        previous.values.some((value) => !domain.some((candidate) => sameValue(candidate, value)))
+      ) {
+        throw new ViewActionFailure('UNDO_PREVIOUS_VALUE_UNAVAILABLE', true);
+      }
       try {
         await worksheet.applyFilterAsync(
           previous.target.field,
@@ -643,7 +669,20 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
     const parameter = (await this.api.dashboard.getParametersAsync()).find(
       (candidate) => candidate.name === previous.target.name,
     );
-    if (!parameter) throw new ViewActionFailure('PARAMETER_NOT_FOUND', false);
+    if (!parameter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
+    const current = scalarFrom(parameter.currentValue);
+    const expected = receipt.proposal.action;
+    if (
+      expected.type !== 'set-parameter' ||
+      current === undefined ||
+      !sameValue(current, expected.value)
+    ) {
+      throw new ViewActionFailure('UNDO_EXTERNAL_STATE_DIVERGED', true);
+    }
+    const domain = await parameterDomainValues(parameter);
+    if (!domain.some((candidate) => sameValue(candidate, previous.value))) {
+      throw new ViewActionFailure('UNDO_PREVIOUS_VALUE_UNAVAILABLE', true);
+    }
     try {
       await parameter.changeValueAsync(previous.value);
     } catch {

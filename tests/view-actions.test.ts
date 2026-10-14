@@ -5,6 +5,7 @@ import {
   ViewActionController,
   ViewActionFailure,
   approvedViewActionConfigurationFromGlobal,
+  validateViewActionProposal,
   type ViewActionEligibility,
   type ViewActionPolicy,
   type ViewActionProposal,
@@ -147,13 +148,17 @@ describe('validated view action boundary', () => {
 
   it('uses supported Tableau adapter calls and restores captured state', async () => {
     const applyFilterAsync = vi.fn(async () => undefined);
-    const changeValueAsync = vi.fn(async () => undefined);
+    const changeValueAsync = vi.fn(async (value: string | number | boolean) => {
+      void value;
+    });
+    let filterState = ['East'];
+    let parameterState = 0;
     const worksheet = {
       name: 'Orders',
       getFiltersAsync: vi.fn(async () => [
         {
           fieldName: 'Region',
-          appliedValues: [{ value: 'East' }],
+          getAppliedValues: async () => filterState,
           getDomainAsync: async () => ['East', 'West'],
         },
       ]),
@@ -161,9 +166,15 @@ describe('validated view action boundary', () => {
     };
     const parameter = {
       name: 'Threshold',
-      currentValue: 0,
+      get currentValue() {
+        return parameterState;
+      },
       allowableValues: [0, 1, 2],
-      changeValueAsync,
+      changeValueAsync: vi.fn(async (value: string | number | boolean) => {
+        if (typeof value !== 'number') throw new Error('unexpected parameter type');
+        parameterState = value;
+        await changeValueAsync(value);
+      }),
     };
     const adapter = new TableauViewActionAdapter({
       dashboard: {
@@ -181,10 +192,12 @@ describe('validated view action boundary', () => {
       },
     });
     expect(applyFilterAsync).toHaveBeenCalledWith('Region', ['West'], 'REPLACE');
+    filterState = ['West'];
     await adapter.undo(filterReceipt);
     expect(applyFilterAsync).toHaveBeenLastCalledWith('Region', ['East'], 'REPLACE');
     const parameterReceipt = await adapter.apply(parameterProposalWith('Threshold'));
     expect(changeValueAsync).toHaveBeenCalledWith(1);
+    expect(parameterState).toBe(1);
     await adapter.undo(parameterReceipt);
     expect(changeValueAsync).toHaveBeenLastCalledWith(0);
   });
@@ -231,6 +244,52 @@ describe('validated view action boundary', () => {
       ok: false,
       error: 'MUTATION_UNKNOWN',
       partial: true,
+    });
+  });
+
+  it('refuses undo after an unrelated live edit', async () => {
+    let filterState = ['East'];
+    const worksheet = {
+      name: 'Orders',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Region',
+          getAppliedValues: async () => filterState,
+          getDomainAsync: async () => ['East', 'West', 'South'],
+        },
+      ],
+      applyFilterAsync: vi.fn(async () => undefined),
+    };
+    const adapter = new TableauViewActionAdapter({
+      dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+      filterUpdateTypeReplace: 'REPLACE',
+    });
+    const controller = new ViewActionController(adapter, {
+      filterTargets: [
+        {
+          kind: 'worksheet-field',
+          worksheet: 'Orders',
+          field: 'Region',
+          valueType: 'string',
+          allowedValues: ['West'],
+        },
+      ],
+      parameterTargets: [],
+    });
+    const proposal = {
+      ...filterProposal,
+      action: {
+        type: 'set-filter' as const,
+        target: { kind: 'worksheet-field' as const, worksheet: 'Orders', field: 'Region' },
+        values: ['West'],
+      },
+    };
+    await expect(controller.apply(eligible, proposal)).resolves.toMatchObject({ ok: true });
+    filterState = ['South'];
+    await expect(controller.undo()).resolves.toMatchObject({
+      ok: false,
+      partial: true,
+      error: 'UNDO_EXTERNAL_STATE_DIVERGED',
     });
   });
 
@@ -294,6 +353,30 @@ describe('validated view action boundary', () => {
     } finally {
       host.__ambientAnalystViewAction = original;
     }
+  });
+
+  it('rejects malformed proposals and invalid target kinds before dereferencing them', () => {
+    expect(
+      validateViewActionProposal(
+        eligible,
+        { action: null } as unknown as ViewActionProposal,
+        policy,
+      ),
+    ).toEqual({ ok: false, error: 'View action configuration is malformed.' });
+    expect(
+      validateViewActionProposal(eligible, filterProposal, {
+        ...policy,
+        filterTargets: [
+          {
+            kind: 'unknown',
+            worksheet: 'fixture-dashboard',
+            field: 'Region',
+            valueType: 'string',
+            allowedValues: ['West'],
+          },
+        ],
+      } as unknown as ViewActionPolicy),
+    ).toEqual({ ok: false, error: 'View action configuration is malformed.' });
   });
 });
 
