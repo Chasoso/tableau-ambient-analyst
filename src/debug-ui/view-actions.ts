@@ -141,16 +141,30 @@ function validatePolicy(policy: ViewActionPolicy): string | undefined {
   if (policy.filterTargets.length > 32 || policy.parameterTargets.length > 32) {
     return 'View action policy is too large.';
   }
-  for (const target of [...policy.filterTargets, ...policy.parameterTargets]) {
+  for (const target of policy.filterTargets) {
+    if (target.kind !== 'worksheet-field') return 'View action target kind is invalid.';
     if (!isBoundedName(target.dashboard) || target.dashboard !== policy.scope.dashboard) {
       return 'View action target scope is invalid.';
     }
-    if (!isBoundedName(target.kind === 'parameter' ? target.name : target.worksheet)) {
-      return 'View action target is invalid.';
+    if (!isBoundedName(target.worksheet)) return 'View action target is invalid.';
+    if (!isBoundedName(target.field)) return 'View action field is invalid.';
+    if (!Array.isArray(target.allowedValues)) return 'View action allowlist is required.';
+    const allowedValues = target.allowedValues;
+    if (allowedValues.length > 32) return 'View action allowlist is too large.';
+    if (
+      allowedValues.some(
+        (value: unknown) => !isScalar(value) || valueType(value) !== target.valueType,
+      )
+    ) {
+      return 'View action allowlist contains an invalid value.';
     }
-    if (target.kind === 'worksheet-field' && !isBoundedName(target.field)) {
-      return 'View action field is invalid.';
+  }
+  for (const target of policy.parameterTargets) {
+    if (target.kind !== 'parameter') return 'View action target kind is invalid.';
+    if (!isBoundedName(target.dashboard) || target.dashboard !== policy.scope.dashboard) {
+      return 'View action target scope is invalid.';
     }
+    if (!isBoundedName(target.name)) return 'View action target is invalid.';
     if (!Array.isArray(target.allowedValues)) return 'View action allowlist is required.';
     const allowedValues = target.allowedValues;
     if (allowedValues.length > 32) return 'View action allowlist is too large.';
@@ -199,6 +213,7 @@ function validateApprovedProposal(
     const { target, values } = proposal.action;
     const approved = policy.filterTargets.find(
       (candidate) =>
+        candidate.kind === 'worksheet-field' &&
         candidate.dashboard === proposal.scope.dashboard &&
         candidate.worksheet === target.worksheet &&
         candidate.field === target.field,
@@ -220,7 +235,9 @@ function validateApprovedProposal(
     const { target, value } = proposal.action;
     const approved = policy.parameterTargets.find(
       (candidate) =>
-        candidate.dashboard === proposal.scope.dashboard && candidate.name === target.name,
+        candidate.kind === 'parameter' &&
+        candidate.dashboard === proposal.scope.dashboard &&
+        candidate.name === target.name,
     );
     if (!approved) return { ok: false, error: 'Parameter target is not approved.' };
     if (

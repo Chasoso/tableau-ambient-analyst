@@ -557,6 +557,43 @@ describe('validated view action boundary', () => {
     ).toEqual({ ok: false, error: 'View action configuration is malformed.' });
   });
 
+  it('rejects a complete malformed target before any Tableau API call', async () => {
+    const getFiltersAsync = vi.fn(async () => []);
+    const applyFilterAsync = vi.fn(async () => undefined);
+    const getParametersAsync = vi.fn(async () => []);
+    const adapter = new TableauViewActionAdapter(
+      {
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [{ name: 'Orders', getFiltersAsync, applyFilterAsync }],
+          getParametersAsync,
+        },
+        filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
+      },
+      {
+        ...policy,
+        filterTargets: [
+          {
+            kind: 'unknown',
+            dashboard: 'fixture-dashboard',
+            worksheet: 'Orders',
+            field: 'Region',
+            valueType: 'string',
+            allowedValues: ['West'],
+          },
+        ],
+      } as unknown as ViewActionPolicy,
+    );
+
+    await expect(adapter.apply(filterProposal)).rejects.toThrow(
+      'View action target kind is invalid.',
+    );
+    expect(getFiltersAsync).not.toHaveBeenCalled();
+    expect(getParametersAsync).not.toHaveBeenCalled();
+    expect(applyFilterAsync).not.toHaveBeenCalled();
+  });
+
   it('restores typed filter values and All selection through the supported API', async () => {
     let typedValues: string[] = ['1'];
     const typedApply = vi.fn(async (_field: string, values: readonly string[]) => {
