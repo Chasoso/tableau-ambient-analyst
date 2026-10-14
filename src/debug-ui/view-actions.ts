@@ -61,13 +61,25 @@ export type ViewActionReceipt = {
 };
 
 export type ViewActionResult =
-  { ok: true; receipt: ViewActionReceipt } | { ok: false; error: string };
+  { ok: true; receipt: ViewActionReceipt } | { ok: false; error: string; partial: boolean };
 
-export type ViewActionUndoResult = { ok: true; message: string } | { ok: false; error: string };
+export type ViewActionUndoResult =
+  { ok: true; message: string } | { ok: false; error: string; partial: boolean };
+
+export class ViewActionFailure extends Error {
+  constructor(
+    message: string,
+    readonly partial: boolean,
+  ) {
+    super(message);
+    this.name = 'ViewActionFailure';
+  }
+}
 
 export interface ViewActionAdapter {
   apply(proposal: ViewActionProposal): Promise<ViewActionReceipt>;
   undo(receipt: ViewActionReceipt): Promise<void>;
+  reset?(): void;
 }
 
 const requiredInterventionAudit = [
@@ -190,6 +202,7 @@ export class ViewActionController {
   resetForRun(): void {
     this.lastReceipt = undefined;
     this.appliedProposalIds.clear();
+    this.adapter.reset?.();
   }
 
   async apply(
@@ -197,28 +210,44 @@ export class ViewActionController {
     proposal: ViewActionProposal,
   ): Promise<ViewActionResult> {
     const validation = validateViewActionProposal(state, proposal, this.policy);
-    if (!validation.ok) return validation;
+    if (!validation.ok) return { ...validation, partial: false };
     if (this.appliedProposalIds.has(proposal.id)) {
-      return { ok: false, error: 'This proposal was already applied.' };
+      return { ok: false, error: 'This proposal was already applied.', partial: false };
     }
     try {
       const receipt = await this.adapter.apply(proposal);
       this.lastReceipt = receipt;
       this.appliedProposalIds.add(proposal.id);
       return { ok: true, receipt };
-    } catch {
-      return { ok: false, error: 'The view action could not be applied safely.' };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof ViewActionFailure
+            ? error.message
+            : 'The view action could not be applied safely; its final state is unknown.',
+        partial: error instanceof ViewActionFailure ? error.partial : true,
+      };
     }
   }
 
   async undo(): Promise<ViewActionUndoResult> {
-    if (!this.lastReceipt) return { ok: false, error: 'There is no view action to undo.' };
+    if (!this.lastReceipt) {
+      return { ok: false, error: 'There is no view action to undo.', partial: false };
+    }
     try {
       await this.adapter.undo(this.lastReceipt);
       this.lastReceipt = undefined;
       return { ok: true, message: 'The previous view action was undone.' };
-    } catch {
-      return { ok: false, error: 'The previous view action could not be fully undone.' };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof ViewActionFailure
+            ? error.message
+            : 'The previous view action may be only partially undone; verify the dashboard state.',
+        partial: error instanceof ViewActionFailure ? error.partial : true,
+      };
     }
   }
 }
@@ -230,14 +259,22 @@ export type MockViewState = {
 
 export class MockViewActionAdapter implements ViewActionAdapter {
   public readonly applied: ViewActionProposal[] = [];
+  private readonly initialState: MockViewState;
 
-  constructor(public readonly state: MockViewState) {}
+  constructor(public readonly state: MockViewState) {
+    this.initialState = {
+      filters: Object.fromEntries(
+        Object.entries(state.filters).map(([key, values]) => [key, [...values]]),
+      ),
+      parameters: { ...state.parameters },
+    };
+  }
 
   async apply(proposal: ViewActionProposal): Promise<ViewActionReceipt> {
     if (proposal.action.type === 'set-filter') {
       const key = `${proposal.action.target.worksheet}.${proposal.action.target.field}`;
       const previous = this.state.filters[key];
-      if (!previous) throw new Error('STALE_FILTER_TARGET');
+      if (!previous) throw new ViewActionFailure('STALE_FILTER_TARGET', false);
       this.state.filters[key] = proposal.action.values.map(String);
       this.applied.push(proposal);
       return {
@@ -247,7 +284,7 @@ export class MockViewActionAdapter implements ViewActionAdapter {
     }
     const key = proposal.action.target.name;
     const previous = this.state.parameters[key];
-    if (previous === undefined) throw new Error('STALE_PARAMETER_TARGET');
+    if (previous === undefined) throw new ViewActionFailure('STALE_PARAMETER_TARGET', false);
     this.state.parameters[key] = proposal.action.value;
     this.applied.push(proposal);
     return {
@@ -259,14 +296,24 @@ export class MockViewActionAdapter implements ViewActionAdapter {
   async undo(receipt: ViewActionReceipt): Promise<void> {
     if (receipt.previous.type === 'filter') {
       const key = `${receipt.previous.target.worksheet}.${receipt.previous.target.field}`;
-      if (!this.state.filters[key]) throw new Error('STALE_FILTER_TARGET');
+      if (!this.state.filters[key]) throw new ViewActionFailure('STALE_FILTER_TARGET', false);
       this.state.filters[key] = [...receipt.previous.values];
     } else {
       if (this.state.parameters[receipt.previous.target.name] === undefined) {
-        throw new Error('STALE_PARAMETER_TARGET');
+        throw new ViewActionFailure('STALE_PARAMETER_TARGET', false);
       }
       this.state.parameters[receipt.previous.target.name] = receipt.previous.value;
     }
+  }
+
+  reset(): void {
+    for (const [key, values] of Object.entries(this.initialState.filters)) {
+      this.state.filters[key] = [...values];
+    }
+    for (const [key, value] of Object.entries(this.initialState.parameters)) {
+      this.state.parameters[key] = value;
+    }
+    this.applied.length = 0;
   }
 }
 
@@ -274,6 +321,7 @@ export type TableauFilter = {
   fieldName?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
+  getDomainAsync?: () => Promise<readonly unknown[]>;
 };
 
 export type TableauWorksheet = {
@@ -289,6 +337,8 @@ export type TableauWorksheet = {
 export type TableauParameter = {
   name?: unknown;
   currentValue?: unknown;
+  allowableValues?: readonly unknown[];
+  getAllowableValuesAsync?: () => Promise<readonly unknown[]>;
   changeValueAsync: (value: ViewActionScalar) => Promise<void>;
 };
 
@@ -350,10 +400,39 @@ function scalarFrom(value: unknown): ViewActionScalar | undefined {
 
 async function currentFilterValues(filter: TableauFilter): Promise<string[]> {
   const values = filter.getAppliedValues ? await filter.getAppliedValues() : filter.appliedValues;
-  if (!values || values.length > 32) throw new Error('FILTER_STATE_UNAVAILABLE');
+  if (!values || values.length > 32) throw new ViewActionFailure('FILTER_STATE_UNAVAILABLE', false);
   const normalized = values.map(scalarFrom);
-  if (normalized.some((value) => value === undefined)) throw new Error('FILTER_STATE_UNAVAILABLE');
+  if (normalized.some((value) => value === undefined)) {
+    throw new ViewActionFailure('FILTER_STATE_UNAVAILABLE', false);
+  }
   return normalized.map(String);
+}
+
+async function filterDomainValues(filter: TableauFilter): Promise<ViewActionScalar[]> {
+  if (!filter.getDomainAsync) {
+    throw new ViewActionFailure('FILTER_DOMAIN_UNAVAILABLE', false);
+  }
+  const values = await filter.getDomainAsync();
+  if (values.length > 32) throw new ViewActionFailure('FILTER_DOMAIN_TOO_LARGE', false);
+  const normalized = values.map(scalarFrom);
+  if (normalized.some((value) => value === undefined)) {
+    throw new ViewActionFailure('FILTER_DOMAIN_UNAVAILABLE', false);
+  }
+  return normalized as ViewActionScalar[];
+}
+
+async function parameterDomainValues(parameter: TableauParameter): Promise<ViewActionScalar[]> {
+  const values = parameter.getAllowableValuesAsync
+    ? await parameter.getAllowableValuesAsync()
+    : parameter.allowableValues;
+  if (!values || values.length > 32) {
+    throw new ViewActionFailure('PARAMETER_DOMAIN_UNAVAILABLE', false);
+  }
+  const normalized = values.map(scalarFrom);
+  if (normalized.some((value) => value === undefined)) {
+    throw new ViewActionFailure('PARAMETER_DOMAIN_UNAVAILABLE', false);
+  }
+  return normalized as ViewActionScalar[];
 }
 
 export class TableauViewActionAdapter implements ViewActionAdapter {
@@ -365,18 +444,26 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       const worksheet = this.api.dashboard.worksheets.find(
         (candidate) => candidate.name === action.target.worksheet,
       );
-      if (!worksheet) throw new Error('WORKSHEET_NOT_FOUND');
+      if (!worksheet) throw new ViewActionFailure('WORKSHEET_NOT_FOUND', false);
       const filter = (await worksheet.getFiltersAsync()).find(
         (candidate) => candidate.fieldName === action.target.field,
       );
-      if (!filter) throw new Error('FILTER_NOT_FOUND');
+      if (!filter) throw new ViewActionFailure('FILTER_NOT_FOUND', false);
       const previous = await currentFilterValues(filter);
+      const domain = await filterDomainValues(filter);
+      if (action.values.some((value) => !domain.some((candidate) => sameValue(candidate, value)))) {
+        throw new ViewActionFailure('FILTER_VALUE_NOT_CURRENTLY_SUPPORTED', false);
+      }
       const values = action.values.map(String);
-      await worksheet.applyFilterAsync(
-        action.target.field,
-        values,
-        this.api.filterUpdateTypeReplace,
-      );
+      try {
+        await worksheet.applyFilterAsync(
+          action.target.field,
+          values,
+          this.api.filterUpdateTypeReplace,
+        );
+      } catch {
+        throw new ViewActionFailure('FILTER_APPLY_PARTIAL_OR_UNKNOWN', true);
+      }
       return {
         proposal,
         previous: { type: 'filter', target: action.target, values: previous },
@@ -386,8 +473,18 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       (candidate) => candidate.name === action.target.name,
     );
     const previous = parameter && scalarFrom(parameter.currentValue);
-    if (!parameter || previous === undefined) throw new Error('PARAMETER_NOT_FOUND');
-    await parameter.changeValueAsync(action.value);
+    if (!parameter || previous === undefined) {
+      throw new ViewActionFailure('PARAMETER_NOT_FOUND', false);
+    }
+    const domain = await parameterDomainValues(parameter);
+    if (!domain.some((candidate) => sameValue(candidate, action.value))) {
+      throw new ViewActionFailure('PARAMETER_VALUE_NOT_CURRENTLY_SUPPORTED', false);
+    }
+    try {
+      await parameter.changeValueAsync(action.value);
+    } catch {
+      throw new ViewActionFailure('PARAMETER_APPLY_PARTIAL_OR_UNKNOWN', true);
+    }
     return {
       proposal,
       previous: { type: 'parameter', target: action.target, value: previous },
@@ -400,18 +497,26 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       const worksheet = this.api.dashboard.worksheets.find(
         (candidate) => candidate.name === previous.target.worksheet,
       );
-      if (!worksheet) throw new Error('WORKSHEET_NOT_FOUND');
-      await worksheet.applyFilterAsync(
-        previous.target.field,
-        [...previous.values],
-        this.api.filterUpdateTypeReplace,
-      );
+      if (!worksheet) throw new ViewActionFailure('WORKSHEET_NOT_FOUND', false);
+      try {
+        await worksheet.applyFilterAsync(
+          previous.target.field,
+          [...previous.values],
+          this.api.filterUpdateTypeReplace,
+        );
+      } catch {
+        throw new ViewActionFailure('FILTER_UNDO_PARTIAL_OR_UNKNOWN', true);
+      }
       return;
     }
     const parameter = (await this.api.dashboard.getParametersAsync()).find(
       (candidate) => candidate.name === previous.target.name,
     );
-    if (!parameter) throw new Error('PARAMETER_NOT_FOUND');
-    await parameter.changeValueAsync(previous.value);
+    if (!parameter) throw new ViewActionFailure('PARAMETER_NOT_FOUND', false);
+    try {
+      await parameter.changeValueAsync(previous.value);
+    } catch {
+      throw new ViewActionFailure('PARAMETER_UNDO_PARTIAL_OR_UNKNOWN', true);
+    }
   }
 }

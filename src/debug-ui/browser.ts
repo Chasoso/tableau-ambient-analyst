@@ -59,13 +59,6 @@ const mockViewActionAdapter = new MockViewActionAdapter({
   filters: { 'fixture-dashboard.Region': ['All'] },
   parameters: { 'fixture-threshold': 0 },
 });
-let viewActionController = new ViewActionController(
-  mockViewActionAdapter,
-  syntheticViewActionPolicy,
-);
-let activeViewActionProposal = syntheticInterventionProposal;
-let canUndoViewAction = false;
-
 const failClosedViewActionAdapter: ViewActionAdapter = {
   async apply() {
     throw new Error('APPROVED_LIVE_VIEW_ACTION_CONFIGURATION_REQUIRED');
@@ -74,6 +67,21 @@ const failClosedViewActionAdapter: ViewActionAdapter = {
     throw new Error('APPROVED_LIVE_VIEW_ACTION_CONFIGURATION_REQUIRED');
   },
 };
+
+function isEmbeddedContext(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+let viewActionController = new ViewActionController(
+  isEmbeddedContext() ? failClosedViewActionAdapter : mockViewActionAdapter,
+  syntheticViewActionPolicy,
+);
+let activeViewActionProposal = syntheticInterventionProposal;
+let canUndoViewAction = false;
 
 function text(value: string): HTMLSpanElement {
   const element = document.createElement('span');
@@ -261,7 +269,13 @@ renderIdle(selectedScenario());
 void initializeTableauHost().then(({ mode }) => {
   hostStatus.dataset.host = mode;
   hostStatus.textContent = mode === 'standalone' ? 'Standalone' : `Host: ${mode}`;
-  if (mode === 'tableau') {
+  if (mode === 'standalone') {
+    viewActionController = new ViewActionController(
+      mockViewActionAdapter,
+      syntheticViewActionPolicy,
+    );
+    activeViewActionProposal = syntheticInterventionProposal;
+  } else if (mode === 'tableau') {
     const configuration = approvedViewActionConfigurationFromGlobal();
     const api = tableauViewActionApiFromGlobal();
     if (configuration && api) {

@@ -3,6 +3,7 @@ import {
   MockViewActionAdapter,
   TableauViewActionAdapter,
   ViewActionController,
+  ViewActionFailure,
   type ViewActionEligibility,
   type ViewActionPolicy,
   type ViewActionProposal,
@@ -149,11 +150,20 @@ describe('validated view action boundary', () => {
     const worksheet = {
       name: 'Orders',
       getFiltersAsync: vi.fn(async () => [
-        { fieldName: 'Region', appliedValues: [{ value: 'East' }] },
+        {
+          fieldName: 'Region',
+          appliedValues: [{ value: 'East' }],
+          getDomainAsync: async () => ['East', 'West'],
+        },
       ]),
       applyFilterAsync,
     };
-    const parameter = { name: 'Threshold', currentValue: 0, changeValueAsync };
+    const parameter = {
+      name: 'Threshold',
+      currentValue: 0,
+      allowableValues: [0, 1, 2],
+      changeValueAsync,
+    };
     const adapter = new TableauViewActionAdapter({
       dashboard: {
         worksheets: [worksheet],
@@ -176,6 +186,77 @@ describe('validated view action boundary', () => {
     expect(changeValueAsync).toHaveBeenCalledWith(1);
     await adapter.undo(parameterReceipt);
     expect(changeValueAsync).toHaveBeenLastCalledWith(0);
+  });
+
+  it('checks the live domain before mutation and fails closed', async () => {
+    const applyFilterAsync = vi.fn(async () => undefined);
+    const worksheet = {
+      name: 'Orders',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Region',
+          appliedValues: ['East'],
+          getDomainAsync: async () => ['East'],
+        },
+      ],
+      applyFilterAsync,
+    };
+    const adapter = new TableauViewActionAdapter({
+      dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+      filterUpdateTypeReplace: 'REPLACE',
+    });
+    await expect(
+      adapter.apply({
+        ...filterProposal,
+        action: {
+          type: 'set-filter',
+          target: { kind: 'worksheet-field', worksheet: 'Orders', field: 'Region' },
+          values: ['West'],
+        },
+      }),
+    ).rejects.toThrow('FILTER_VALUE_NOT_CURRENTLY_SUPPORTED');
+    expect(applyFilterAsync).not.toHaveBeenCalled();
+  });
+
+  it('reports partial or unknown state when an adapter mutation fails', async () => {
+    const adapter = {
+      apply: vi.fn(async () => {
+        throw new ViewActionFailure('MUTATION_UNKNOWN', true);
+      }),
+      undo: vi.fn(async () => undefined),
+    };
+    const controller = new ViewActionController(adapter, policy);
+    await expect(controller.apply(eligible, filterProposal)).resolves.toEqual({
+      ok: false,
+      error: 'MUTATION_UNKNOWN',
+      partial: true,
+    });
+  });
+
+  it('keeps the receipt after a partial undo and resets fixture state for a new run', async () => {
+    const adapter = new MockViewActionAdapter({
+      filters: { 'fixture-dashboard.Region': ['All'] },
+      parameters: { 'fixture-threshold': 0 },
+    });
+    const controller = new ViewActionController(adapter, policy);
+    await expect(controller.apply(eligible, filterProposal)).resolves.toMatchObject({ ok: true });
+    adapter.state.filters['fixture-dashboard.Region'] = ['Unexpected'];
+    const originalUndo = adapter.undo.bind(adapter);
+    adapter.undo = vi.fn(async () => {
+      await originalUndo({
+        proposal: filterProposal,
+        previous: { type: 'filter', target: filterTarget, values: ['Unexpected'] },
+      });
+      throw new ViewActionFailure('UNDO_UNKNOWN', true);
+    });
+    await expect(controller.undo()).resolves.toMatchObject({
+      ok: false,
+      partial: true,
+      error: 'UNDO_UNKNOWN',
+    });
+    controller.resetForRun();
+    expect(adapter.state.filters['fixture-dashboard.Region']).toEqual(['All']);
+    expect(adapter.applied).toEqual([]);
   });
 });
 
