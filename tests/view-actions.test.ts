@@ -4,6 +4,7 @@ import {
   TableauViewActionAdapter,
   ViewActionController,
   ViewActionFailure,
+  approvedViewActionConfigurationFromGlobal,
   type ViewActionEligibility,
   type ViewActionPolicy,
   type ViewActionProposal,
@@ -257,6 +258,42 @@ describe('validated view action boundary', () => {
     controller.resetForRun();
     expect(adapter.state.filters['fixture-dashboard.Region']).toEqual(['All']);
     expect(adapter.applied).toEqual([]);
+  });
+
+  it('rejects malformed host configuration and missing parameter allowlists at runtime', () => {
+    const host = globalThis as typeof globalThis & { __ambientAnalystViewAction?: unknown };
+    const original = host.__ambientAnalystViewAction;
+    try {
+      host.__ambientAnalystViewAction = {
+        policy: {
+          filterTargets: [],
+          parameterTargets: [{ kind: 'parameter', name: 'Threshold', valueType: 'number' }],
+        },
+        proposal: parameterProposalWith('Threshold'),
+      };
+      expect(approvedViewActionConfigurationFromGlobal()).toBeUndefined();
+      host.__ambientAnalystViewAction = {
+        policy: {
+          filterTargets: [],
+          parameterTargets: [
+            {
+              kind: 'parameter',
+              name: 'Threshold',
+              valueType: 'number',
+              allowedValues: [1],
+            },
+          ],
+        },
+        proposal: parameterProposalWith('Threshold'),
+      };
+      expect(approvedViewActionConfigurationFromGlobal()).toMatchObject({
+        policy: { parameterTargets: [{ allowedValues: [1] }] },
+      });
+      host.__ambientAnalystViewAction = { policy: null, proposal: {} };
+      expect(approvedViewActionConfigurationFromGlobal()).toBeUndefined();
+    } finally {
+      host.__ambientAnalystViewAction = original;
+    }
   });
 });
 

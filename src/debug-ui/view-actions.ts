@@ -31,7 +31,7 @@ export type ApprovedParameterTarget = {
   kind: 'parameter';
   name: string;
   valueType: ViewActionValueType;
-  allowedValues?: readonly ViewActionScalar[];
+  allowedValues: readonly ViewActionScalar[];
 };
 
 export type ViewActionPolicy = {
@@ -123,6 +123,9 @@ function isEligible(state: ViewActionEligibility): boolean {
 }
 
 function validatePolicy(policy: ViewActionPolicy): string | undefined {
+  if (!policy || !Array.isArray(policy.filterTargets) || !Array.isArray(policy.parameterTargets)) {
+    return 'View action policy is invalid.';
+  }
   if (policy.filterTargets.length > 32 || policy.parameterTargets.length > 32) {
     return 'View action policy is too large.';
   }
@@ -133,9 +136,14 @@ function validatePolicy(policy: ViewActionPolicy): string | undefined {
     if (target.kind === 'worksheet-field' && !isBoundedName(target.field)) {
       return 'View action field is invalid.';
     }
-    const allowedValues = target.allowedValues ?? [];
+    if (!Array.isArray(target.allowedValues)) return 'View action allowlist is required.';
+    const allowedValues = target.allowedValues;
     if (allowedValues.length > 32) return 'View action allowlist is too large.';
-    if (allowedValues.some((value) => !isScalar(value) || valueType(value) !== target.valueType)) {
+    if (
+      allowedValues.some(
+        (value: unknown) => !isScalar(value) || valueType(value) !== target.valueType,
+      )
+    ) {
       return 'View action allowlist contains an invalid value.';
     }
   }
@@ -361,10 +369,133 @@ export function approvedViewActionConfigurationFromGlobal():
   ApprovedViewActionConfiguration | undefined {
   const value = (globalThis as unknown as { __ambientAnalystViewAction?: unknown })
     .__ambientAnalystViewAction;
+  return parseApprovedViewActionConfiguration(value);
+}
+
+function parseScalarList(value: unknown): ViewActionScalar[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) return undefined;
+  return value.every(isScalar) ? [...value] : undefined;
+}
+
+function parseValueType(value: unknown): ViewActionValueType | undefined {
+  return value === 'string' || value === 'number' || value === 'boolean' ? value : undefined;
+}
+
+function parsePolicy(value: unknown): ViewActionPolicy | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const configuration = value as Partial<ApprovedViewActionConfiguration>;
-  if (!configuration.policy || !configuration.proposal) return undefined;
-  return configuration as ApprovedViewActionConfiguration;
+  const candidate = value as { filterTargets?: unknown; parameterTargets?: unknown };
+  if (!Array.isArray(candidate.filterTargets) || !Array.isArray(candidate.parameterTargets)) {
+    return undefined;
+  }
+  const filterTargets: ApprovedFilterTarget[] = [];
+  for (const target of candidate.filterTargets) {
+    if (typeof target !== 'object' || target === null || Array.isArray(target)) return undefined;
+    const item = target as Record<string, unknown>;
+    const parsedType = parseValueType(item.valueType);
+    const allowedValues = parseScalarList(item.allowedValues);
+    if (
+      item.kind !== 'worksheet-field' ||
+      !isBoundedName(item.worksheet) ||
+      !isBoundedName(item.field) ||
+      !parsedType ||
+      !allowedValues ||
+      allowedValues.some((entry) => valueType(entry) !== parsedType)
+    ) {
+      return undefined;
+    }
+    filterTargets.push({
+      kind: 'worksheet-field',
+      worksheet: item.worksheet,
+      field: item.field,
+      valueType: parsedType,
+      allowedValues,
+    });
+  }
+  const parameterTargets: ApprovedParameterTarget[] = [];
+  for (const target of candidate.parameterTargets) {
+    if (typeof target !== 'object' || target === null || Array.isArray(target)) return undefined;
+    const item = target as Record<string, unknown>;
+    const parsedType = parseValueType(item.valueType);
+    const allowedValues = parseScalarList(item.allowedValues);
+    if (
+      item.kind !== 'parameter' ||
+      !isBoundedName(item.name) ||
+      !parsedType ||
+      !allowedValues ||
+      allowedValues.some((entry) => valueType(entry) !== parsedType)
+    ) {
+      return undefined;
+    }
+    parameterTargets.push({
+      kind: 'parameter',
+      name: item.name,
+      valueType: parsedType,
+      allowedValues,
+    });
+  }
+  const policy = { filterTargets, parameterTargets } satisfies ViewActionPolicy;
+  return validatePolicy(policy) ? undefined : policy;
+}
+
+function parseProposal(value: unknown): ViewActionProposal | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (!isBoundedName(candidate.id) || !isBoundedName(candidate.evidenceRef)) return undefined;
+  if (typeof candidate.action !== 'object' || candidate.action === null) return undefined;
+  const action = candidate.action as Record<string, unknown>;
+  if (action.type === 'set-filter') {
+    if (typeof action.target !== 'object' || action.target === null) return undefined;
+    const target = action.target as Record<string, unknown>;
+    if (
+      target.kind !== 'worksheet-field' ||
+      !isBoundedName(target.worksheet) ||
+      !isBoundedName(target.field)
+    ) {
+      return undefined;
+    }
+    const values = parseScalarList(action.values);
+    if (!values || values.length > 16) return undefined;
+    return {
+      id: candidate.id,
+      evidenceRef: candidate.evidenceRef,
+      action: {
+        type: 'set-filter',
+        target: {
+          kind: 'worksheet-field',
+          worksheet: target.worksheet,
+          field: target.field,
+        },
+        values,
+      },
+    };
+  }
+  if (action.type === 'set-parameter') {
+    if (typeof action.target !== 'object' || action.target === null) return undefined;
+    const target = action.target as Record<string, unknown>;
+    if (target.kind !== 'parameter' || !isBoundedName(target.name) || !isScalar(action.value)) {
+      return undefined;
+    }
+    return {
+      id: candidate.id,
+      evidenceRef: candidate.evidenceRef,
+      action: {
+        type: 'set-parameter',
+        target: { kind: 'parameter', name: target.name },
+        value: action.value,
+      },
+    };
+  }
+  return undefined;
+}
+
+function parseApprovedViewActionConfiguration(
+  value: unknown,
+): ApprovedViewActionConfiguration | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as { policy?: unknown; proposal?: unknown };
+  const policy = parsePolicy(candidate.policy);
+  const proposal = parseProposal(candidate.proposal);
+  return policy && proposal ? { policy, proposal } : undefined;
 }
 
 export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefined {
