@@ -199,6 +199,54 @@ configuration through the host integration boundary. Without that configuration
 the badge remains fail-closed; the standalone synthetic fixture is never reused
 as a live Tableau mapping.
 
+For a local Windows Desktop smoke test, inject that configuration explicitly at
+server startup with `AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE`. The variable must
+point to an absolute path for a local, non-secret JSON file containing the exact
+approved dashboard scope, worksheet/field or parameter target, allowed values,
+and proposal. Copy the shape below into an ignored `.local/` file and replace
+every placeholder only after a human has approved the exact test target:
+
+```json
+{
+  "policy": {
+    "scope": { "dashboard": "REPLACE_WITH_APPROVED_DASHBOARD" },
+    "filterTargets": [
+      {
+        "kind": "worksheet-field",
+        "dashboard": "REPLACE_WITH_APPROVED_DASHBOARD",
+        "worksheet": "REPLACE_WITH_APPROVED_WORKSHEET",
+        "field": "REPLACE_WITH_APPROVED_FIELD",
+        "valueType": "string",
+        "allowedValues": ["REPLACE_WITH_APPROVED_VALUE"]
+      }
+    ],
+    "parameterTargets": []
+  },
+  "proposal": {
+    "id": "windows-local-filter-test",
+    "evidenceRef": "human-approved-windows-smoke",
+    "scope": { "dashboard": "REPLACE_WITH_APPROVED_DASHBOARD" },
+    "action": {
+      "type": "set-filter",
+      "target": {
+        "kind": "worksheet-field",
+        "worksheet": "REPLACE_WITH_APPROVED_WORKSHEET",
+        "field": "REPLACE_WITH_APPROVED_FIELD"
+      },
+      "values": ["REPLACE_WITH_APPROVED_VALUE"]
+    }
+  }
+}
+```
+
+PowerShell example: `$env:AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE = (Resolve-Path
+'.local\\issue-71-view-action.json').Path`, then run `npm run debug:ui`. The
+server reads the file once when it starts and safely escapes it before placing it
+in the local page. Missing, malformed, relative-path, or schema-invalid config
+does not grant access; the embedded adapter remains fail-closed. Never use
+wildcards, dashboard discovery, credentials, or a production workbook for this
+test. Clear the variable and restart the server after the smoke test.
+
 The local API accepts browser origins only when both the request `Host` and
 the `Origin` are explicit HTTP loopback addresses (`localhost`, `127.0.0.1`,
 or `::1`) on the same port. The two loopback hostnames may differ because

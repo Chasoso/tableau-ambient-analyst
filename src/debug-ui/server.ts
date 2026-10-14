@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   hasValidReplayTraceInvariants,
@@ -18,6 +19,43 @@ const maxBodyBytes = 16_384;
 const maxStoredRuns = 32;
 const maxActiveRuns = 2;
 const runTimeoutMs = 3_000;
+const browserBootstrapMarker = '<script type="module" src="/debug-ui/browser.js"></script>';
+
+export type DebugUiRequestHandlerOptions = {
+  viewActionConfig?: unknown;
+};
+
+function readLocalViewActionConfig(): unknown | undefined {
+  const configPath = process.env.AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE;
+  if (!configPath || !isAbsolute(configPath)) return undefined;
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeBootstrapConfig(value: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) return undefined;
+    return serialized
+      .replaceAll('<', '\\u003c')
+      .replaceAll('>', '\\u003e')
+      .replaceAll('&', '\\u0026')
+      .replaceAll('\u2028', '\\u2028')
+      .replaceAll('\u2029', '\\u2029');
+  } catch {
+    return undefined;
+  }
+}
+
+function injectLocalViewActionConfig(html: string, config: unknown): string {
+  const serialized = serializeBootstrapConfig(config);
+  if (!serialized) return html;
+  const bootstrap = `<script>globalThis.__ambientAnalystViewAction = ${serialized};</script>`;
+  return html.replace(browserBootstrapMarker, `${bootstrap}\n    ${browserBootstrapMarker}`);
+}
 
 function send(response: ServerResponse, status: number, body: unknown): void {
   response.statusCode = status;
@@ -202,9 +240,13 @@ async function withTimeout<T>(promise: Promise<T>): Promise<T> {
 
 export function createDebugUiRequestHandler(
   client: AnalysisClient = new ApplicationAnalysisClient(),
+  options: DebugUiRequestHandlerOptions = {},
 ) {
   const runs = new Map<string, AnalysisRunEnvelope>();
   let activeRuns = 0;
+  const viewActionConfig = Object.prototype.hasOwnProperty.call(options, 'viewActionConfig')
+    ? options.viewActionConfig
+    : readLocalViewActionConfig();
 
   return async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
@@ -281,7 +323,10 @@ export function createDebugUiRequestHandler(
     }
     if (pathname === '/' || pathname === '/index.html') {
       response.setHeader('content-type', 'text/html; charset=utf-8');
-      response.end(await readFile(join(root, 'index.html')));
+      const html = await readFile(join(root, 'index.html'), 'utf8');
+      response.end(
+        viewActionConfig === undefined ? html : injectLocalViewActionConfig(html, viewActionConfig),
+      );
       return;
     }
     response.statusCode = 404;
