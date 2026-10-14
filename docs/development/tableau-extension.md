@@ -40,9 +40,20 @@ call the same local API and application-layer replay path. The API uses
 bounded in-memory results and safe error responses, so failed runs do not
 expose provider/tool payloads or affect the host page.
 
-The adapter is intentionally not a View Action implementation. Worksheet,
-filter, and parameter operations remain in the future #71 boundary. No live
-Tableau data, MCP, credentials, or persistent workbook writes are used here.
+View actions are isolated in `src/debug-ui/view-actions.ts`. The shared
+boundary accepts only validated `set-filter` and `set-parameter` proposals,
+requires a verified `INTERVENE` flow, applies only after a user click, captures
+the immediately preceding state, and supports scoped Undo. Standalone uses a
+synthetic mock fixture; those identifiers are never a production mapping. The
+Tableau adapter resolves exact worksheet/filter/parameter targets at execution
+time and fails closed when an explicit approved configuration or current target
+state is unavailable. No target is discovered or authorized automatically, and
+no persistent workbook write is performed.
+
+The embedded browser only constructs the live adapter when the host supplies an
+explicit approved configuration and the Tableau dashboard API is available. In
+the absence of either, a badge click is rejected safely. The synthetic fixture
+configuration is never treated as a live Tableau mapping.
 
 ## Manual Tableau Desktop smoke test
 
@@ -57,9 +68,15 @@ On a supported Tableau Desktop installation:
 4. If prompted, explicitly approve the localhost/trust permission for this
    test extension. Record the exact prompt and Desktop version.
 5. Confirm the debug console renders, choose a deterministic scenario, and run
-   Replay. Confirm the visible status, stages, evidence, and mock intervention
-   behavior match the standalone browser.
-6. Remove the extension or restore the original dashboard state after testing.
+   Replay. Confirm the visible status, stages, evidence, and intervention
+   behavior match the standalone browser. Before applying a live view action,
+   record and approve the actual worksheet, field/parameter, permitted value,
+   and scope for this workbook; never substitute the synthetic fixture names.
+6. Click the `!` badge once and record the actual pre/post dashboard state,
+   then click Undo and record the restored state. If the target or prior state
+   cannot be verified, the adapter must fail closed and the result is
+   **UNVERIFIED**, not a successful smoke test.
+7. Remove the extension or restore the original dashboard state after testing.
 
 If Tableau refuses the extension, shows a blank zone, or reports a trust or
 security error:

@@ -177,10 +177,26 @@ and tool boundaries. Results are sanitized and retained only in memory (up to
 Tableau, credentials, an LLM, or a live network service. Set
 `PORT=4300` (or `$env:PORT = 4300` in PowerShell) to use another local port.
 
-The browser-facing model is host-independent and keeps the future Tableau
-adapter behind the small `AnalysisClient` boundary. The `INTERVENE` scenario
-shows a deterministic `!` badge; it records a mock debug event only and never
-invokes Tableau APIs or mutates a dashboard.
+The browser-facing model is host-independent and keeps view control behind the
+validated `ViewActionProposal`/`ViewActionAdapter` boundary. The `INTERVENE`
+scenario shows a deterministic `!` badge; only a deliberate click applies the
+synthetic fixture filter through the mock adapter, and the resulting action can
+be undone. Notifications, HOLD, ignored, failed, or unverified outcomes never
+apply a view action. Synthetic identifiers are fixture-only and are not
+production Tableau mappings.
+
+The shared boundary supports allowlisted `set-filter` and `set-parameter`
+actions with typed values, evidence references, captured prior state, repeated
+click protection, and fail-closed target/value validation. The Tableau adapter
+resolves worksheet/filter/parameter targets at execution time and uses the
+Extensions API's supported filter and parameter methods. A live host without an
+explicit approved configuration is rejected safely; no dashboard target is
+discovered or authorized automatically.
+
+An embedded host may provide an explicit, human-approved view-action
+configuration through the host integration boundary. Without that configuration
+the badge remains fail-closed; the standalone synthetic fixture is never reused
+as a live Tableau mapping.
 
 The local API accepts browser origins only when both the request `Host` and
 the `Origin` are explicit HTTP loopback addresses (`localhost`, `127.0.0.1`,

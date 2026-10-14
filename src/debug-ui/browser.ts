@@ -7,6 +7,16 @@ import {
   type ReplayState,
 } from './model.js';
 import { initializeTableauHost } from './host-adapter.js';
+import {
+  MockViewActionAdapter,
+  TableauViewActionAdapter,
+  ViewActionController,
+  approvedViewActionConfigurationFromGlobal,
+  tableauViewActionApiFromGlobal,
+  type ViewActionPolicy,
+  type ViewActionProposal,
+  type ViewActionAdapter,
+} from './view-actions.js';
 
 const client = new HttpAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
@@ -14,6 +24,56 @@ const runButton = document.querySelector<HTMLButtonElement>('#run')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const content = document.querySelector<HTMLElement>('#content')!;
 const hostStatus = document.querySelector<HTMLElement>('#host-status')!;
+
+// This is a synthetic fixture only. It is intentionally not a production
+// Tableau mapping; live mappings must be supplied and approved by the host.
+const syntheticViewActionPolicy: ViewActionPolicy = {
+  filterTargets: [
+    {
+      kind: 'worksheet-field',
+      worksheet: 'fixture-dashboard',
+      field: 'Region',
+      valueType: 'string',
+      allowedValues: ['West'],
+    },
+  ],
+  parameterTargets: [
+    {
+      kind: 'parameter',
+      name: 'fixture-threshold',
+      valueType: 'number',
+      allowedValues: [0, 1, 2],
+    },
+  ],
+};
+const syntheticInterventionProposal: ViewActionProposal = {
+  id: 'fixture-verified-intervention-region',
+  evidenceRef: 'local-analysis',
+  action: {
+    type: 'set-filter',
+    target: { kind: 'worksheet-field', worksheet: 'fixture-dashboard', field: 'Region' },
+    values: ['West'],
+  },
+};
+const mockViewActionAdapter = new MockViewActionAdapter({
+  filters: { 'fixture-dashboard.Region': ['All'] },
+  parameters: { 'fixture-threshold': 0 },
+});
+let viewActionController = new ViewActionController(
+  mockViewActionAdapter,
+  syntheticViewActionPolicy,
+);
+let activeViewActionProposal = syntheticInterventionProposal;
+let canUndoViewAction = false;
+
+const failClosedViewActionAdapter: ViewActionAdapter = {
+  async apply() {
+    throw new Error('APPROVED_LIVE_VIEW_ACTION_CONFIGURATION_REQUIRED');
+  },
+  async undo() {
+    throw new Error('APPROVED_LIVE_VIEW_ACTION_CONFIGURATION_REQUIRED');
+  },
+};
 
 function text(value: string): HTMLSpanElement {
   const element = document.createElement('span');
@@ -111,12 +171,36 @@ function render(state: ReplayState): void {
       badge.dataset.testid = 'intervention-badge';
       badge.type = 'button';
       badge.textContent = '! INTERVENE';
-      badge.title = 'Mock details only; Tableau APIs are not invoked.';
-      badge.addEventListener('click', () => {
-        recordMockInterventionEvent(state);
+      badge.title = 'Apply the approved view action to the current host.';
+      badge.addEventListener('click', async () => {
+        badge.disabled = true;
+        const result = await viewActionController.apply(state, activeViewActionProposal);
+        if (result.ok) {
+          canUndoViewAction = true;
+          recordMockInterventionEvent(state);
+          state.audit.push('view-action.applied');
+        } else {
+          state.audit.push(`view-action.rejected: ${result.error}`);
+        }
         render(state);
       });
       intervention.append(badge);
+      if (canUndoViewAction) {
+        const undo = document.createElement('button');
+        undo.dataset.testid = 'view-action-undo';
+        undo.type = 'button';
+        undo.textContent = 'Undo view action';
+        undo.addEventListener('click', async () => {
+          undo.disabled = true;
+          const result = await viewActionController.undo();
+          state.audit.push(
+            result.ok ? 'view-action.undone' : `view-action.undo-failed: ${result.error}`,
+          );
+          if (result.ok) canUndoViewAction = false;
+          render(state);
+        });
+        intervention.append(undo);
+      }
     }
   } else intervention.append(text('No intervention decision.'));
 
@@ -156,6 +240,8 @@ runButton.addEventListener('click', async () => {
   runButton.disabled = true;
   status.textContent = 'RUNNING';
   status.dataset.status = 'running';
+  viewActionController.resetForRun();
+  canUndoViewAction = false;
   try {
     render(await client.replay(selectedScenario()));
   } catch {
@@ -175,4 +261,20 @@ renderIdle(selectedScenario());
 void initializeTableauHost().then(({ mode }) => {
   hostStatus.dataset.host = mode;
   hostStatus.textContent = mode === 'standalone' ? 'Standalone' : `Host: ${mode}`;
+  if (mode === 'tableau') {
+    const configuration = approvedViewActionConfigurationFromGlobal();
+    const api = tableauViewActionApiFromGlobal();
+    if (configuration && api) {
+      viewActionController = new ViewActionController(
+        new TableauViewActionAdapter(api),
+        configuration.policy,
+      );
+      activeViewActionProposal = configuration.proposal;
+    } else {
+      viewActionController = new ViewActionController(
+        failClosedViewActionAdapter,
+        syntheticViewActionPolicy,
+      );
+    }
+  }
 });

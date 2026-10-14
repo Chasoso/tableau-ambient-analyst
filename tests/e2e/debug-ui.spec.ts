@@ -48,6 +48,8 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(badge).toHaveText('! INTERVENE');
     await badge.click();
     await expect(page.getByText('mock.intervention.details-opened')).toBeVisible();
+    await page.getByTestId('view-action-undo').click();
+    await expect(page.getByText('view-action.undone')).toBeVisible();
   });
 
   test('keeps the intervention badge absent for HOLD and ignored scenarios', async ({ page }) => {
