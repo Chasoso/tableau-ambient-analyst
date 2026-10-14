@@ -159,7 +159,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           getAppliedValues: async () => filterState,
-          getDomainAsync: async () => ['East', 'West'],
+          getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
       ]),
       applyFilterAsync,
@@ -169,7 +169,7 @@ describe('validated view action boundary', () => {
       get currentValue() {
         return parameterState;
       },
-      allowableValues: [0, 1, 2],
+      allowableValues: { allowableValues: [0, 1, 2] },
       changeValueAsync: vi.fn(async (value: string | number | boolean) => {
         if (typeof value !== 'number') throw new Error('unexpected parameter type');
         parameterState = value;
@@ -210,7 +210,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           appliedValues: ['East'],
-          getDomainAsync: async () => ['East'],
+          getDomainAsync: async () => ({ values: ['East'] }),
         },
       ],
       applyFilterAsync,
@@ -255,7 +255,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           getAppliedValues: async () => filterState,
-          getDomainAsync: async () => ['East', 'West', 'South'],
+          getDomainAsync: async () => ({ values: ['East', 'West', 'South'] }),
         },
       ],
       applyFilterAsync: vi.fn(async () => undefined),

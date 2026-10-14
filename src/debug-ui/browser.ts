@@ -1,6 +1,5 @@
 import {
   HttpAnalysisClient,
-  recordMockInterventionEvent,
   scenarioById,
   scenarios,
   type DebugScenario,
@@ -186,7 +185,6 @@ function render(state: ReplayState): void {
         const result = await viewActionController.apply(state, activeViewActionProposal);
         if (result.ok) {
           canUndoViewAction = true;
-          recordMockInterventionEvent(state);
           state.audit.push('view-action.applied');
         } else {
           state.audit.push(`view-action.rejected: ${result.error}`);

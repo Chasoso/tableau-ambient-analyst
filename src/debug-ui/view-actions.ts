@@ -336,7 +336,7 @@ export type TableauFilter = {
   fieldName?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
-  getDomainAsync?: () => Promise<readonly unknown[]>;
+  getDomainAsync?: () => Promise<{ values?: readonly unknown[] }>;
 };
 
 export type TableauWorksheet = {
@@ -352,8 +352,8 @@ export type TableauWorksheet = {
 export type TableauParameter = {
   name?: unknown;
   currentValue?: unknown;
-  allowableValues?: readonly unknown[];
-  getAllowableValuesAsync?: () => Promise<readonly unknown[]>;
+  allowableValues?: { allowableValues?: readonly unknown[] };
+  getAllowableValuesAsync?: () => Promise<{ allowableValues?: readonly unknown[] }>;
   changeValueAsync: (value: ViewActionScalar) => Promise<void>;
 };
 
@@ -554,7 +554,9 @@ async function filterDomainValues(filter: TableauFilter): Promise<ViewActionScal
   if (!filter.getDomainAsync) {
     throw new ViewActionFailure('FILTER_DOMAIN_UNAVAILABLE', false);
   }
-  const values = await filter.getDomainAsync();
+  const domain = await filter.getDomainAsync();
+  const values = domain?.values;
+  if (!values) throw new ViewActionFailure('FILTER_DOMAIN_UNAVAILABLE', false);
   if (values.length > 32) throw new ViewActionFailure('FILTER_DOMAIN_TOO_LARGE', false);
   const normalized = values.map(scalarFrom);
   if (normalized.some((value) => value === undefined)) {
@@ -564,9 +566,10 @@ async function filterDomainValues(filter: TableauFilter): Promise<ViewActionScal
 }
 
 async function parameterDomainValues(parameter: TableauParameter): Promise<ViewActionScalar[]> {
-  const values = parameter.getAllowableValuesAsync
+  const restriction = parameter.getAllowableValuesAsync
     ? await parameter.getAllowableValuesAsync()
     : parameter.allowableValues;
+  const values = restriction?.allowableValues;
   if (!values || values.length > 32) {
     throw new ViewActionFailure('PARAMETER_DOMAIN_UNAVAILABLE', false);
   }
