@@ -194,6 +194,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: vi.fn(async () => [
         {
           fieldName: 'Region',
+          filterType: 'CATEGORICAL',
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
@@ -215,10 +216,12 @@ describe('validated view action boundary', () => {
     const adapter = new TableauViewActionAdapter(
       {
         dashboard: {
+          name: 'fixture-dashboard',
           worksheets: [worksheet],
           getParametersAsync: async () => [parameter],
         },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('Orders', 'Region', 'string', ['West'], 'Threshold'),
     );
@@ -248,6 +251,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
+          filterType: 'CATEGORICAL',
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East'] }),
         },
@@ -256,8 +260,13 @@ describe('validated view action boundary', () => {
     };
     const adapter = new TableauViewActionAdapter(
       {
-        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [worksheet],
+          getParametersAsync: async () => [],
+        },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -281,6 +290,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
+          filterType: 'CATEGORICAL',
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
@@ -289,8 +299,13 @@ describe('validated view action boundary', () => {
     };
     const adapter = new TableauViewActionAdapter(
       {
-        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [worksheet],
+          getParametersAsync: async () => [],
+        },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -304,6 +319,47 @@ describe('validated view action boundary', () => {
         },
       }),
     ).rejects.toThrow('Filter target is not approved.');
+    expect(applyFilterAsync).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for a different dashboard and unsupported filter subtype', async () => {
+    const applyFilterAsync = vi.fn(async () => undefined);
+    const worksheet = {
+      name: 'Orders',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Region',
+          filterType: 'RANGE',
+          appliedValues: ['East'],
+          getDomainAsync: async () => ({ values: ['East', 'West'] }),
+        },
+      ],
+      applyFilterAsync,
+    };
+    const api = {
+      dashboard: {
+        name: 'OtherDashboard',
+        worksheets: [worksheet],
+        getParametersAsync: async () => [],
+      },
+      filterUpdateTypeReplace: 'REPLACE',
+      filterTypeCategorical: 'CATEGORICAL',
+    };
+    const adapter = new TableauViewActionAdapter(
+      api,
+      filterPolicy('Orders', 'Region', 'string', ['West']),
+    );
+    const proposal = {
+      ...filterProposal,
+      action: {
+        type: 'set-filter' as const,
+        target: { kind: 'worksheet-field' as const, worksheet: 'Orders', field: 'Region' },
+        values: ['West'],
+      },
+    };
+    await expect(adapter.apply(proposal)).rejects.toThrow('DASHBOARD_SCOPE_MISMATCH');
+    api.dashboard.name = 'fixture-dashboard';
+    await expect(adapter.apply(proposal)).rejects.toThrow('UNSUPPORTED_FILTER_TYPE');
     expect(applyFilterAsync).not.toHaveBeenCalled();
   });
 
@@ -356,6 +412,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
+          filterType: 'CATEGORICAL',
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West', 'South'] }),
         },
@@ -364,8 +421,13 @@ describe('validated view action boundary', () => {
     };
     const adapter = new TableauViewActionAdapter(
       {
-        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [worksheet],
+          getParametersAsync: async () => [],
+        },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('Orders', 'Region', 'string', ['West']),
     );
@@ -501,6 +563,7 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Score',
+          filterType: 'CATEGORICAL',
           getAppliedValues: async () => typedValues.map(Number),
           getDomainAsync: async () => ({ values: [1, 2] }),
         },
@@ -509,8 +572,13 @@ describe('validated view action boundary', () => {
     };
     const typedAdapter = new TableauViewActionAdapter(
       {
-        dashboard: { worksheets: [typedWorksheet], getParametersAsync: async () => [] },
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [typedWorksheet],
+          getParametersAsync: async () => [],
+        },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('Typed', 'Score', 'number', [1, 2]),
     );
@@ -527,7 +595,7 @@ describe('validated view action boundary', () => {
     expect(typedApply).toHaveBeenLastCalledWith('Score', ['1'], 'REPLACE');
 
     let allValues: string[] = [];
-    const clearFilterAsync = vi.fn(async () => {
+    const clearFiltersAsync = vi.fn(async () => {
       allValues = [];
     });
     const allApply = vi.fn(async (_field: string, values: readonly string[]) => {
@@ -538,17 +606,23 @@ describe('validated view action boundary', () => {
       getFiltersAsync: async () => [
         {
           fieldName: 'Region',
+          filterType: 'CATEGORICAL',
           getAppliedValues: async () => allValues,
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
       ],
       applyFilterAsync: allApply,
-      clearFilterAsync,
+      clearFiltersAsync,
     };
     const allAdapter = new TableauViewActionAdapter(
       {
-        dashboard: { worksheets: [allWorksheet], getParametersAsync: async () => [] },
+        dashboard: {
+          name: 'fixture-dashboard',
+          worksheets: [allWorksheet],
+          getParametersAsync: async () => [],
+        },
         filterUpdateTypeReplace: 'REPLACE',
+        filterTypeCategorical: 'CATEGORICAL',
       },
       filterPolicy('AllState', 'Region', 'string', ['East', 'West']),
     );
@@ -562,7 +636,7 @@ describe('validated view action boundary', () => {
     };
     const allReceipt = await allAdapter.apply(allProposal);
     await allAdapter.undo(allReceipt);
-    expect(clearFilterAsync).toHaveBeenCalledWith('Region');
+    expect(clearFiltersAsync).toHaveBeenCalledWith('Region');
     expect(allApply).toHaveBeenCalledWith('Region', ['West'], 'REPLACE');
   });
 });

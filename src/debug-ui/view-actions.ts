@@ -378,6 +378,7 @@ export class MockViewActionAdapter implements ViewActionAdapter {
 
 export type TableauFilter = {
   fieldName?: unknown;
+  filterType?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
   getDomainAsync?: () => Promise<{ values?: readonly unknown[] }>;
@@ -391,7 +392,7 @@ export type TableauWorksheet = {
     values: readonly string[],
     updateType: unknown,
   ) => Promise<void>;
-  clearFilterAsync?: (field: string) => Promise<void>;
+  clearFiltersAsync?: (field: string) => Promise<void>;
 };
 
 export type TableauParameter = {
@@ -403,6 +404,7 @@ export type TableauParameter = {
 };
 
 export type TableauDashboard = {
+  name?: unknown;
   worksheets: readonly TableauWorksheet[];
   getParametersAsync: () => Promise<readonly TableauParameter[]>;
 };
@@ -410,6 +412,7 @@ export type TableauDashboard = {
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
   filterUpdateTypeReplace: unknown;
+  filterTypeCategorical: unknown;
 };
 
 export type ApprovedViewActionConfiguration = {
@@ -582,20 +585,24 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
       tableau?: {
         extensions?: { dashboardContent?: { dashboard?: TableauDashboard } };
         FilterUpdateType?: { REPLACE?: unknown };
+        FilterType?: { CATEGORICAL?: unknown };
       };
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.REPLACE;
+  const filterTypeCategorical = tableau?.FilterType?.CATEGORICAL;
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
     typeof dashboard.getParametersAsync !== 'function' ||
-    filterUpdateTypeReplace === undefined
+    filterUpdateTypeReplace === undefined ||
+    filterTypeCategorical === undefined ||
+    !isBoundedName(dashboard.name)
   ) {
     return undefined;
   }
-  return { dashboard, filterUpdateTypeReplace };
+  return { dashboard, filterUpdateTypeReplace, filterTypeCategorical };
 }
 
 function scalarFrom(value: unknown): ViewActionScalar | undefined {
@@ -667,6 +674,9 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
     if (!authorization.ok) {
       throw new ViewActionFailure(authorization.error, false);
     }
+    if (this.api.dashboard.name !== this.policy.scope.dashboard) {
+      throw new ViewActionFailure('DASHBOARD_SCOPE_MISMATCH', false);
+    }
     const action = proposal.action;
     if (action.type === 'set-filter') {
       const worksheet = this.api.dashboard.worksheets.find(
@@ -677,6 +687,9 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         (candidate) => candidate.fieldName === action.target.field,
       );
       if (!filter) throw new ViewActionFailure('FILTER_NOT_FOUND', false);
+      if (filter.filterType !== this.api.filterTypeCategorical) {
+        throw new ViewActionFailure('UNSUPPORTED_FILTER_TYPE', false);
+      }
       const previous = await currentFilterState(filter);
       const domain = await filterDomainValues(filter);
       if (action.values.some((value) => !domain.some((candidate) => sameValue(candidate, value)))) {
@@ -720,6 +733,9 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
   }
 
   async undo(receipt: ViewActionReceipt): Promise<void> {
+    if (this.api.dashboard.name !== this.policy.scope.dashboard) {
+      throw new ViewActionFailure('DASHBOARD_SCOPE_MISMATCH', true);
+    }
     const previous = receipt.previous;
     if (previous.type === 'filter') {
       const worksheet = this.api.dashboard.worksheets.find(
@@ -730,6 +746,9 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         (candidate) => candidate.fieldName === previous.target.field,
       );
       if (!filter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
+      if (filter.filterType !== this.api.filterTypeCategorical) {
+        throw new ViewActionFailure('UNSUPPORTED_FILTER_TYPE', true);
+      }
       const current = await currentFilterState(filter);
       const expected = receipt.proposal.action;
       if (
@@ -748,10 +767,10 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       }
       try {
         if (previous.allSelected) {
-          if (!worksheet.clearFilterAsync) {
+          if (!worksheet.clearFiltersAsync) {
             throw new ViewActionFailure('FILTER_ALL_RESTORE_UNAVAILABLE', true);
           }
-          await worksheet.clearFilterAsync(previous.target.field);
+          await worksheet.clearFiltersAsync(previous.target.field);
         } else {
           await worksheet.applyFilterAsync(
             previous.target.field,
