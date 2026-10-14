@@ -12,9 +12,11 @@ import {
 } from '../src/debug-ui/view-actions.js';
 
 const policy: ViewActionPolicy = {
+  scope: { dashboard: 'fixture-dashboard' },
   filterTargets: [
     {
       kind: 'worksheet-field',
+      dashboard: 'fixture-dashboard',
       worksheet: 'fixture-dashboard',
       field: 'Region',
       valueType: 'string',
@@ -24,6 +26,7 @@ const policy: ViewActionPolicy = {
   parameterTargets: [
     {
       kind: 'parameter',
+      dashboard: 'fixture-dashboard',
       name: 'fixture-threshold',
       valueType: 'number',
       allowedValues: [0, 1, 2],
@@ -57,6 +60,7 @@ const eligible: ViewActionEligibility = {
 const filterProposal: ViewActionProposal = {
   id: 'proposal-filter',
   evidenceRef: 'evidence-1',
+  scope: { dashboard: 'fixture-dashboard' },
   action: {
     type: 'set-filter',
     target: filterTarget,
@@ -67,12 +71,44 @@ const filterProposal: ViewActionProposal = {
 const parameterProposal: ViewActionProposal = {
   id: 'proposal-parameter',
   evidenceRef: 'evidence-1',
+  scope: { dashboard: 'fixture-dashboard' },
   action: {
     type: 'set-parameter',
     target: { kind: 'parameter', name: 'fixture-threshold' },
     value: 1,
   },
 };
+
+function filterPolicy(
+  worksheet: string,
+  field: string,
+  valueType: 'string' | 'number',
+  allowedValues: readonly (string | number)[],
+  parameterName = 'fixture-threshold',
+): ViewActionPolicy {
+  return {
+    scope: { dashboard: 'fixture-dashboard' },
+    filterTargets: [
+      {
+        kind: 'worksheet-field',
+        dashboard: 'fixture-dashboard',
+        worksheet,
+        field,
+        valueType,
+        allowedValues,
+      },
+    ],
+    parameterTargets: [
+      {
+        kind: 'parameter',
+        dashboard: 'fixture-dashboard',
+        name: parameterName,
+        valueType: 'number',
+        allowedValues: [0, 1, 2],
+      },
+    ],
+  };
+}
 
 describe('validated view action boundary', () => {
   it('fails closed for HOLD and invalid targets or values', async () => {
@@ -176,13 +212,16 @@ describe('validated view action boundary', () => {
         await changeValueAsync(value);
       }),
     };
-    const adapter = new TableauViewActionAdapter({
-      dashboard: {
-        worksheets: [worksheet],
-        getParametersAsync: async () => [parameter],
+    const adapter = new TableauViewActionAdapter(
+      {
+        dashboard: {
+          worksheets: [worksheet],
+          getParametersAsync: async () => [parameter],
+        },
+        filterUpdateTypeReplace: 'REPLACE',
       },
-      filterUpdateTypeReplace: 'REPLACE',
-    });
+      filterPolicy('Orders', 'Region', 'string', ['West'], 'Threshold'),
+    );
     const filterReceipt = await adapter.apply({
       ...filterProposal,
       action: {
@@ -215,10 +254,13 @@ describe('validated view action boundary', () => {
       ],
       applyFilterAsync,
     };
-    const adapter = new TableauViewActionAdapter({
-      dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
-      filterUpdateTypeReplace: 'REPLACE',
-    });
+    const adapter = new TableauViewActionAdapter(
+      {
+        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        filterUpdateTypeReplace: 'REPLACE',
+      },
+      filterPolicy('Orders', 'Region', 'string', ['West']),
+    );
     await expect(
       adapter.apply({
         ...filterProposal,
@@ -229,6 +271,39 @@ describe('validated view action boundary', () => {
         },
       }),
     ).rejects.toThrow('FILTER_VALUE_NOT_CURRENTLY_SUPPORTED');
+    expect(applyFilterAsync).not.toHaveBeenCalled();
+  });
+
+  it('enforces the approved scope at the Tableau adapter boundary', async () => {
+    const applyFilterAsync = vi.fn(async () => undefined);
+    const worksheet = {
+      name: 'Orders',
+      getFiltersAsync: async () => [
+        {
+          fieldName: 'Region',
+          appliedValues: ['East'],
+          getDomainAsync: async () => ({ values: ['East', 'West'] }),
+        },
+      ],
+      applyFilterAsync,
+    };
+    const adapter = new TableauViewActionAdapter(
+      {
+        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        filterUpdateTypeReplace: 'REPLACE',
+      },
+      filterPolicy('Orders', 'Region', 'string', ['West']),
+    );
+    await expect(
+      adapter.apply({
+        ...filterProposal,
+        action: {
+          type: 'set-filter',
+          target: { kind: 'worksheet-field', worksheet: 'Other', field: 'Region' },
+          values: ['West'],
+        },
+      }),
+    ).rejects.toThrow('Filter target is not approved.');
     expect(applyFilterAsync).not.toHaveBeenCalled();
   });
 
@@ -247,6 +322,33 @@ describe('validated view action boundary', () => {
     });
   });
 
+  it('rejects concurrent applies at the controller boundary', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const adapter = new MockViewActionAdapter({
+      filters: { 'fixture-dashboard.Region': ['All'] },
+      parameters: { 'fixture-threshold': 0 },
+    });
+    const delayedAdapter = {
+      apply: async (proposal: ViewActionProposal) => {
+        await pending;
+        return adapter.apply(proposal);
+      },
+      undo: (receipt: Parameters<typeof adapter.undo>[0]) => adapter.undo(receipt),
+    };
+    const controller = new ViewActionController(delayedAdapter, policy);
+    const first = controller.apply(eligible, filterProposal);
+    await expect(controller.apply(eligible, parameterProposal)).resolves.toEqual({
+      ok: false,
+      error: 'Another view action is still in progress.',
+      partial: false,
+    });
+    release();
+    await expect(first).resolves.toMatchObject({ ok: true });
+  });
+
   it('refuses undo after an unrelated live edit', async () => {
     let filterState = ['East'];
     const worksheet = {
@@ -260,22 +362,17 @@ describe('validated view action boundary', () => {
       ],
       applyFilterAsync: vi.fn(async () => undefined),
     };
-    const adapter = new TableauViewActionAdapter({
-      dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
-      filterUpdateTypeReplace: 'REPLACE',
-    });
-    const controller = new ViewActionController(adapter, {
-      filterTargets: [
-        {
-          kind: 'worksheet-field',
-          worksheet: 'Orders',
-          field: 'Region',
-          valueType: 'string',
-          allowedValues: ['West'],
-        },
-      ],
-      parameterTargets: [],
-    });
+    const adapter = new TableauViewActionAdapter(
+      {
+        dashboard: { worksheets: [worksheet], getParametersAsync: async () => [] },
+        filterUpdateTypeReplace: 'REPLACE',
+      },
+      filterPolicy('Orders', 'Region', 'string', ['West']),
+    );
+    const controller = new ViewActionController(
+      adapter,
+      filterPolicy('Orders', 'Region', 'string', ['West']),
+    );
     const proposal = {
       ...filterProposal,
       action: {
@@ -330,18 +427,28 @@ describe('validated view action boundary', () => {
     try {
       host.__ambientAnalystViewAction = {
         policy: {
+          scope: { dashboard: 'fixture-dashboard' },
           filterTargets: [],
-          parameterTargets: [{ kind: 'parameter', name: 'Threshold', valueType: 'number' }],
+          parameterTargets: [
+            {
+              kind: 'parameter',
+              dashboard: 'fixture-dashboard',
+              name: 'Threshold',
+              valueType: 'number',
+            },
+          ],
         },
         proposal: parameterProposalWith('Threshold'),
       };
       expect(approvedViewActionConfigurationFromGlobal()).toBeUndefined();
       host.__ambientAnalystViewAction = {
         policy: {
+          scope: { dashboard: 'fixture-dashboard' },
           filterTargets: [],
           parameterTargets: [
             {
               kind: 'parameter',
+              dashboard: 'fixture-dashboard',
               name: 'Threshold',
               valueType: 'number',
               allowedValues: [1],
@@ -400,10 +507,13 @@ describe('validated view action boundary', () => {
       ],
       applyFilterAsync: typedApply,
     };
-    const typedAdapter = new TableauViewActionAdapter({
-      dashboard: { worksheets: [typedWorksheet], getParametersAsync: async () => [] },
-      filterUpdateTypeReplace: 'REPLACE',
-    });
+    const typedAdapter = new TableauViewActionAdapter(
+      {
+        dashboard: { worksheets: [typedWorksheet], getParametersAsync: async () => [] },
+        filterUpdateTypeReplace: 'REPLACE',
+      },
+      filterPolicy('Typed', 'Score', 'number', [1, 2]),
+    );
     const typedProposal = {
       ...filterProposal,
       action: {
@@ -435,10 +545,13 @@ describe('validated view action boundary', () => {
       applyFilterAsync: allApply,
       clearFilterAsync,
     };
-    const allAdapter = new TableauViewActionAdapter({
-      dashboard: { worksheets: [allWorksheet], getParametersAsync: async () => [] },
-      filterUpdateTypeReplace: 'REPLACE',
-    });
+    const allAdapter = new TableauViewActionAdapter(
+      {
+        dashboard: { worksheets: [allWorksheet], getParametersAsync: async () => [] },
+        filterUpdateTypeReplace: 'REPLACE',
+      },
+      filterPolicy('AllState', 'Region', 'string', ['East', 'West']),
+    );
     const allProposal = {
       ...filterProposal,
       action: {

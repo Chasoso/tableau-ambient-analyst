@@ -13,14 +13,18 @@ export type SetParameterAction = {
   value: ViewActionScalar;
 };
 
+export type ViewActionScope = { dashboard: string };
+
 export type ViewActionProposal = {
   id: string;
   evidenceRef: string;
+  scope: ViewActionScope;
   action: SetFilterAction | SetParameterAction;
 };
 
 export type ApprovedFilterTarget = {
   kind: 'worksheet-field';
+  dashboard: string;
   worksheet: string;
   field: string;
   valueType: ViewActionValueType;
@@ -29,12 +33,14 @@ export type ApprovedFilterTarget = {
 
 export type ApprovedParameterTarget = {
   kind: 'parameter';
+  dashboard: string;
   name: string;
   valueType: ViewActionValueType;
   allowedValues: readonly ViewActionScalar[];
 };
 
 export type ViewActionPolicy = {
+  scope: ViewActionScope;
   filterTargets: readonly ApprovedFilterTarget[];
   parameterTargets: readonly ApprovedParameterTarget[];
 };
@@ -131,10 +137,14 @@ function validatePolicy(policy: ViewActionPolicy): string | undefined {
   if (!policy || !Array.isArray(policy.filterTargets) || !Array.isArray(policy.parameterTargets)) {
     return 'View action policy is invalid.';
   }
+  if (!isBoundedName(policy.scope?.dashboard)) return 'View action scope is invalid.';
   if (policy.filterTargets.length > 32 || policy.parameterTargets.length > 32) {
     return 'View action policy is too large.';
   }
   for (const target of [...policy.filterTargets, ...policy.parameterTargets]) {
+    if (!isBoundedName(target.dashboard) || target.dashboard !== policy.scope.dashboard) {
+      return 'View action target scope is invalid.';
+    }
     if (!isBoundedName(target.kind === 'parameter' ? target.name : target.worksheet)) {
       return 'View action target is invalid.';
     }
@@ -167,16 +177,31 @@ export function validateViewActionProposal(
   }
   if (!isViewActionEligible(state))
     return { ok: false, error: 'No verified intervention is actionable.' };
-  const policyError = validatePolicy(parsedPolicy);
+  return validateApprovedProposal(parsedProposal, parsedPolicy);
+}
+
+function validateApprovedProposal(
+  proposal: ViewActionProposal,
+  policy: ViewActionPolicy,
+): ViewActionValidation {
+  const policyError = validatePolicy(policy);
   if (policyError) return { ok: false, error: policyError };
-  if (!isBoundedName(parsedProposal.id) || !isBoundedName(parsedProposal.evidenceRef)) {
-    return { ok: false, error: 'View action proposal identity is invalid.' };
+  if (
+    !isBoundedName(proposal.id) ||
+    !isBoundedName(proposal.evidenceRef) ||
+    !isBoundedName(proposal.scope?.dashboard) ||
+    proposal.scope.dashboard !== policy.scope.dashboard
+  ) {
+    return { ok: false, error: 'View action scope or identity is invalid.' };
   }
 
-  if (parsedProposal.action.type === 'set-filter') {
-    const { target, values } = parsedProposal.action;
-    const approved = parsedPolicy.filterTargets.find(
-      (candidate) => candidate.worksheet === target.worksheet && candidate.field === target.field,
+  if (proposal.action.type === 'set-filter') {
+    const { target, values } = proposal.action;
+    const approved = policy.filterTargets.find(
+      (candidate) =>
+        candidate.dashboard === proposal.scope.dashboard &&
+        candidate.worksheet === target.worksheet &&
+        candidate.field === target.field,
     );
     if (!approved) return { ok: false, error: 'Filter target is not approved.' };
     if (
@@ -191,10 +216,11 @@ export function validateViewActionProposal(
     ) {
       return { ok: false, error: 'Filter value is not approved.' };
     }
-  } else if (parsedProposal.action.type === 'set-parameter') {
-    const { target, value } = parsedProposal.action;
-    const approved = parsedPolicy.parameterTargets.find(
-      (candidate) => candidate.name === target.name,
+  } else if (proposal.action.type === 'set-parameter') {
+    const { target, value } = proposal.action;
+    const approved = policy.parameterTargets.find(
+      (candidate) =>
+        candidate.dashboard === proposal.scope.dashboard && candidate.name === target.name,
     );
     if (!approved) return { ok: false, error: 'Parameter target is not approved.' };
     if (
@@ -207,12 +233,13 @@ export function validateViewActionProposal(
   } else {
     return { ok: false, error: 'View action type is not supported.' };
   }
-  return { ok: true, proposal: parsedProposal };
+  return { ok: true, proposal };
 }
 
 export class ViewActionController {
   private lastReceipt: ViewActionReceipt | undefined;
   private readonly appliedProposalIds = new Set<string>();
+  private inFlight = false;
 
   constructor(
     private readonly adapter: ViewActionAdapter,
@@ -222,6 +249,7 @@ export class ViewActionController {
   resetForRun(): void {
     this.lastReceipt = undefined;
     this.appliedProposalIds.clear();
+    this.inFlight = false;
     this.adapter.reset?.();
   }
 
@@ -231,9 +259,13 @@ export class ViewActionController {
   ): Promise<ViewActionResult> {
     const validation = validateViewActionProposal(state, proposal, this.policy);
     if (!validation.ok) return { ...validation, partial: false };
+    if (this.inFlight) {
+      return { ok: false, error: 'Another view action is still in progress.', partial: false };
+    }
     if (this.appliedProposalIds.has(proposal.id)) {
       return { ok: false, error: 'This proposal was already applied.', partial: false };
     }
+    this.inFlight = true;
     try {
       const receipt = await this.adapter.apply(proposal);
       this.lastReceipt = receipt;
@@ -248,6 +280,8 @@ export class ViewActionController {
             : 'The view action could not be applied safely; its final state is unknown.',
         partial: error instanceof ViewActionFailure ? error.partial : true,
       };
+    } finally {
+      this.inFlight = false;
     }
   }
 
@@ -401,10 +435,22 @@ function parseValueType(value: unknown): ViewActionValueType | undefined {
 
 function parsePolicy(value: unknown): ViewActionPolicy | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as { filterTargets?: unknown; parameterTargets?: unknown };
+  const candidate = value as {
+    scope?: unknown;
+    filterTargets?: unknown;
+    parameterTargets?: unknown;
+  };
   if (!Array.isArray(candidate.filterTargets) || !Array.isArray(candidate.parameterTargets)) {
     return undefined;
   }
+  if (
+    typeof candidate.scope !== 'object' ||
+    candidate.scope === null ||
+    !isBoundedName((candidate.scope as { dashboard?: unknown }).dashboard)
+  ) {
+    return undefined;
+  }
+  const scope = { dashboard: (candidate.scope as { dashboard: string }).dashboard };
   const filterTargets: ApprovedFilterTarget[] = [];
   for (const target of candidate.filterTargets) {
     if (typeof target !== 'object' || target === null || Array.isArray(target)) return undefined;
@@ -413,6 +459,7 @@ function parsePolicy(value: unknown): ViewActionPolicy | undefined {
     const allowedValues = parseScalarList(item.allowedValues);
     if (
       item.kind !== 'worksheet-field' ||
+      !isBoundedName(item.dashboard) ||
       !isBoundedName(item.worksheet) ||
       !isBoundedName(item.field) ||
       !parsedType ||
@@ -423,6 +470,7 @@ function parsePolicy(value: unknown): ViewActionPolicy | undefined {
     }
     filterTargets.push({
       kind: 'worksheet-field',
+      dashboard: item.dashboard,
       worksheet: item.worksheet,
       field: item.field,
       valueType: parsedType,
@@ -437,6 +485,7 @@ function parsePolicy(value: unknown): ViewActionPolicy | undefined {
     const allowedValues = parseScalarList(item.allowedValues);
     if (
       item.kind !== 'parameter' ||
+      !isBoundedName(item.dashboard) ||
       !isBoundedName(item.name) ||
       !parsedType ||
       !allowedValues ||
@@ -446,12 +495,13 @@ function parsePolicy(value: unknown): ViewActionPolicy | undefined {
     }
     parameterTargets.push({
       kind: 'parameter',
+      dashboard: item.dashboard,
       name: item.name,
       valueType: parsedType,
       allowedValues,
     });
   }
-  const policy = { filterTargets, parameterTargets } satisfies ViewActionPolicy;
+  const policy = { scope, filterTargets, parameterTargets } satisfies ViewActionPolicy;
   return validatePolicy(policy) ? undefined : policy;
 }
 
@@ -459,6 +509,14 @@ function parseProposal(value: unknown): ViewActionProposal | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   if (!isBoundedName(candidate.id) || !isBoundedName(candidate.evidenceRef)) return undefined;
+  if (
+    typeof candidate.scope !== 'object' ||
+    candidate.scope === null ||
+    !isBoundedName((candidate.scope as { dashboard?: unknown }).dashboard)
+  ) {
+    return undefined;
+  }
+  const scope = { dashboard: (candidate.scope as { dashboard: string }).dashboard };
   if (typeof candidate.action !== 'object' || candidate.action === null) return undefined;
   const action = candidate.action as Record<string, unknown>;
   if (action.type === 'set-filter') {
@@ -476,6 +534,7 @@ function parseProposal(value: unknown): ViewActionProposal | undefined {
     return {
       id: candidate.id,
       evidenceRef: candidate.evidenceRef,
+      scope,
       action: {
         type: 'set-filter',
         target: {
@@ -496,6 +555,7 @@ function parseProposal(value: unknown): ViewActionProposal | undefined {
     return {
       id: candidate.id,
       evidenceRef: candidate.evidenceRef,
+      scope,
       action: {
         type: 'set-parameter',
         target: { kind: 'parameter', name: target.name },
@@ -597,9 +657,16 @@ async function parameterDomainValues(parameter: TableauParameter): Promise<ViewA
 }
 
 export class TableauViewActionAdapter implements ViewActionAdapter {
-  constructor(private readonly api: TableauViewActionApi) {}
+  constructor(
+    private readonly api: TableauViewActionApi,
+    private readonly policy: ViewActionPolicy,
+  ) {}
 
   async apply(proposal: ViewActionProposal): Promise<ViewActionReceipt> {
+    const authorization = validateApprovedProposal(proposal, this.policy);
+    if (!authorization.ok) {
+      throw new ViewActionFailure(authorization.error, false);
+    }
     const action = proposal.action;
     if (action.type === 'set-filter') {
       const worksheet = this.api.dashboard.worksheets.find(

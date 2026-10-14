@@ -43,7 +43,8 @@ expose provider/tool payloads or affect the host page.
 View actions are isolated in `src/debug-ui/view-actions.ts`. The shared
 boundary accepts only validated `set-filter` and `set-parameter` proposals,
 requires a verified `INTERVENE` flow, applies only after a user click, captures
-the immediately preceding state, and supports scoped Undo. Standalone uses a
+the immediately preceding state, requires an explicit approved dashboard scope,
+and supports scoped Undo. Standalone uses a
 synthetic mock fixture; those identifiers are never a production mapping. The
 Tableau adapter resolves exact worksheet/filter/parameter targets at execution
 time and fails closed when an explicit approved configuration or current target

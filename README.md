@@ -187,7 +187,8 @@ production Tableau mappings.
 
 The shared boundary supports allowlisted `set-filter` and `set-parameter`
 actions with typed values, evidence references, captured prior state, repeated
-click protection, and fail-closed target/value validation. The Tableau adapter
+click protection, an explicit approved dashboard scope, and fail-closed
+target/value validation. The Tableau adapter
 resolves worksheet/filter/parameter targets at execution time and uses the
 Extensions API's supported filter and parameter methods. A live host without an
 explicit approved configuration is rejected safely; no dashboard target is

@@ -28,9 +28,11 @@ const hostStatus = document.querySelector<HTMLElement>('#host-status')!;
 // This is a synthetic fixture only. It is intentionally not a production
 // Tableau mapping; live mappings must be supplied and approved by the host.
 const syntheticViewActionPolicy: ViewActionPolicy = {
+  scope: { dashboard: 'fixture-dashboard' },
   filterTargets: [
     {
       kind: 'worksheet-field',
+      dashboard: 'fixture-dashboard',
       worksheet: 'fixture-dashboard',
       field: 'Region',
       valueType: 'string',
@@ -40,6 +42,7 @@ const syntheticViewActionPolicy: ViewActionPolicy = {
   parameterTargets: [
     {
       kind: 'parameter',
+      dashboard: 'fixture-dashboard',
       name: 'fixture-threshold',
       valueType: 'number',
       allowedValues: [0, 1, 2],
@@ -49,6 +52,7 @@ const syntheticViewActionPolicy: ViewActionPolicy = {
 const syntheticInterventionProposal: ViewActionProposal = {
   id: 'fixture-verified-intervention-region',
   evidenceRef: 'local-analysis',
+  scope: { dashboard: 'fixture-dashboard' },
   action: {
     type: 'set-filter',
     target: { kind: 'worksheet-field', worksheet: 'fixture-dashboard', field: 'Region' },
@@ -279,7 +283,7 @@ void initializeTableauHost().then(({ mode }) => {
     const api = tableauViewActionApiFromGlobal();
     if (configuration && api) {
       viewActionController = new ViewActionController(
-        new TableauViewActionAdapter(api),
+        new TableauViewActionAdapter(api, configuration.policy),
         configuration.policy,
       );
       activeViewActionProposal = configuration.proposal;
