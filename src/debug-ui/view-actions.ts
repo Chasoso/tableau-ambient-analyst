@@ -379,6 +379,7 @@ export class MockViewActionAdapter implements ViewActionAdapter {
 export type TableauFilter = {
   fieldName?: unknown;
   filterType?: unknown;
+  isAllSelected?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
   getDomainAsync?: () => Promise<{ values?: readonly unknown[] }>;
@@ -623,7 +624,10 @@ async function currentFilterState(
   if (normalized.some((value) => value === undefined)) {
     throw new ViewActionFailure('FILTER_STATE_UNAVAILABLE', false);
   }
-  return { values: normalized as ViewActionScalar[], allSelected: values.length === 0 };
+  if (typeof filter.isAllSelected !== 'boolean') {
+    throw new ViewActionFailure('FILTER_SELECTION_MODE_UNAVAILABLE', false);
+  }
+  return { values: normalized as ViewActionScalar[], allSelected: filter.isAllSelected };
 }
 
 function hasSameValues(

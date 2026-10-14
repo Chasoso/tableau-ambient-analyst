@@ -195,6 +195,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           filterType: 'CATEGORICAL',
+          isAllSelected: false,
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
@@ -252,6 +253,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           filterType: 'CATEGORICAL',
+          isAllSelected: false,
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East'] }),
         },
@@ -291,6 +293,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           filterType: 'CATEGORICAL',
+          isAllSelected: false,
           appliedValues: ['East'],
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
@@ -413,6 +416,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           filterType: 'CATEGORICAL',
+          isAllSelected: false,
           getAppliedValues: async () => filterState,
           getDomainAsync: async () => ({ values: ['East', 'West', 'South'] }),
         },
@@ -564,6 +568,7 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Score',
           filterType: 'CATEGORICAL',
+          isAllSelected: false,
           getAppliedValues: async () => typedValues.map(Number),
           getDomainAsync: async () => ({ values: [1, 2] }),
         },
@@ -607,6 +612,9 @@ describe('validated view action boundary', () => {
         {
           fieldName: 'Region',
           filterType: 'CATEGORICAL',
+          get isAllSelected() {
+            return allValues.length === 0;
+          },
           getAppliedValues: async () => allValues,
           getDomainAsync: async () => ({ values: ['East', 'West'] }),
         },
