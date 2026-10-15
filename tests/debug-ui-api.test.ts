@@ -12,8 +12,11 @@ import {
   deterministicDependencies,
 } from '../src/debug-ui/application.js';
 
-async function withServer(client?: AnalysisClient) {
-  const server = createServer(createDebugUiRequestHandler(client));
+async function withServer(
+  client?: AnalysisClient,
+  options?: Parameters<typeof createDebugUiRequestHandler>[1],
+) {
+  const server = createServer(createDebugUiRequestHandler(client, options));
   await new Promise<void>((resolve) => server.listen(0, 'localhost', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('server did not bind');
@@ -29,6 +32,50 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
 afterEach(() => vi.unstubAllGlobals());
 
 describe('debug UI analysis API', () => {
+  it('injects only an explicit local view-action config and escapes HTML-sensitive values', async () => {
+    const { server, base } = await withServer(undefined, {
+      viewActionConfig: {
+        policy: {
+          scope: { dashboard: 'Approved <Dashboard>' },
+          filterTargets: [],
+          parameterTargets: [],
+        },
+        proposal: {
+          id: 'local-test',
+          evidenceRef: 'human-approved-local-test',
+          scope: { dashboard: 'Approved <Dashboard>' },
+          action: {
+            type: 'set-filter',
+            target: { kind: 'worksheet-field', worksheet: 'Sheet', field: 'Region' },
+            values: ['East'],
+          },
+        },
+      },
+    });
+    try {
+      const response = await fetch(`${base}/`);
+      const html = await response.text();
+      expect(html).toContain('globalThis.__ambientAnalystViewAction');
+      expect(html).toContain('\\u003cDashboard\\u003e');
+      expect(html).not.toContain('Approved <Dashboard>');
+      expect(html.indexOf('globalThis.__ambientAnalystViewAction')).toBeLessThan(
+        html.indexOf('/debug-ui/browser.js'),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('does not inject a live configuration unless one is explicitly supplied', async () => {
+    const { server, base } = await withServer();
+    try {
+      const response = await fetch(`${base}/`);
+      expect(await response.text()).not.toContain('globalThis.__ambientAnalystViewAction');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('runs a bounded scenario, returns the trace, and supports refresh', async () => {
     const { server, base } = await withServer();
     try {

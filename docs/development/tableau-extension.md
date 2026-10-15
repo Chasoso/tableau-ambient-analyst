@@ -40,9 +40,44 @@ call the same local API and application-layer replay path. The API uses
 bounded in-memory results and safe error responses, so failed runs do not
 expose provider/tool payloads or affect the host page.
 
-The adapter is intentionally not a View Action implementation. Worksheet,
-filter, and parameter operations remain in the future #71 boundary. No live
-Tableau data, MCP, credentials, or persistent workbook writes are used here.
+View actions are isolated in `src/debug-ui/view-actions.ts`. The shared
+boundary accepts only validated `set-filter` and `set-parameter` proposals,
+requires a verified `INTERVENE` flow, applies only after a user click, captures
+the immediately preceding state, requires an explicit approved dashboard scope,
+and supports scoped Undo. Standalone uses a
+synthetic mock fixture; those identifiers are never a production mapping. The
+Tableau adapter resolves exact worksheet/filter/parameter targets at execution
+time and fails closed when an explicit approved configuration or current target
+state is unavailable. No target is discovered or authorized automatically, and
+no persistent workbook write is performed.
+
+The embedded browser only constructs the live adapter when the host supplies an
+explicit approved configuration and the Tableau dashboard API is available. In
+the absence of either, a badge click is rejected safely. The synthetic fixture
+configuration is never treated as a live Tableau mapping.
+
+### Local approved configuration injection
+
+The Windows smoke test can supply the approved configuration through a local
+JSON file without changing source code or granting any dashboard automatically.
+Create `.local\\issue-71-view-action.json` from the JSON shape in the README,
+replace the placeholders with the exact dashboard, worksheet, field or
+parameter, and allowed value approved for the safe test workbook, then start
+PowerShell with:
+
+```powershell
+$env:AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE = (Resolve-Path ".local\issue-71-view-action.json").Path
+npm run debug:ui
+```
+
+The path must be absolute and the file must contain no credentials. The server
+reads it once at startup and injects it only into the localhost page. The
+existing runtime schema validation still checks the policy, proposal, current
+Tableau dashboard identity, exact target, value type, and allowed values. An
+unset, unreadable, malformed, or schema-invalid file leaves the live adapter
+fail-closed. Do not use wildcards or discovery, and clear the environment
+variable and restart the server after testing. `.local/` is ignored so the
+approved values are not committed.
 
 ## Manual Tableau Desktop smoke test
 
@@ -51,15 +86,23 @@ This repository change has not been executed in Tableau Desktop: status is
 
 On a supported Tableau Desktop installation:
 
-1. Start `npm run debug:ui` and confirm the standalone URL opens in a browser.
+1. Create the local approved configuration above, set the environment variable,
+   start `npm run debug:ui`, and confirm the standalone URL opens in a browser.
 2. Open a safe test workbook and a dashboard in Tableau Desktop.
 3. Add a Dashboard Extension object and select the development `.trex` file.
 4. If prompted, explicitly approve the localhost/trust permission for this
    test extension. Record the exact prompt and Desktop version.
 5. Confirm the debug console renders, choose a deterministic scenario, and run
-   Replay. Confirm the visible status, stages, evidence, and mock intervention
-   behavior match the standalone browser.
-6. Remove the extension or restore the original dashboard state after testing.
+   Replay. Confirm the visible status, stages, evidence, and intervention
+   behavior match the standalone browser. Before applying a live view action,
+   verify that the injected file names the actual approved worksheet,
+   field/parameter, permitted value, and dashboard scope for this workbook;
+   never substitute the synthetic fixture names.
+6. Click the `!` badge once and record the actual pre/post dashboard state,
+   then click Undo and record the restored state. If the target or prior state
+   cannot be verified, the adapter must fail closed and the result is
+   **UNVERIFIED**, not a successful smoke test.
+7. Remove the extension or restore the original dashboard state after testing.
 
 If Tableau refuses the extension, shows a blank zone, or reports a trust or
 security error:
