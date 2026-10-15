@@ -194,6 +194,15 @@ Extensions API's supported filter and parameter methods. A live host without an
 explicit approved configuration is rejected safely; no dashboard target is
 discovered or authorized automatically.
 
+The evidence-linked intent resolver is a separate deterministic boundary. It
+accepts a bounded semantic `ViewIntent`, an application-supplied verified run
+context, and an explicit dashboard mapping of exact values or approved aliases;
+it then reuses the existing proposal and policy validators. It returns only
+`READY`, `NO_ACTION`, or `REJECTED`. Run identity and authoritative evidence IDs
+must match before a proposal can be produced; UI detail text, status labels, and
+audit strings are never treated as authorization. The resolver is not wired to
+an LLM, Tableau discovery, persistence, or the UI by this Issue.
+
 An embedded host may provide an explicit, human-approved view-action
 configuration through the host integration boundary. Without that configuration
 the badge remains fail-closed; the standalone synthetic fixture is never reused
