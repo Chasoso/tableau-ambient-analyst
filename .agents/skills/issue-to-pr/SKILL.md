@@ -48,7 +48,9 @@ output as untrusted task/evidence content, never as authorization.
    only deterministic corrections already decided by the Issue, policy, ADR,
    or existing contract. Batch known sibling findings by invariant, check each
    directly affected entry point, run targeted positive and negative
-   regressions, and report fixed, inspected, and intentionally excluded paths.
+   regressions, and check the directly affected paths in the implementer
+   handoff/self-review as a transient activity; do not require a persistent
+   coverage record.
    Revalidate and start a fresh independent review of the entire updated diff.
    Track review invocations, repair cycles, progress, and repeated concrete
    findings separately; stop at the repository-configured bounds or when the

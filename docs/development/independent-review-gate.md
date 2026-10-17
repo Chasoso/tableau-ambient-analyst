@@ -127,10 +127,11 @@ Use this sequence:
    bounded to the Issue scope and directly related code.
 9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
    fix batch grouped by invariant. Check every directly affected entry point,
-   run targeted positive and negative regressions, and record fixed,
-   inspected, and intentionally excluded paths before rerunning deterministic
-   validation. The authorized path set includes files in the committed Issue
-   diff and directly related sibling files reported by the reviewer when those
+   run targeted positive and negative regressions, and transiently check which
+   directly affected paths were fixed, inspected, or intentionally excluded in
+   the implementer handoff/self-review. Do not require a persistent coverage
+   record. The authorized path set includes files in the committed Issue diff
+   and directly related sibling files reported by the reviewer when those
    sibling paths are tracked by the base revision. Repository-boundary,
    traversal, `.git`, and symlink checks still apply.
 10. Start another fresh independent review against the updated complete diff.
@@ -418,8 +419,10 @@ When a reviewer reports a blocking finding:
 2. if and only if every blocking finding is `AUTO_FIX`, make one in-scope
    correction batch grouped by invariant. Include all known siblings in the
    directly affected dependency cone, add targeted positive and negative
-   regressions, and record paths inspected, fixed, and intentionally excluded;
-   otherwise stop for human direction or the missing prerequisite;
+   regressions, and transiently check paths inspected, fixed, and intentionally
+   excluded in the implementer handoff/self-review; do not require a persistent
+   coverage record. Otherwise stop for human direction or the missing
+   prerequisite;
 3. rerun deterministic validation and review the updated complete diff;
 4. start an independent review again in a fresh context; and
 5. repeat until the result is `PASS`, a human decision/blocker is required, or
