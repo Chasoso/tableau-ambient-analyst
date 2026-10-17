@@ -207,6 +207,30 @@ describe('debug UI analysis API', () => {
     }
   });
 
+  it('rejects an envelope whose view intent is linked to another run', async () => {
+    const { server, base } = await withServer();
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      const envelope = (await response.json()) as {
+        runId: string;
+        viewIntent?: { runId: string };
+      };
+      envelope.viewIntent!.runId = 'run-other';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(JSON.stringify(envelope), { status: 200 })),
+      );
+      await expect(
+        new HttpAnalysisClient().replay(scenarioById('verified-intervention')),
+      ).rejects.toThrow('ANALYSIS_RUN_RESPONSE_INVALID');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('fails closed for malformed input and runner failure without exposing details', async () => {
     const failingClient: AnalysisClient = {
       replay: async () => {

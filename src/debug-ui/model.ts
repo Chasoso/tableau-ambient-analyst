@@ -452,7 +452,8 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
   const viewIntent = value.viewIntent;
   if (
     viewIntent !== undefined &&
-    (!value.verifiedEvidenceIds ||
+    (viewIntent.runId !== value.runId ||
+      !value.verifiedEvidenceIds ||
       !value.verifiedEvidenceIds.includes(viewIntent.evidenceRef) ||
       !scenario.evidence.some(
         (item) => isRecord(item) && item.provenance === viewIntent.evidenceRef,
