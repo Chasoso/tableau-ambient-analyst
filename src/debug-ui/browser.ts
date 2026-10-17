@@ -90,6 +90,8 @@ let viewActionController = new ViewActionController(
 );
 let activeViewActionPolicy = syntheticViewActionPolicy;
 let activeViewIntentMappings: unknown = syntheticViewIntentMappings;
+let hostMode: 'unknown' | 'standalone' | 'tableau' = 'unknown';
+let observedHostDashboard: string | undefined;
 let activeViewActionResolution: ViewIntentResolution = {
   status: 'NO_ACTION',
   reason: 'No verified view intent is available for this run.',
@@ -97,6 +99,16 @@ let activeViewActionResolution: ViewIntentResolution = {
 let canUndoViewAction = false;
 
 function resolveRunAction(state: ReplayState): ViewIntentResolution {
+  const hostDashboard = observeHostScope();
+  if (hostMode === 'tableau' && hostDashboard !== activeViewActionPolicy.scope.dashboard) {
+    return {
+      status: 'REJECTED',
+      reason: 'The current Tableau dashboard is outside the approved scope.',
+    };
+  }
+  if (hostMode === 'unknown') {
+    return { status: 'NO_ACTION', reason: 'The host scope is not initialized.' };
+  }
   if (!state.viewIntent || !state.runId) {
     return { status: 'NO_ACTION', reason: 'No verified view intent is available for this run.' };
   }
@@ -111,6 +123,26 @@ function resolveRunAction(state: ReplayState): ViewIntentResolution {
     mappings: activeViewIntentMappings,
     policy: activeViewActionPolicy,
   });
+}
+
+function observeHostScope(): string | undefined {
+  const dashboard =
+    hostMode === 'standalone'
+      ? activeViewActionPolicy.scope.dashboard
+      : hostMode === 'tableau'
+        ? tableauViewActionApiFromGlobal()?.dashboard.name
+        : undefined;
+  const identity = typeof dashboard === 'string' ? dashboard : undefined;
+  if (identity !== observedHostDashboard) {
+    viewActionController.resetForRun();
+    canUndoViewAction = false;
+    activeViewActionResolution = {
+      status: 'NO_ACTION',
+      reason: 'The host dashboard scope changed; the previous action was invalidated.',
+    };
+    observedHostDashboard = identity;
+  }
+  return identity;
 }
 
 function scenarioStatus(state: ReplayState): string {
@@ -228,12 +260,13 @@ function render(state: ReplayState): void {
       badge.title = 'Apply the approved view action to the current host.';
       badge.addEventListener('click', async () => {
         badge.disabled = true;
-        const result = await viewActionController.apply(
-          state,
-          activeViewActionResolution.status === 'READY'
-            ? activeViewActionResolution.proposal
-            : ({} as ViewActionProposal),
-        );
+        const currentResolution = resolveRunAction(state);
+        if (currentResolution.status !== 'READY') {
+          state.audit.push(`view-action.rejected: ${currentResolution.reason}`);
+          render(state);
+          return;
+        }
+        const result = await viewActionController.apply(state, currentResolution.proposal);
         if (result.ok) {
           canUndoViewAction = true;
           state.audit.push('view-action.applied');
@@ -250,6 +283,17 @@ function render(state: ReplayState): void {
         undo.textContent = 'Undo view action';
         undo.addEventListener('click', async () => {
           undo.disabled = true;
+          const currentDashboard = observeHostScope();
+          if (
+            hostMode === 'tableau' &&
+            currentDashboard !== activeViewActionPolicy.scope.dashboard
+          ) {
+            state.audit.push(
+              'view-action.undo-failed: The current Tableau dashboard is outside the approved scope.',
+            );
+            render(state);
+            return;
+          }
           const result = await viewActionController.undo();
           state.audit.push(
             result.ok ? 'view-action.undone' : `view-action.undo-failed: ${result.error}`,
@@ -332,6 +376,7 @@ runButton.addEventListener('click', async () => {
 renderIdle(selectedScenario());
 
 void initializeTableauHost().then(({ mode }) => {
+  hostMode = mode === 'standalone' ? 'standalone' : mode === 'tableau' ? 'tableau' : 'unknown';
   hostStatus.dataset.host = mode;
   hostStatus.textContent = mode === 'standalone' ? 'Standalone' : `Host: ${mode}`;
   if (mode === 'standalone') {

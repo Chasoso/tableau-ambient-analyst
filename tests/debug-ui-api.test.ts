@@ -153,6 +153,34 @@ describe('debug UI analysis API', () => {
     }
   });
 
+  it('does not carry a candidate whose evidence is not part of the verified run', async () => {
+    const baseClient = new FixtureAnalysisClient();
+    const forgedClient: AnalysisClient = {
+      replay: async (scenario) => ({
+        ...(await baseClient.replay(scenario)),
+        candidateIntent: {
+          id: 'forged-candidate',
+          evidenceRef: 'evidence-not-verified',
+          operation: 'set-filter' as const,
+          semanticKey: 'region',
+          valueType: 'string' as const,
+          values: ['West'],
+        },
+      }),
+    };
+    const { server, base } = await withServer(forgedClient);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).viewIntent).toBeUndefined();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('fails closed for malformed input and runner failure without exposing details', async () => {
     const failingClient: AnalysisClient = {
       replay: async () => {

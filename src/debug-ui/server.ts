@@ -156,6 +156,22 @@ function isCandidateViewIntent(value: unknown): value is CandidateViewIntent {
   );
 }
 
+function isActionableCandidate(
+  result: Awaited<ReturnType<AnalysisClient['replay']>>,
+): result is Awaited<ReturnType<AnalysisClient['replay']>> & {
+  candidateIntent: CandidateViewIntent;
+} {
+  return (
+    result.status === 'completed' &&
+    result.scenario.verifier.status === 'VERIFIED' &&
+    result.scenario.intervention?.decision === 'INTERVENE' &&
+    result.candidateIntent !== undefined &&
+    result.scenario.evidence.some(
+      ({ provenance }) => provenance === result.candidateIntent?.evidenceRef,
+    )
+  );
+}
+
 function validClientResult(
   result: Awaited<ReturnType<AnalysisClient['replay']>>,
   requestedId: string,
@@ -261,7 +277,7 @@ function sanitizeRun(
     status: result.status,
     scenario,
     audit,
-    ...(result.candidateIntent ? { viewIntent: { ...result.candidateIntent, runId } } : {}),
+    ...(isActionableCandidate(result) ? { viewIntent: { ...result.candidateIntent, runId } } : {}),
   };
 }
 
