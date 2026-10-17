@@ -119,9 +119,20 @@ These are guarantees, not commitments to a particular file, lock, or command:
 9. Reviewer execution failure, crash with unknown liveness, non-converging
    findings, exhausted limits, unverifiable state, security decisions, and
    final merge remain distinct outcomes.
-10. Human ownership remains with security/authorization policy, material
-    architecture or external-service choices, recovery of unverifiable state,
-    and the final merge decision.
+10. Human ownership remains with product direction; material architecture or
+    external-service selection; security, authentication, and authorization;
+    privacy or retention; meaningful recurring cost or material data-flow
+    choices; hypothesis keep/revise/reject decisions; conflicting
+    requirements; recovery of unverifiable state; and the final merge
+    decision. Missing credentials, services, fixtures, or prerequisites are
+    blocked prerequisites, not decisions to be guessed by the runner.
+11. The Issue-to-PR contract remains intact: one Issue, canonical
+    `feat/issue-N` branch and `.worktrees/issue-N` workspace, clean primary
+    `main`, no direct main push, no force push or hook bypass, and no Codex
+    merge. A fresh PASS and exact-head CI are required before handoff.
+12. CI repair is bounded to 3 repair cycles, 2 transient reruns, and 60
+    pending polls. These bounds, like the 16 review-invocation and 8
+    AUTO_FIX limits, are not reset or extended by a redesign.
 
 ## 4. Options using common criteria
 
@@ -190,12 +201,13 @@ or authorization questions, and any human-owned decision. A bounded retry
 that cannot prove these predicates returns `HUMAN_DECISION_REQUIRED`; it never
 counts missing error data as success.
 
-## 6. Recommendation: B, with a narrow use of C
+## 6. Conditional recommendation: B, with a narrow use of C
 
-Recommend a simplified single-writer runner, subject to explicit Human
-Decision. The runner should have one normal state transition owner and one
-durable, append-oriented audit record for each invocation. A compact state
-machine should distinguish only:
+The evidence supports B as the candidate direction, subject to explicit Human
+Decision and the feasibility proof below; it does not establish that B is
+ready to implement. The proposed simplified single-writer runner would have
+one normal state transition owner and one durable, append-oriented audit
+record for each invocation. A compact state machine would distinguish only:
 
 - `READY` / no active invocation;
 - `RUNNING` with exact Issue/branch/base/worktree/HEAD and a bounded deadline;
@@ -203,7 +215,7 @@ machine should distinguish only:
   bounded stop); and
 - `HUMAN_DECISION_REQUIRED` for unknown or policy-owned state.
 
-The proposed shape retains the independent child reviewer, structured parser,
+The proposed shape would retain the independent child reviewer, structured parser,
 exact identity checks, current budgets, fail-closed semantics, AUTO_FIX
 eligibility rules, and exact-head CI gate. It simplifies or removes generic
 recovery commands that exist only to repair an interrupted multi-file
@@ -229,6 +241,43 @@ This is a state-category reduction, not a LOC target:
 The proposed design does not claim that all historical records can be deleted.
 Existing #76/#77/#88 records must remain readable as audit history, and a
 fail-closed compatibility reader may remain isolated from the new writer.
+
+### Evidence required before selecting B
+
+Before implementation is authorized, the following must be demonstrated in a
+separate spike or design review. The single-writer assumption must be made
+explicit: the supported topology is one active Issue-to-PR runner for one
+canonical Issue workspace; a second invocation fails closed rather than
+joining or repairing the first. If concurrent invocations are a required
+product behavior, B is not established by this investigation and A or a new
+concurrency design must be considered.
+
+The proof obligations are:
+
+1. Ownership: an exclusive-create primitive identifies one active operation;
+   the record binds operation ID, Issue, branch, base, canonical worktree,
+   HEAD, schema fingerprint, deadline, and phase. There is no age-based owner
+   deletion and no generic stale-lock recovery.
+2. Crash atomicity: each state publication is written to a temporary file,
+   flushed according to the supported Node/filesystem contract, and atomically
+   renamed. A restart sees either the prior complete record or the next
+   complete record, never a partial success. An active or ambiguous record
+   remains `HUMAN_DECISION_REQUIRED` unless its terminal evidence is complete.
+3. Restart semantics: a known, durably recorded child exit may consume a new
+   invocation under the bounded-continuation predicates above; unknown
+   liveness, interrupted recovery, and malformed records stop without refund.
+4. Accounting/approval semantics: the same single writer atomically records
+   the invocation outcome and, where applicable, consumes a target-bound
+   single-use approval. Duplicate, stale, or cross-worktree approvals leave
+   state unchanged. Historical #76/#77/#88 records are read-only evidence.
+5. Concurrency/crash tests pass on macOS and Windows, including two starts,
+   crash before/after every publication boundary, partial replacement,
+   changed HEAD, duplicate consumption, and a child whose liveness cannot be
+   verified. Any failed proof criterion keeps B conditional and leaves A as
+   the safer implementation choice.
+
+These are acceptance criteria for a future implementation decision, not claims
+that the current runner already satisfies the compact protocol.
 
 ## 7. Migration and test plan (not authorized by this Issue)
 
@@ -256,7 +305,7 @@ The migration must preserve the Issue-to-PR contract: clean canonical
 worktree, independent PASS, no direct main push, latest exact-head CI, bounded
 repair/rerun limits, and no Codex merge.
 
-## 8. Human Decision required
+## 9. Human Decision required
 
 Before implementing B (or changing any authorization/security policy), a
 Human must decide whether the repository accepts the following recommendation:
@@ -279,7 +328,7 @@ blocked launch case remains a regression fixture/input. Any implementation
 must provide an explicit rollback and a human decision on how legacy
 recovery-only states are represented.
 
-## 9. Quality notes
+## 10. Quality notes
 
 - This deliverable changes documentation only.
 - No runner, CLI, accounting, approval, lock, authentication, or security
