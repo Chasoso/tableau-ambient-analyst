@@ -162,13 +162,15 @@ function isActionableCandidate(
   candidateIntent: CandidateViewIntent;
   verifiedEvidenceIds: readonly string[];
 } {
+  const candidate = result.candidateIntent;
   return (
     result.status === 'completed' &&
     result.scenario.verifier.status === 'VERIFIED' &&
     result.scenario.intervention?.decision === 'INTERVENE' &&
-    result.candidateIntent !== undefined &&
+    candidate !== undefined &&
     Array.isArray(result.verifiedEvidenceIds) &&
-    result.verifiedEvidenceIds.includes(result.candidateIntent.evidenceRef)
+    result.verifiedEvidenceIds.includes(candidate.evidenceRef) &&
+    result.scenario.evidence.some(({ provenance }) => provenance === candidate.evidenceRef)
   );
 }
 

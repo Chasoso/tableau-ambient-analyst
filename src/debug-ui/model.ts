@@ -449,6 +449,16 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
       return false;
   }
   if (scenario.error !== undefined && !isBoundedString(scenario.error, 200)) return false;
+  const viewIntent = value.viewIntent;
+  if (
+    viewIntent !== undefined &&
+    (!value.verifiedEvidenceIds ||
+      !value.verifiedEvidenceIds.includes(viewIntent.evidenceRef) ||
+      !scenario.evidence.some(
+        (item) => isRecord(item) && item.provenance === viewIntent.evidenceRef,
+      ))
+  )
+    return false;
   return hasValidReplayTraceInvariants(
     value.status as ReplayState['status'],
     {

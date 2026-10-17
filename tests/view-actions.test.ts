@@ -434,7 +434,7 @@ describe('validated view action boundary', () => {
     await expect(first).resolves.toEqual({
       ok: false,
       error: 'This view action was invalidated by a new run or host scope.',
-      partial: false,
+      partial: true,
     });
     await expect(controller.undo()).resolves.toEqual({
       ok: false,

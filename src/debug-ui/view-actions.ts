@@ -298,7 +298,7 @@ export class ViewActionController {
         return {
           ok: false,
           error: 'This view action was invalidated by a new run or host scope.',
-          partial: false,
+          partial: true,
         };
       }
       this.lastReceipt = receipt;
@@ -342,7 +342,7 @@ export class ViewActionController {
         return {
           ok: false,
           error: 'This view action undo was invalidated by a new run or host scope.',
-          partial: false,
+          partial: true,
         };
       }
       this.lastReceipt = undefined;

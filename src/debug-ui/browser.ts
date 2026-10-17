@@ -237,7 +237,9 @@ function render(state: ReplayState): void {
         if (activeRunId !== runId || hostEpoch !== actionHostEpoch) return;
         if (result.ok) {
           canUndoViewAction = true;
-          state.audit.push('view-action.applied');
+          if (state.audit.at(-1) !== 'view-action.applied') {
+            state.audit.push('view-action.applied');
+          }
         } else {
           state.audit.push(`view-action.rejected: ${result.error}`);
         }

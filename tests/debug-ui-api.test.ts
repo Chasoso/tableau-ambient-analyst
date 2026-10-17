@@ -177,17 +177,22 @@ describe('debug UI analysis API', () => {
   it('does not carry a candidate whose evidence is not part of the verified run', async () => {
     const baseClient = new FixtureAnalysisClient();
     const forgedClient: AnalysisClient = {
-      replay: async (scenario) => ({
-        ...(await baseClient.replay(scenario)),
-        candidateIntent: {
-          id: 'forged-candidate',
-          evidenceRef: 'evidence-not-verified',
-          operation: 'set-filter' as const,
-          semanticKey: 'region',
-          valueType: 'string' as const,
-          values: ['West'],
-        },
-      }),
+      replay: async (scenario) => {
+        const result = await baseClient.replay(scenario);
+        return {
+          ...result,
+          scenario: { ...result.scenario, evidence: [] },
+          verifiedEvidenceIds: ['evidence-1'],
+          candidateIntent: {
+            id: 'forged-candidate',
+            evidenceRef: 'evidence-not-verified',
+            operation: 'set-filter' as const,
+            semanticKey: 'region',
+            valueType: 'string' as const,
+            values: ['West'],
+          },
+        };
+      },
     };
     const { server, base } = await withServer(forgedClient);
     try {
