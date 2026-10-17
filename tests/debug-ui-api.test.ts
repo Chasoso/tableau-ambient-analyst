@@ -88,6 +88,15 @@ describe('debug UI analysis API', () => {
       const run = (await created.json()) as { runId: string; status: string; audit: string[] };
       expect(run.status).toBe('completed');
       expect(run.audit).toContain('analysis-contract-created');
+      const runWithIntent = (await fetch(`${base}/api/analysis-runs/${run.runId}`)).json();
+      await expect(runWithIntent).resolves.toMatchObject({
+        runId: run.runId,
+        viewIntent: {
+          runId: run.runId,
+          evidenceRef: 'evidence-1',
+          semanticKey: 'region',
+        },
+      });
       const refreshed = await fetch(`${base}/api/analysis-runs/${run.runId}`);
       expect(refreshed.status).toBe(200);
       expect(await refreshed.json()).toEqual(run);
@@ -106,7 +115,10 @@ describe('debug UI analysis API', () => {
           body: JSON.stringify({ scenarioId }),
         });
         expect(response.status).toBe(200);
-        expect((await response.json()).scenario.id).toBe(scenarioId);
+        const body = (await response.json()) as { scenario: { id: string }; viewIntent?: unknown };
+        expect(body.scenario.id).toBe(scenarioId);
+        expect(body.viewIntent).toBeUndefined();
+        expect((await fetch(`${base}/api/analysis-runs/unknown`)).status).toBe(404);
       } finally {
         await closeServer(server);
       }

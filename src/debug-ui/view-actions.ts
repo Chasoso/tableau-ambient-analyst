@@ -435,7 +435,8 @@ export type TableauViewActionApi = {
 
 export type ApprovedViewActionConfiguration = {
   policy: ViewActionPolicy;
-  proposal: ViewActionProposal;
+  proposal?: ViewActionProposal;
+  mappings?: unknown;
 };
 
 export function approvedViewActionConfigurationFromGlobal():
@@ -591,10 +592,15 @@ function parseApprovedViewActionConfiguration(
   value: unknown,
 ): ApprovedViewActionConfiguration | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as { policy?: unknown; proposal?: unknown };
+  const candidate = value as { policy?: unknown; proposal?: unknown; mappings?: unknown };
   const policy = parsePolicy(candidate.policy);
   const proposal = parseProposal(candidate.proposal);
-  return policy && proposal ? { policy, proposal } : undefined;
+  if (!policy) return undefined;
+  return {
+    policy,
+    ...(proposal ? { proposal } : {}),
+    ...(candidate.mappings !== undefined ? { mappings: candidate.mappings } : {}),
+  };
 }
 
 export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefined {

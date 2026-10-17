@@ -236,7 +236,25 @@ function project(
   if (flow.status === 'FAILED') projectedScenario.error = 'The application flow failed closed.';
   const audit = flow.events.slice(0, 64).map(({ type }) => type as string);
   audit.push('audit.recorded');
-  return { status, scenario: projectedScenario, audit };
+  return {
+    status,
+    scenario: projectedScenario,
+    audit,
+    ...(scenario.id === 'verified-intervention'
+      ? {
+          // The deterministic fixture emits a structured candidate at the analysis boundary.
+          // The server assigns the authoritative run ID before it reaches the browser.
+          candidateIntent: {
+            id: 'fixture-verified-intervention-region',
+            evidenceRef: 'evidence-1',
+            operation: 'set-filter' as const,
+            semanticKey: 'region',
+            valueType: 'string' as const,
+            values: ['West'],
+          },
+        }
+      : {}),
+  };
 }
 
 export class ApplicationAnalysisClient implements AnalysisClient {

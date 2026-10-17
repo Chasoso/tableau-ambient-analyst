@@ -1,3 +1,7 @@
+import type { ViewIntent } from './view-intents.js';
+
+export type CandidateViewIntent = Omit<ViewIntent, 'runId'>;
+
 export type DebugRunStatus =
   'idle' | 'running' | 'completed' | 'failed' | 'ignored' | 'insufficient-evidence';
 
@@ -24,16 +28,22 @@ export type DebugScenario = {
 };
 
 export type ReplayState = {
+  runId?: string;
   status: Exclude<DebugRunStatus, 'idle' | 'running'>;
   scenario: DebugScenario;
   audit: string[];
+  candidateIntent?: CandidateViewIntent;
+  viewIntent?: ViewIntent;
 };
 
 export interface AnalysisClient {
   replay(scenario: DebugScenario): Promise<ReplayState>;
 }
 
-export type AnalysisRunEnvelope = ReplayState & { runId: string };
+export type AnalysisRunEnvelope = Omit<ReplayState, 'candidateIntent' | 'viewIntent'> & {
+  runId: string;
+  viewIntent?: ViewIntent;
+};
 
 export const scenarios: readonly DebugScenario[] = [
   {
@@ -192,6 +202,30 @@ function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length <= max;
 }
 
+function isViewIntent(value: unknown): value is ViewIntent {
+  if (!isRecord(value)) return false;
+  if (
+    !isBoundedString(value.id, 200) ||
+    !isBoundedString(value.runId, 100) ||
+    !isBoundedString(value.evidenceRef, 200) ||
+    !isBoundedString(value.semanticKey, 200) ||
+    !['set-filter', 'set-parameter'].includes(value.operation as string) ||
+    !['string', 'number', 'boolean'].includes(value.valueType as string) ||
+    !Array.isArray(value.values) ||
+    value.values.length === 0 ||
+    value.values.length > 16 ||
+    (value.operation === 'set-parameter' && value.values.length !== 1)
+  )
+    return false;
+  return value.values.every(
+    (item) =>
+      (typeof item === 'string' ||
+        typeof item === 'boolean' ||
+        (typeof item === 'number' && Number.isFinite(item))) &&
+      typeof item === value.valueType,
+  );
+}
+
 export function hasValidReplayStateInvariants(
   status: ReplayState['status'],
   scenario: {
@@ -291,6 +325,7 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
     return false;
   if (!Array.isArray(value.audit) || value.audit.length > 64) return false;
   if (!value.audit.every((item) => isBoundedString(item, 200))) return false;
+  if (value.viewIntent !== undefined && !isViewIntent(value.viewIntent)) return false;
 
   const scenario = value.scenario;
   if (!isRecord(scenario)) return false;

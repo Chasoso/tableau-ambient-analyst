@@ -17,6 +17,11 @@ import {
   type ViewActionAdapter,
   isViewActionEligible,
 } from './view-actions.js';
+import {
+  resolveViewIntent,
+  type ViewIntentMapping,
+  type ViewIntentResolution,
+} from './view-intents.js';
 
 const client = new HttpAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
@@ -49,16 +54,15 @@ const syntheticViewActionPolicy: ViewActionPolicy = {
     },
   ],
 };
-const syntheticInterventionProposal: ViewActionProposal = {
-  id: 'fixture-verified-intervention-region',
-  evidenceRef: 'local-analysis',
-  scope: { dashboard: 'fixture-dashboard' },
-  action: {
-    type: 'set-filter',
+const syntheticViewIntentMappings: readonly ViewIntentMapping[] = [
+  {
+    semanticKey: 'region',
+    operation: 'set-filter',
+    valueType: 'string',
     target: { kind: 'worksheet-field', worksheet: 'fixture-dashboard', field: 'Region' },
-    values: ['West'],
+    values: [{ from: 'West', to: 'West' }],
   },
-};
+];
 const mockViewActionAdapter = new MockViewActionAdapter({
   filters: { 'fixture-dashboard.Region': ['All'] },
   parameters: { 'fixture-threshold': 0 },
@@ -84,8 +88,41 @@ let viewActionController = new ViewActionController(
   isEmbeddedContext() ? failClosedViewActionAdapter : mockViewActionAdapter,
   syntheticViewActionPolicy,
 );
-let activeViewActionProposal = syntheticInterventionProposal;
+let activeViewActionPolicy = syntheticViewActionPolicy;
+let activeViewIntentMappings: unknown = syntheticViewIntentMappings;
+let activeViewActionResolution: ViewIntentResolution = {
+  status: 'NO_ACTION',
+  reason: 'No verified view intent is available for this run.',
+};
 let canUndoViewAction = false;
+
+function resolveRunAction(state: ReplayState): ViewIntentResolution {
+  if (!state.viewIntent || !state.runId) {
+    return { status: 'NO_ACTION', reason: 'No verified view intent is available for this run.' };
+  }
+  return resolveViewIntent({
+    intent: state.viewIntent,
+    context: {
+      runId: state.runId,
+      verification: scenarioStatus(state) === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED',
+      intervention: state.scenario.intervention?.decision,
+      verifiedEvidenceIds: state.scenario.evidence.map(({ provenance }) => provenance),
+    },
+    mappings: activeViewIntentMappings,
+    policy: activeViewActionPolicy,
+  });
+}
+
+function scenarioStatus(state: ReplayState): string {
+  return state.scenario.verifier.status;
+}
+
+function formatProposal(proposal: ViewActionProposal): string {
+  if (proposal.action.type === 'set-filter') {
+    return `set ${proposal.action.target.field} to ${proposal.action.values.join(', ')}`;
+  }
+  return `set ${proposal.action.target.name} to ${String(proposal.action.value)}`;
+}
 
 function text(value: string): HTMLSpanElement {
   const element = document.createElement('span');
@@ -126,6 +163,7 @@ function renderIdle(scenario: DebugScenario): void {
 }
 
 function render(state: ReplayState): void {
+  activeViewActionResolution = resolveRunAction(state);
   const scenario = state.scenario;
   status.textContent = state.status.replace('-', ' ').toUpperCase();
   status.dataset.status = state.status;
@@ -177,7 +215,11 @@ function render(state: ReplayState): void {
   const intervention = document.createElement('div');
   if (scenario.intervention) {
     intervention.append(text(`${scenario.intervention.decision}: ${scenario.intervention.reason}`));
-    if (scenario.intervention.decision === 'INTERVENE' && isViewActionEligible(state)) {
+    if (
+      scenario.intervention.decision === 'INTERVENE' &&
+      isViewActionEligible(state) &&
+      activeViewActionResolution.status === 'READY'
+    ) {
       const badge = document.createElement('button');
       badge.className = 'intervention-badge';
       badge.dataset.testid = 'intervention-badge';
@@ -186,7 +228,12 @@ function render(state: ReplayState): void {
       badge.title = 'Apply the approved view action to the current host.';
       badge.addEventListener('click', async () => {
         badge.disabled = true;
-        const result = await viewActionController.apply(state, activeViewActionProposal);
+        const result = await viewActionController.apply(
+          state,
+          activeViewActionResolution.status === 'READY'
+            ? activeViewActionResolution.proposal
+            : ({} as ViewActionProposal),
+        );
         if (result.ok) {
           canUndoViewAction = true;
           state.audit.push('view-action.applied');
@@ -212,6 +259,17 @@ function render(state: ReplayState): void {
         });
         intervention.append(undo);
       }
+    }
+    if (activeViewActionResolution.status !== 'READY') {
+      const diagnostic = document.createElement('small');
+      diagnostic.textContent = `No executable view action: ${activeViewActionResolution.reason}`;
+      diagnostic.dataset.testid = 'view-action-diagnostic';
+      intervention.append(diagnostic);
+    } else {
+      const proposal = document.createElement('small');
+      proposal.textContent = `Proposed change: ${formatProposal(activeViewActionResolution.proposal)}`;
+      proposal.dataset.testid = 'view-action-proposal';
+      intervention.append(proposal);
     }
   } else intervention.append(text('No intervention decision.'));
 
@@ -253,6 +311,10 @@ runButton.addEventListener('click', async () => {
   status.dataset.status = 'running';
   viewActionController.resetForRun();
   canUndoViewAction = false;
+  activeViewActionResolution = {
+    status: 'NO_ACTION',
+    reason: 'Resolving the verified view intent for this run.',
+  };
   try {
     render(await client.replay(selectedScenario()));
   } catch {
@@ -277,7 +339,8 @@ void initializeTableauHost().then(({ mode }) => {
       mockViewActionAdapter,
       syntheticViewActionPolicy,
     );
-    activeViewActionProposal = syntheticInterventionProposal;
+    activeViewActionPolicy = syntheticViewActionPolicy;
+    activeViewIntentMappings = syntheticViewIntentMappings;
   } else if (mode === 'tableau') {
     const configuration = approvedViewActionConfigurationFromGlobal();
     const api = tableauViewActionApiFromGlobal();
@@ -286,12 +349,15 @@ void initializeTableauHost().then(({ mode }) => {
         new TableauViewActionAdapter(api, configuration.policy),
         configuration.policy,
       );
-      activeViewActionProposal = configuration.proposal;
+      activeViewActionPolicy = configuration.policy;
+      activeViewIntentMappings = configuration.mappings ?? [];
     } else {
       viewActionController = new ViewActionController(
         failClosedViewActionAdapter,
         syntheticViewActionPolicy,
       );
+      activeViewActionPolicy = syntheticViewActionPolicy;
+      activeViewIntentMappings = [];
     }
   }
 });
