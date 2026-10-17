@@ -88,8 +88,10 @@ Boundaries intentionally not inspected, and why:
 The implementer may prepare this input, but the independent reviewer must
 derive the relevant invariants independently, verify or revise the map, and
 not treat it as authority. Low-risk or documentation-only changes omit it.
-This conditional map is the smallest useful dependency cone; it does not
-authorize repository-wide exploration.
+If the handoff does not supply a map, the reviewer constructs it transiently
+from the Issue and repository artifacts before the coverage pass. This
+conditional map is the smallest useful dependency cone; it does not authorize
+repository-wide exploration.
 
 ## Pilot execution
 
@@ -119,10 +121,13 @@ Use this sequence:
    pass. It independently derives the relevant invariants, checks each
    directly affected dependency cone, generalizes findings to root-rule
    clusters, searches for in-scope siblings, and collects related findings and
-   negative controls rather than stopping at the first error. The result
-   records inspected scope, unresolved or untested boundaries, consolidated
-   findings, and actionable affected paths. Keep the search bounded to the
-   Issue scope and directly related code.
+   negative controls rather than stopping at the first error. Do not add
+   coverage telemetry or new fields to the reviewer JSON: the existing
+   `affected_locations`, `generalized_rule`, and `recommended_fix` fields are
+   the evidence path for material findings. Report an unresolved or untested
+   boundary only when it is a material finding; a clean PASS need not serialize
+   an inventory of inspected paths. Keep the search bounded to the Issue scope
+   and directly related code.
 9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
    fix batch grouped by invariant. Check every directly affected entry point,
    run targeted positive and negative regressions, and record fixed,
@@ -512,9 +517,11 @@ approve PR creation when blocking findings remain.
 For high-risk changes, establish or verify a compact invariant/dependency map
 before the final verdict. Review every listed entry point and negative control,
 search for in-scope siblings of each generalized rule, and collect all related
-findings before returning `PASS` or `CHANGES_REQUIRED`. Report the inspected
-cone and any unresolved or untested boundary. Do not treat an implementer map
-as evidence that a path is safe; independently revise it when necessary.
+findings before returning `PASS` or `CHANGES_REQUIRED`. If a boundary remains
+materially unresolved or untested, report it through the existing structured
+finding fields; do not invent a new output field or require PASS to carry
+coverage telemetry. Do not treat an implementer map as evidence that a path is
+safe; independently revise it when necessary.
 
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
@@ -542,7 +549,8 @@ The map distinguishes verified themes from inference: the recurring themes and
 the 16-round/#95 summary are evidence; the causal labels above are bounded
 interpretations, not reconstructed reviewer transcripts. Per-finding causal
 ordering, exact prompts, and any unrecorded reviewer search remain
-unavailable. A compact synthetic review input for these classes is:
+unavailable. The following is a transient synthetic review input, not a new
+serialized reviewer output or mandatory per-Issue file:
 
 ```text
 Invariant: every published transition is either the prior complete state or a valid successor; no fabricated history.
