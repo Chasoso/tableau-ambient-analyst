@@ -88,6 +88,36 @@ describe('debug UI analysis API', () => {
       const run = (await created.json()) as { runId: string; status: string; audit: string[] };
       expect(run.status).toBe('completed');
       expect(run.audit).toContain('analysis-contract-created');
+      const runWithIntentResponse = await fetch(`${base}/api/analysis-runs/${run.runId}`);
+      const runWithIntent = (await runWithIntentResponse.json()) as {
+        runId: string;
+        viewIntent?: { id: string; evidenceRef: string; semanticKey: string; runId: string };
+      };
+      expect(runWithIntent).toMatchObject({
+        runId: run.runId,
+        viewIntent: {
+          runId: run.runId,
+          evidenceRef: 'evidence-1',
+          semanticKey: 'region',
+        },
+      });
+      const secondResponse = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scenarioId: 'verified-intervention-parameter' }),
+      });
+      const secondRun = (await secondResponse.json()) as {
+        runId: string;
+        viewIntent?: { id: string; evidenceRef: string; runId: string };
+      };
+      expect(secondResponse.status).toBe(200);
+      expect(secondRun.viewIntent).toMatchObject({
+        id: 'fixture-verified-intervention-threshold',
+        evidenceRef: 'evidence-1',
+        runId: secondRun.runId,
+      });
+      expect(secondRun.runId).not.toBe(run.runId);
+      expect(secondRun.viewIntent?.id).not.toBe(runWithIntent.viewIntent?.id);
       const refreshed = await fetch(`${base}/api/analysis-runs/${run.runId}`);
       expect(refreshed.status).toBe(200);
       expect(await refreshed.json()).toEqual(run);
@@ -106,7 +136,10 @@ describe('debug UI analysis API', () => {
           body: JSON.stringify({ scenarioId }),
         });
         expect(response.status).toBe(200);
-        expect((await response.json()).scenario.id).toBe(scenarioId);
+        const body = (await response.json()) as { scenario: { id: string }; viewIntent?: unknown };
+        expect(body.scenario.id).toBe(scenarioId);
+        expect(body.viewIntent).toBeUndefined();
+        expect((await fetch(`${base}/api/analysis-runs/unknown`)).status).toBe(404);
       } finally {
         await closeServer(server);
       }
@@ -136,6 +169,63 @@ describe('debug UI analysis API', () => {
           'intervention-hold',
         ]),
       );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('does not carry a candidate whose evidence is not part of the verified run', async () => {
+    const baseClient = new FixtureAnalysisClient();
+    const forgedClient: AnalysisClient = {
+      replay: async (scenario) => {
+        const result = await baseClient.replay(scenario);
+        return {
+          ...result,
+          scenario: { ...result.scenario, evidence: [] },
+          verifiedEvidenceIds: ['evidence-1'],
+          candidateIntent: {
+            id: 'forged-candidate',
+            evidenceRef: 'evidence-not-verified',
+            operation: 'set-filter' as const,
+            semanticKey: 'region',
+            valueType: 'string' as const,
+            values: ['West'],
+          },
+        };
+      },
+    };
+    const { server, base } = await withServer(forgedClient);
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).viewIntent).toBeUndefined();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('rejects an envelope whose view intent is linked to another run', async () => {
+    const { server, base } = await withServer();
+    try {
+      const response = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ scenarioId: 'verified-intervention' }),
+      });
+      const envelope = (await response.json()) as {
+        runId: string;
+        viewIntent?: { runId: string };
+      };
+      envelope.viewIntent!.runId = 'run-other';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(JSON.stringify(envelope), { status: 200 })),
+      );
+      await expect(
+        new HttpAnalysisClient().replay(scenarioById('verified-intervention')),
+      ).rejects.toThrow('ANALYSIS_RUN_RESPONSE_INVALID');
     } finally {
       await closeServer(server);
     }

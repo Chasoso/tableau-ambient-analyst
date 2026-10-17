@@ -80,6 +80,39 @@ describe('view intent resolver', () => {
     expect(resolveViewIntent(input())).toEqual(resolveViewIntent(input()));
   });
 
+  it('keeps approved proposals distinct across verified runs and evidence', () => {
+    const second = resolveViewIntent(
+      input({
+        intent: {
+          ...filterIntent,
+          id: 'focus-region-west',
+          runId: 'run-43',
+          evidenceRef: 'evidence-region-west-verified',
+          values: ['west'],
+        },
+        context: {
+          ...context,
+          runId: 'run-43',
+          verifiedEvidenceIds: ['evidence-region-west-verified'],
+        },
+      }),
+    );
+    expect(second).toEqual({
+      status: 'READY',
+      proposal: {
+        id: 'focus-region-west',
+        evidenceRef: 'evidence-region-west-verified',
+        scope: { dashboard: 'regional-dashboard' },
+        action: {
+          type: 'set-filter',
+          target: { kind: 'worksheet-field', worksheet: 'Sales', field: 'Region' },
+          values: ['West'],
+        },
+      },
+    });
+    expect(second).not.toEqual(resolveViewIntent(input()));
+  });
+
   it('reuses the core for an explicit parameter mapping', () => {
     const result = resolveViewIntent(
       input({

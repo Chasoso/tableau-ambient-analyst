@@ -126,7 +126,10 @@ export function deterministicDependencies(scenarioId: string) {
 
 function sourceFor(scenario: DebugScenario): string {
   if (scenario.id === 'failed') return '{malformed fixture';
-  if (scenario.id === 'verified-intervention') {
+  if (
+    scenario.id === 'verified-intervention' ||
+    scenario.id === 'verified-intervention-parameter'
+  ) {
     return JSON.stringify([
       {
         sequence: 0,
@@ -236,7 +239,44 @@ function project(
   if (flow.status === 'FAILED') projectedScenario.error = 'The application flow failed closed.';
   const audit = flow.events.slice(0, 64).map(({ type }) => type as string);
   audit.push('audit.recorded');
-  return { status, scenario: projectedScenario, audit };
+  return {
+    status,
+    scenario: projectedScenario,
+    audit,
+    ...(flow.verification?.completion === 'COMPLETE'
+      ? {
+          verifiedEvidenceIds: flow.evidence
+            .slice(0, 64)
+            .map((_, index) => `evidence-${index + 1}`),
+        }
+      : {}),
+    ...(scenario.id === 'verified-intervention'
+      ? {
+          // The deterministic fixture emits a structured candidate at the analysis boundary.
+          // The server assigns the authoritative run ID before it reaches the browser.
+          candidateIntent: {
+            id: 'fixture-verified-intervention-region',
+            evidenceRef: 'evidence-1',
+            operation: 'set-filter' as const,
+            semanticKey: 'region',
+            valueType: 'string' as const,
+            values: ['West'],
+          },
+        }
+      : scenario.id === 'verified-intervention-parameter'
+        ? {
+            // A second deterministic fixture keeps run/evidence/proposal linkage observable.
+            candidateIntent: {
+              id: 'fixture-verified-intervention-threshold',
+              evidenceRef: 'evidence-1',
+              operation: 'set-parameter' as const,
+              semanticKey: 'threshold',
+              valueType: 'number' as const,
+              values: [1],
+            },
+          }
+        : {}),
+  };
 }
 
 export class ApplicationAnalysisClient implements AnalysisClient {

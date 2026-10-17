@@ -72,7 +72,7 @@ npm run debug:ui
 
 The path must be absolute and the file must contain no credentials. The server
 reads it once at startup and injects it only into the localhost page. The
-existing runtime schema validation still checks the policy, proposal, current
+existing runtime schema validation still checks the policy, evidence-linked mapping, current
 Tableau dashboard identity, exact target, value type, and allowed values. An
 unset, unreadable, malformed, or schema-invalid file leaves the live adapter
 fail-closed. Do not use wildcards or discovery, and clear the environment
