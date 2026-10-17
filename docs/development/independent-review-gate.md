@@ -70,6 +70,29 @@ and validation result. It must remain factual and minimal. Do not require or
 provide the implementer's hidden reasoning, implementation transcript, or a
 summary designed to persuade the reviewer that the change is correct.
 
+### Conditional high-risk review input
+
+For a high-risk change involving persisted state, ownership, retries,
+termination, approvals, or security, the handoff may include a compact
+invariant/dependency map. Reuse an existing Issue, specification, test, or
+self-review artifact when possible; do not create a mandatory durable report.
+The map has only these fields:
+
+```text
+Invariant / required behavior:
+Direct public entry points and mutation/recovery paths:
+Positive and adversarial/negative cases:
+Boundaries intentionally not inspected, and why:
+```
+
+The implementer may prepare this input, but the independent reviewer must
+derive the relevant invariants independently, verify or revise the map, and
+not treat it as authority. Low-risk or documentation-only changes omit it.
+If the handoff does not supply a map, the reviewer constructs it transiently
+from the Issue and repository artifacts before the coverage pass. This
+conditional map is the smallest useful dependency cone; it does not authorize
+repository-wide exploration.
+
 ## Pilot execution
 
 During the pilot, run the independent review manually in a separate Codex
@@ -91,18 +114,26 @@ Use this sequence:
    criteria, `AGENTS.md`, relevant policies, the complete diff against the
    intended base, changed files, necessary surrounding code/docs, and relevant
    ADRs.
-7. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
+7. Before returning a verdict, the reviewer performs one bounded coverage
+   pass. It independently derives the relevant invariants, checks each
+   directly affected dependency cone, generalizes findings to root-rule
+   clusters, searches for in-scope siblings, and collects related findings and
+   negative controls rather than stopping at the first error. Report only
+   substantive findings or required escalations through the existing output
+   contract; a clean `PASS` needs no coverage-only record. Keep the search
+   bounded to the Issue scope and directly related code.
+8. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
    `HUMAN_DECISION_REQUIRED` using the output contract below. Every finding is
    classified as `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`.
-8. The reviewer generalizes each finding, searches the complete diff and
-   directly related implementation for siblings, and returns consolidated
-   findings. Keep the search bounded to the Issue scope.
-9. If every blocking finding is `AUTO_FIX`, apply the deterministic in-scope
-   fixes without human approval and rerun deterministic validation. The
-   authorized path set includes files in the committed Issue diff and
-   directly related sibling files reported by the reviewer when those sibling
-   paths are tracked by the base revision. Repository-boundary, traversal,
-   `.git`, and symlink checks still apply.
+9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
+   fix batch grouped by invariant. Check every directly affected entry point,
+   run targeted positive and negative regressions, and transiently check which
+   directly affected paths were fixed, inspected, or intentionally excluded in
+   the implementer handoff/self-review. Do not require a persistent coverage
+   record. The authorized path set includes files in the committed Issue diff
+   and directly related sibling files reported by the reviewer when those
+   sibling paths are tracked by the base revision. Repository-boundary,
+   traversal, `.git`, and symlink checks still apply.
 10. Start another fresh independent review against the updated complete diff.
 11. Repeat until the result is `PASS`, blocking findings are zero, and no
     unresolved human escalation remains.
@@ -385,8 +416,12 @@ remains. `CHANGES_REQUIRED` means the PR must not be created yet.
 When a reviewer reports a blocking finding:
 
 1. return the finding to the implementer;
-2. if and only if every blocking finding is `AUTO_FIX`, make the necessary
-   in-scope correction; otherwise stop for human direction or the missing
+2. if and only if every blocking finding is `AUTO_FIX`, make one in-scope
+   correction batch grouped by invariant. Include all known siblings in the
+   directly affected dependency cone, add targeted positive and negative
+   regressions, and transiently check paths inspected, fixed, and intentionally
+   excluded in the implementer handoff/self-review; do not require a persistent
+   coverage record. Otherwise stop for human direction or the missing
    prerequisite;
 3. rerun deterministic validation and review the updated complete diff;
 4. start an independent review again in a fresh context; and
@@ -447,6 +482,14 @@ human/other-session review, and do not present the gate as passed.
 The following prompt can be given to a fresh reviewer together with the
 bounded input artifacts above:
 
+The reviewer handoff already instructs the fresh reviewer to follow this
+canonical gate. The AUTO_FIX handoff remains unchanged: it enforces only its
+existing bounded changed-file JSON contract and does not claim to parser-enforce
+the transient invariant-batched procedure below. Implementers use this
+procedure as review/self-review guidance; no new executable enforcement is
+claimed. This Issue does not duplicate or modify `src/review/runner.ts`, the
+accounting, or approval machinery.
+
 ```text
 You are an independent reviewer, not the implementer. Do not assume the
 implementation is correct and do not make unrelated changes.
@@ -478,6 +521,15 @@ Return JSON matching `src/review/review-result.schema.json`, including the
 generalized rule and sibling locations for every finding. Use the same
 `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, and `BLOCKED` classifications. Do not
 approve PR creation when blocking findings remain.
+
+For high-risk changes, establish or verify a compact invariant/dependency map
+before the final verdict. Review every listed entry point and negative control,
+search for in-scope siblings of each generalized rule, and collect all related
+findings before returning `PASS` or `CHANGES_REQUIRED`. Report a substantive
+issue or required escalation through the existing finding fields; do not add a
+coverage-only output item or require clean `PASS` to carry a coverage record.
+Do not treat an implementer map as evidence that a path is safe; independently
+revise it when necessary.
 
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting

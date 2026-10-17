@@ -497,3 +497,45 @@ recovery-only states are represented.
 - Follow-up maintenance candidate: keep implementation responsibilities
   split by lifecycle stage when the approved redesign is implemented; do not
   broaden this investigation into a runner refactor.
+
+## 14. Issue #96 evaluator-only evidence
+
+This section is evaluator-only historical evidence for Issue #96. It is not a
+reviewer handoff or neutral reviewer prompt input; do not provide it to a
+fresh reviewer when comparing the baseline and revised procedures. The mapping
+is deliberately evidence-bounded. The #77 rows use the historical analysis in
+this document, which records 16 `CHANGES_REQUIRED` rounds and notes that
+reviewer prose and per-round diffs were unavailable. The #95 rows use the
+Issue #96 description's read-only analysis; no additional #95 review was run
+and no new #95 state was opened or changed.
+
+| Finding cluster | Pre-existing rule not carried out | Ambiguous or missing instruction | Introduced/exposed by later correction | Architectural limitation outside this Issue | Evidence boundary |
+| --- | --- | --- | --- | --- | --- |
+| Raw state publication versus a valid successor | Not verified from the available #95 material. | No explicit successor invariant and dependency-cone check was evidenced. | Rollback/reset/fabricated-history concerns were reported by #95; whether a correction introduced or only exposed them is unverified. | No genuinely outside-Issue architecture decision was established; durable-transition coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
+| Ownership release, reclaim, and mutation | Not verified from the available #95 material. | Sibling entry points and adversarial ownership cases were not evidenced together. | Repeated ownership gaps were reported by #95; round attribution and causality are unavailable. | No outside-Issue limitation was established; lifecycle coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
+| Termination evidence | #77 historical analysis verifies recurring missing-proof themes, but not which prior rule execution failed. | Related termination cases were not held for one pre-fix coverage pass. | #77 records missing proof and stale-lock/forced-termination themes; whether later corrections introduced or exposed each gap is unverified. | Process/liveness proof has cross-boundary complexity, but no architectural change is authorized by this Issue. | #77 round prose and per-round diffs are unavailable; #95 is Issue-level evidence. |
+| Legacy approvals and accounting semantics | Existing compatibility rules are documented, but their complete execution is not verifiable from #95 evidence. | Compatibility and actual repair evidence were not checked as one cluster. | #95 reports legacy approval/accounting gaps and that `autoFixCycleCount=0` did not prove no correction occurred; causal ordering is unavailable. | Legacy read-only compatibility limits inference, but changing accounting or approval architecture is outside this Issue. | Exact #95 artifacts are unavailable; no state was reopened or changed. |
+
+The map distinguishes verified themes from inference: the recurring themes and
+the 16-round/#95 summary are evidence; the causal labels above are bounded
+interpretations, not reconstructed reviewer transcripts. Per-finding causal
+ordering, exact prompts, and any unrecorded reviewer search remain unavailable.
+A compact synthetic invariant/dependency map for evaluator use is:
+
+```text
+Invariant: every published transition is either the prior complete state or a valid successor; no fabricated history.
+Paths: publish/rollback, ownership release/reclaim/mutation, retry and termination recovery, legacy approval reader.
+Cases: valid successor; rollback after write failure; stale/unknown owner; forced termination with and without proof; legacy record read without mutation.
+Excluded: unrelated product/UI paths and live external services; they do not participate in the Issue's durable review contract.
+```
+
+Evaluation protocol: prepare a sanitized baseline packet and a revised packet
+from the same representative #77/#95 invariant clusters; keep known answer
+paths in an evaluator-only record, not in reviewer instructions; run each with
+the same fresh-review budget; compare serious-defect detection,
+consolidated-cluster coverage, repeated-root-cause count, false positives, and
+review effort. PASS requires all known in-scope defects to be reported without
+materially worse false negatives. No safe comparative run was performed for
+Issue #96, and no claim of fewer invocations or better unattended completion is
+made: result `UNVERIFIED`. The protocol requires no database, runner change,
+or extra live review.
