@@ -121,15 +121,10 @@ Use this sequence:
    pass. It independently derives the relevant invariants, checks each
    directly affected dependency cone, generalizes findings to root-rule
    clusters, searches for in-scope siblings, and collects related findings and
-   negative controls rather than stopping at the first error. Do not add
-   coverage telemetry or new fields to the reviewer JSON. For every review,
-   including a clean `PASS`, use one existing non-blocking structured finding
-   as a coverage record: set classification to `AUTO_FIX`, use
-   `generalized_rule` for the coverage purpose, and summarize inspected scope,
-   negative controls, and material unresolved or untested boundaries in the
-   existing finding fields. This evidence-only record does not request a code
-   fix or consume an AUTO_FIX cycle. Keep the search bounded to the Issue
-   scope and directly related code.
+   negative controls rather than stopping at the first error. Report only
+   substantive findings or required escalations through the existing output
+   contract; a clean `PASS` needs no coverage-only record. Keep the search
+   bounded to the Issue scope and directly related code.
 9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
    fix batch grouped by invariant. Check every directly affected entry point,
    run targeted positive and negative regressions, and record fixed,
@@ -380,11 +375,6 @@ The following cross-field rules apply to every row and both finding arrays:
   require `escalationRequired: true`.
 - `escalationRequired: true` requires at least one
   `HUMAN_DECISION_REQUIRED` or `BLOCKED` finding in either array.
-- The existing `nonBlockingFindings` array may carry one evidence-only
-  coverage record on `PASS`. It uses the already-valid `AUTO_FIX`
-  classification and finding fields, requests no repository change, and never
-  increments the AUTO_FIX cycle counter. This is a bounded evidence channel,
-  not a new schema field or a second review framework.
 - legacy string findings, unknown properties, missing required fields, invalid
   enums, and wrong finding severity are invalid at the wire/parser boundary.
 - the Schema intentionally does not encode these cross-field rules with
@@ -533,17 +523,11 @@ approve PR creation when blocking findings remain.
 For high-risk changes, establish or verify a compact invariant/dependency map
 before the final verdict. Review every listed entry point and negative control,
 search for in-scope siblings of each generalized rule, and collect all related
-findings before returning `PASS` or `CHANGES_REQUIRED`. Include the map's
-inspected cone and material unresolved or untested boundary in the existing
-non-blocking coverage record; do not invent a new output field. Do not treat
-an implementer map as evidence that a path is safe; independently revise it
-when necessary.
-
-For every review, including `PASS`, include exactly one evidence-only coverage
-record in `nonBlockingFindings` using the existing finding shape and
-classification `AUTO_FIX`. Summarize the inspected scope, negative controls,
-and material unresolved or untested boundaries. This record requests no code
-change and is not an AUTO_FIX cycle.
+findings before returning `PASS` or `CHANGES_REQUIRED`. Report a substantive
+issue or required escalation through the existing finding fields; do not add a
+coverage-only output item or require clean `PASS` to carry a coverage record.
+Do not treat an implementer map as evidence that a path is safe; independently
+revise it when necessary.
 
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
@@ -587,8 +571,10 @@ paths in an evaluator-only record, not in reviewer instructions; run each with
 the same fresh-review budget; compare serious-defect detection, consolidated
 cluster coverage, repeated-root-cause count, false positives, and review
 effort. PASS requires all known in-scope defects to be reported without
-materially worse false negatives and with the inspected/untested boundaries
-recorded. No safe comparative run was performed for this Issue, and no claim
+materially worse false negatives; substantive coverage gaps must remain
+reportable through the existing finding/escalation contract, but no persistent
+coverage inventory is required. No safe comparative run was performed for this
+Issue, and no claim
 of fewer invocations or better unattended completion is made: result
 `UNVERIFIED`. The protocol is executable in a future isolated evaluation and
 does not require a database, runner change, or extra live review.
