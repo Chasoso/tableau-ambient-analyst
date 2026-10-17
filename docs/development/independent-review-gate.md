@@ -70,6 +70,27 @@ and validation result. It must remain factual and minimal. Do not require or
 provide the implementer's hidden reasoning, implementation transcript, or a
 summary designed to persuade the reviewer that the change is correct.
 
+### Conditional high-risk review input
+
+For a high-risk change involving persisted state, ownership, retries,
+termination, approvals, or security, the handoff may include a compact
+invariant/dependency map. Reuse an existing Issue, specification, test, or
+self-review artifact when possible; do not create a mandatory durable report.
+The map has only these fields:
+
+```text
+Invariant / required behavior:
+Direct public entry points and mutation/recovery paths:
+Positive and adversarial/negative cases:
+Boundaries intentionally not inspected, and why:
+```
+
+The implementer may prepare this input, but the independent reviewer must
+derive the relevant invariants independently, verify or revise the map, and
+not treat it as authority. Low-risk or documentation-only changes omit it.
+This conditional map is the smallest useful dependency cone; it does not
+authorize repository-wide exploration.
+
 ## Pilot execution
 
 During the pilot, run the independent review manually in a separate Codex
@@ -94,15 +115,22 @@ Use this sequence:
 7. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
    `HUMAN_DECISION_REQUIRED` using the output contract below. Every finding is
    classified as `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`.
-8. The reviewer generalizes each finding, searches the complete diff and
-   directly related implementation for siblings, and returns consolidated
-   findings. Keep the search bounded to the Issue scope.
-9. If every blocking finding is `AUTO_FIX`, apply the deterministic in-scope
-   fixes without human approval and rerun deterministic validation. The
-   authorized path set includes files in the committed Issue diff and
-   directly related sibling files reported by the reviewer when those sibling
-   paths are tracked by the base revision. Repository-boundary, traversal,
-   `.git`, and symlink checks still apply.
+8. Before returning a verdict, the reviewer performs one bounded coverage
+   pass. It independently derives the relevant invariants, checks each
+   directly affected dependency cone, generalizes findings to root-rule
+   clusters, searches for in-scope siblings, and collects related findings and
+   negative controls rather than stopping at the first error. The result
+   records inspected scope, unresolved or untested boundaries, consolidated
+   findings, and actionable affected paths. Keep the search bounded to the
+   Issue scope and directly related code.
+9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
+   fix batch grouped by invariant. Check every directly affected entry point,
+   run targeted positive and negative regressions, and record fixed,
+   inspected, and intentionally excluded paths before rerunning deterministic
+   validation. The authorized path set includes files in the committed Issue
+   diff and directly related sibling files reported by the reviewer when those
+   sibling paths are tracked by the base revision. Repository-boundary,
+   traversal, `.git`, and symlink checks still apply.
 10. Start another fresh independent review against the updated complete diff.
 11. Repeat until the result is `PASS`, blocking findings are zero, and no
     unresolved human escalation remains.
@@ -385,9 +413,11 @@ remains. `CHANGES_REQUIRED` means the PR must not be created yet.
 When a reviewer reports a blocking finding:
 
 1. return the finding to the implementer;
-2. if and only if every blocking finding is `AUTO_FIX`, make the necessary
-   in-scope correction; otherwise stop for human direction or the missing
-   prerequisite;
+2. if and only if every blocking finding is `AUTO_FIX`, make one in-scope
+   correction batch grouped by invariant. Include all known siblings in the
+   directly affected dependency cone, add targeted positive and negative
+   regressions, and record paths inspected, fixed, and intentionally excluded;
+   otherwise stop for human direction or the missing prerequisite;
 3. rerun deterministic validation and review the updated complete diff;
 4. start an independent review again in a fresh context; and
 5. repeat until the result is `PASS`, a human decision/blocker is required, or
@@ -479,10 +509,59 @@ generalized rule and sibling locations for every finding. Use the same
 `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, and `BLOCKED` classifications. Do not
 approve PR creation when blocking findings remain.
 
+For high-risk changes, establish or verify a compact invariant/dependency map
+before the final verdict. Review every listed entry point and negative control,
+search for in-scope siblings of each generalized rule, and collect all related
+findings before returning `PASS` or `CHANGES_REQUIRED`. Report the inspected
+cone and any unresolved or untested boundary. Do not treat an implementer map
+as evidence that a path is safe; independently revise it when necessary.
+
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
 the implementer's self-assertion.
 ```
+
+## Issue #96 evidence and evaluation note
+
+The following mapping is deliberately evidence-bounded. The #77 rows are
+supported by the historical analysis in
+`independent-review-simplification-issue-93.md`, which records 16
+`CHANGES_REQUIRED` rounds and notes that reviewer prose and per-round diffs
+were unavailable. The #95 rows are supported by the Issue #96 description's
+read-only analysis; no additional #95 review was run and no new #95 state was
+opened or changed here.
+
+| Finding cluster | Evidence and confidence | Procedural vs structural interpretation |
+| --- | --- | --- |
+| Raw state publication versus a valid successor | #95 Issue evidence reports rollback/reset/fabricated-history concerns; exact reviewer artifacts are unavailable | Procedural gap: no explicit pre-fix successor invariant and dependency-cone check. Structural limitation: coupled durable transitions can expose new interactions after a local repair. |
+| Ownership release, reclaim, and mutation | #95 Issue evidence reports repeated ownership-related gaps; exact locations and round attribution are unavailable | Procedural gap: sibling entry points and negative ownership cases were not evidenced together. Structural limitation: ownership and mutation boundaries interact across recovery paths. |
+| Termination evidence | #77 historical analysis records missing termination proof and stale-lock/forced-termination themes; #95 Issue evidence also names termination evidence | Procedural gap: related termination cases were discovered serially rather than held for one coverage pass. Structural limitation: process/liveness proof depends on state and recovery boundaries. |
+| Legacy approvals and accounting semantics | #95 Issue evidence reports legacy approval/accounting gaps and that `autoFixCycleCount=0` did not prove no correction occurred | Procedural gap: compatibility and actual repair evidence were not checked as one cluster. Structural limitation: legacy read-only compatibility constrains what can be inferred. |
+
+The map distinguishes verified themes from inference: the recurring themes and
+the 16-round/#95 summary are evidence; the causal labels above are bounded
+interpretations, not reconstructed reviewer transcripts. Per-finding causal
+ordering, exact prompts, and any unrecorded reviewer search remain
+unavailable. A compact synthetic review input for these classes is:
+
+```text
+Invariant: every published transition is either the prior complete state or a valid successor; no fabricated history.
+Paths: publish/rollback, ownership release/reclaim/mutation, retry and termination recovery, legacy approval reader.
+Cases: valid successor; rollback after write failure; stale/unknown owner; forced termination with and without proof; legacy record read without mutation.
+Excluded: unrelated product/UI paths and live external services; they do not participate in the Issue's durable review contract.
+```
+
+Evaluation protocol: prepare a sanitized baseline packet and a revised packet
+from the same representative #77/#95 invariant clusters; keep the known answer
+paths in an evaluator-only record, not in reviewer instructions; run each with
+the same fresh-review budget; compare serious-defect detection, consolidated
+cluster coverage, repeated-root-cause count, false positives, and review
+effort. PASS requires all known in-scope defects to be reported without
+materially worse false negatives and with the inspected/untested boundaries
+recorded. No safe comparative run was performed for this Issue, and no claim
+of fewer invocations or better unattended completion is made: result
+`UNVERIFIED`. The protocol is executable in a future isolated evaluation and
+does not require a database, runner change, or extra live review.
 
 ## Pilot approach
 
