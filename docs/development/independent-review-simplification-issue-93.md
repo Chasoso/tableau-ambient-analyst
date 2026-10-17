@@ -309,19 +309,18 @@ repair/rerun limits, and no Codex merge.
 
 ### What is available
 
-The unmerged canonical #77 worktree has a read-only durable accounting file
-with 16 `CHANGES_REQUIRED` cycle results, 0 recorded AUTO_FIX cycles, and
-one to three structured findings per invocation. The file preserves
-generalized rules and finding identities, but not reviewer prose, timestamps,
-review prompts, child-process logs, or a commit SHA for each finding. No GitHub
-PR for `feat/issue-77` was discoverable, and no approval file was present in
-the #77 worktree. The following is therefore a classification of the durable
-finding evidence plus the ordered implementation commits, not a claim that
-every reviewer conversation was recovered.
+The Issue provides a 16-round #77 history with `CHANGES_REQUIRED` results,
+0 recorded AUTO_FIX cycles, and one to three structured findings per
+invocation. That history is not independently verified by the inspected
+worktree: its available ignored state files were empty/uninitialized, as
+recorded in Section 1. No GitHub PR for `feat/issue-77` was discoverable, and
+no approval file was present in the #77 worktree. The following table therefore
+reproduces Issue-provided history and analysis; it is not a claim that a
+durable accounting artifact or every reviewer conversation was recovered.
 
-The #77 state was read without writing it. Its 16 rounds were:
+The Issue-provided 16 rounds were:
 
-| Round | Durable finding theme | Evidence-based class | Confidence / limitation |
+| Round | Issue-provided finding theme | Issue-provided class | Confidence / limitation |
 | ---: | --- | --- | --- |
 | 1 | Limit terminal state and complete stop/recovery documentation | Existing gap in the initial #77 implementation | High for the observed gap; exact pre-round baseline is not stored |
 | 2 | Retry snapshot identity, uncertain recovery, retry-history consistency | Existing/incomplete recovery contract | High; causal commit link unavailable |
@@ -348,9 +347,10 @@ whether a given finding existed before the preceding repair, was introduced by
 that repair, or was merely made visible by it. No conclusion below treats that
 causal distinction as proven.
 
-### What the 16 rounds demonstrate
+### What the Issue-provided 16 rounds suggest
 
-The strongest verified pattern is not “the reviewer missed 16 unrelated bugs.”
+The strongest pattern in the Issue-provided history is not “the reviewer
+missed 16 unrelated bugs.”
 It is a chain of incomplete safety contracts:
 
 1. A recovery feature created new durable states and bindings.
@@ -369,11 +369,11 @@ consolidation, not evidence that more lock handlers are the right remedy.
 
 | Rule | Evidence of operation | Evidence of insufficiency |
 | --- | --- | --- |
-| Complete diff review | Findings cite runner, gate, CLI, docs, and tests across the changed diff | Related invariants were still discovered in later rounds; the durable state does not record a dependency-cone checklist or a consolidated pre-fix report |
-| Finding generalization | Every round stores generalized rules and identities | Similar rules recur in rounds 2–6, 9–12, and 13–16; generalization happened after each finding, not as a complete pre-fix closure step |
+| Complete diff review | Issue-provided findings cite runner, gate, CLI, docs, and tests across the changed diff | Related invariants were still discovered in later rounds; the Issue-provided history does not include a dependency-cone checklist or a consolidated pre-fix report |
+| Finding generalization | The Issue-provided history attributes generalized rules and identities to every round | Similar rules recur in rounds 2–6, 9–12, and 13–16; generalization happened after each finding, not as a complete pre-fix closure step |
 | Bounded sibling search | Round 7 and rounds 13–14 identify near-miss bounded-reason cases | Search scope, sibling set, and negative controls are not persisted; therefore effectiveness is not independently verifiable |
 | Consolidated findings | Some rounds reported 2–3 related findings together | No evidence shows that all findings for one invariant cluster were held and reported before AUTO_FIX; the one-finding/one-repair pattern remained possible |
-| AUTO_FIX self-review | The accounting records `AUTO_FIX` classification and repositoryChanged fields | #77 records 0 AUTO_FIX cycles and no post-fix impact checklist; it cannot prove that a write-enabled implementer actually checked the full affected dependency cone |
+| AUTO_FIX self-review | The Issue-provided history attributes `AUTO_FIX` classification and repositoryChanged fields to the accounting | The Issue-provided history reports 0 AUTO_FIX cycles and no post-fix impact checklist; it cannot prove that a write-enabled implementer actually checked the full affected dependency cone |
 
 The practical change should therefore be to the review packet and repair
 protocol, not another duplicated prose rule: require a pre-fix invariant
