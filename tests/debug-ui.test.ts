@@ -13,13 +13,15 @@ describe('debug UI fixture client', () => {
 
     expect(results.map(({ status }) => status)).toEqual([
       'completed',
+      'completed',
       'insufficient-evidence',
       'ignored',
       'failed',
     ]);
     expect(results[0]?.scenario.intervention?.decision).toBe('INTERVENE');
-    expect(results[1]?.scenario.intervention?.decision).toBe('HOLD');
-    expect(results[3]?.scenario.error).toContain('FIXTURE_INVALID');
+    expect(results[1]?.scenario.intervention?.decision).toBe('INTERVENE');
+    expect(results[2]?.scenario.intervention?.decision).toBe('HOLD');
+    expect(results[4]?.scenario.error).toContain('FIXTURE_INVALID');
   });
 
   it('keeps scenario lookup deterministic and safely defaults unknown ids', () => {

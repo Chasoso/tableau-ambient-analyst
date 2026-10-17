@@ -409,6 +409,41 @@ describe('validated view action boundary', () => {
     await expect(first).resolves.toMatchObject({ ok: true });
   });
 
+  it('does not retain a receipt when a pending apply is invalidated by a new run', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = new MockViewActionAdapter({
+      filters: { 'fixture-dashboard.Region': ['All'] },
+      parameters: { 'fixture-threshold': 0 },
+    });
+    const reset = vi.fn(() => base.reset());
+    const adapter = {
+      apply: async (proposal: ViewActionProposal) => {
+        await pending;
+        return base.apply(proposal);
+      },
+      undo: (receipt: Parameters<typeof base.undo>[0]) => base.undo(receipt),
+      reset,
+    };
+    const controller = new ViewActionController(adapter, policy);
+    const first = controller.apply(eligible, filterProposal);
+    controller.resetForRun();
+    release();
+    await expect(first).resolves.toEqual({
+      ok: false,
+      error: 'This view action was invalidated by a new run or host scope.',
+      partial: false,
+    });
+    await expect(controller.undo()).resolves.toEqual({
+      ok: false,
+      error: 'There is no view action to undo.',
+      partial: false,
+    });
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
   it('refuses undo after an unrelated live edit', async () => {
     let filterState = ['East'];
     const worksheet = {

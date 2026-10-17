@@ -126,7 +126,10 @@ export function deterministicDependencies(scenarioId: string) {
 
 function sourceFor(scenario: DebugScenario): string {
   if (scenario.id === 'failed') return '{malformed fixture';
-  if (scenario.id === 'verified-intervention') {
+  if (
+    scenario.id === 'verified-intervention' ||
+    scenario.id === 'verified-intervention-parameter'
+  ) {
     return JSON.stringify([
       {
         sequence: 0,
@@ -253,7 +256,19 @@ function project(
             values: ['West'],
           },
         }
-      : {}),
+      : scenario.id === 'verified-intervention-parameter'
+        ? {
+            // A second deterministic fixture keeps run/evidence/proposal linkage observable.
+            candidateIntent: {
+              id: 'fixture-verified-intervention-threshold',
+              evidenceRef: 'evidence-1',
+              operation: 'set-parameter' as const,
+              semanticKey: 'threshold',
+              valueType: 'number' as const,
+              values: [1],
+            },
+          }
+        : {}),
   };
 }
 

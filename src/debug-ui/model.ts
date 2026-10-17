@@ -84,6 +84,41 @@ export const scenarios: readonly DebugScenario[] = [
     },
   },
   {
+    id: 'verified-intervention-parameter',
+    name: 'Verified threshold → INTERVENE',
+    description: 'A second deterministic verified fixture with a distinct evidence-linked intent.',
+    utterances: [
+      { speaker: 'Aki', text: 'The threshold should be raised for this decision.' },
+      { speaker: 'Morgan', text: 'The verified evidence supports a threshold change.' },
+    ],
+    trigger: {
+      decision: 'ANALYZE',
+      reason: 'assumption-based-decision',
+      claim: 'The current threshold is too low.',
+    },
+    questions: ['Is the threshold change supported by the data?'],
+    stages: [
+      { name: 'Trigger', status: 'complete', detail: 'Decision-relevant assumption detected.' },
+      { name: 'Analysis Contract', status: 'complete', detail: '1 bounded question created.' },
+      { name: 'Analysis', status: 'complete', detail: 'Fixture analysis completed.' },
+      { name: 'Evidence', status: 'complete', detail: '1 provenance-linked observation.' },
+      { name: 'Verifier', status: 'complete', detail: 'Evidence supports the assumption.' },
+      { name: 'Intervention', status: 'complete', detail: 'Mock intervention is available.' },
+    ],
+    evidence: [
+      {
+        source: 'fixture:threshold',
+        detail: 'Verified threshold: 1',
+        provenance: 'fixture-threshold-row-1',
+      },
+    ],
+    verifier: { status: 'VERIFIED', detail: 'Required evidence is complete and supportive.' },
+    intervention: {
+      decision: 'INTERVENE',
+      reason: 'Verified evidence supports the proposed threshold change.',
+    },
+  },
+  {
     id: 'hold-insufficient',
     name: 'Missing evidence → HOLD',
     description: 'A positive trigger where required evidence remains unresolved.',

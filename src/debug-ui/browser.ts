@@ -62,6 +62,13 @@ const syntheticViewIntentMappings: readonly ViewIntentMapping[] = [
     target: { kind: 'worksheet-field', worksheet: 'fixture-dashboard', field: 'Region' },
     values: [{ from: 'West', to: 'West' }],
   },
+  {
+    semanticKey: 'threshold',
+    operation: 'set-parameter',
+    valueType: 'number',
+    target: { kind: 'parameter', name: 'fixture-threshold' },
+    values: [{ from: 1, to: 1 }],
+  },
 ];
 const mockViewActionAdapter = new MockViewActionAdapter({
   filters: { 'fixture-dashboard.Region': ['All'] },
@@ -92,6 +99,8 @@ let activeViewActionPolicy = syntheticViewActionPolicy;
 let activeViewIntentMappings: unknown = syntheticViewIntentMappings;
 let hostMode: 'unknown' | 'standalone' | 'tableau' = 'unknown';
 let observedHostDashboard: string | undefined;
+let hostEpoch = 0;
+let activeRunId: string | undefined;
 let activeViewActionResolution: ViewIntentResolution = {
   status: 'NO_ACTION',
   reason: 'No verified view intent is available for this run.',
@@ -134,6 +143,7 @@ function observeHostScope(): string | undefined {
         : undefined;
   const identity = typeof dashboard === 'string' ? dashboard : undefined;
   if (identity !== observedHostDashboard) {
+    hostEpoch += 1;
     viewActionController.resetForRun();
     canUndoViewAction = false;
     activeViewActionResolution = {
@@ -266,7 +276,11 @@ function render(state: ReplayState): void {
           render(state);
           return;
         }
+        const runId = state.runId;
+        const actionHostEpoch = hostEpoch;
         const result = await viewActionController.apply(state, currentResolution.proposal);
+        observeHostScope();
+        if (activeRunId !== runId || hostEpoch !== actionHostEpoch) return;
         if (result.ok) {
           canUndoViewAction = true;
           state.audit.push('view-action.applied');
@@ -283,6 +297,7 @@ function render(state: ReplayState): void {
         undo.textContent = 'Undo view action';
         undo.addEventListener('click', async () => {
           undo.disabled = true;
+          const actionHostEpoch = hostEpoch;
           const currentDashboard = observeHostScope();
           if (
             hostMode === 'tableau' &&
@@ -295,6 +310,8 @@ function render(state: ReplayState): void {
             return;
           }
           const result = await viewActionController.undo();
+          observeHostScope();
+          if (activeRunId !== state.runId || hostEpoch !== actionHostEpoch) return;
           state.audit.push(
             result.ok ? 'view-action.undone' : `view-action.undo-failed: ${result.error}`,
           );
@@ -355,12 +372,15 @@ runButton.addEventListener('click', async () => {
   status.dataset.status = 'running';
   viewActionController.resetForRun();
   canUndoViewAction = false;
+  activeRunId = undefined;
   activeViewActionResolution = {
     status: 'NO_ACTION',
     reason: 'Resolving the verified view intent for this run.',
   };
   try {
-    render(await client.replay(selectedScenario()));
+    const state = await client.replay(selectedScenario());
+    activeRunId = state.runId;
+    render(state);
   } catch {
     status.textContent = 'FAILED';
     status.dataset.status = 'failed';

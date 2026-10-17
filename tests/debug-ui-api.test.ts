@@ -88,8 +88,12 @@ describe('debug UI analysis API', () => {
       const run = (await created.json()) as { runId: string; status: string; audit: string[] };
       expect(run.status).toBe('completed');
       expect(run.audit).toContain('analysis-contract-created');
-      const runWithIntent = (await fetch(`${base}/api/analysis-runs/${run.runId}`)).json();
-      await expect(runWithIntent).resolves.toMatchObject({
+      const runWithIntentResponse = await fetch(`${base}/api/analysis-runs/${run.runId}`);
+      const runWithIntent = (await runWithIntentResponse.json()) as {
+        runId: string;
+        viewIntent?: { id: string; evidenceRef: string; semanticKey: string; runId: string };
+      };
+      expect(runWithIntent).toMatchObject({
         runId: run.runId,
         viewIntent: {
           runId: run.runId,
@@ -97,6 +101,23 @@ describe('debug UI analysis API', () => {
           semanticKey: 'region',
         },
       });
+      const secondResponse = await fetch(`${base}/api/analysis-runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scenarioId: 'verified-intervention-parameter' }),
+      });
+      const secondRun = (await secondResponse.json()) as {
+        runId: string;
+        viewIntent?: { id: string; evidenceRef: string; runId: string };
+      };
+      expect(secondResponse.status).toBe(200);
+      expect(secondRun.viewIntent).toMatchObject({
+        id: 'fixture-verified-intervention-threshold',
+        evidenceRef: 'evidence-1',
+        runId: secondRun.runId,
+      });
+      expect(secondRun.runId).not.toBe(run.runId);
+      expect(secondRun.viewIntent?.id).not.toBe(runWithIntent.viewIntent?.id);
       const refreshed = await fetch(`${base}/api/analysis-runs/${run.runId}`);
       expect(refreshed.status).toBe(200);
       expect(await refreshed.json()).toEqual(run);
