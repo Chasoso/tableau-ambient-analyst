@@ -29,11 +29,14 @@ The counts are indicators, not a quality metric. They are useful because the
 additional code is concentrated in coordination and recovery rather than in
 the reviewer verdict contract. The available #77 worktree and its local
 ignored state files were inspected read-only. No #77 or #88 file, branch,
-accounting record, approval record, or stop state was changed. The ignored
-state files available in this checkout were empty/uninitialized, so no claim
-is made here about live historical counters or the exact blocked #77 runtime
-state described by the Issue. That runtime fact remains an Issue-provided
-input until independently reproducible evidence is supplied.
+accounting record, approval record, or stop state was changed. The #77 state
+file is directly readable and records `reviewInvocationCount=16`, 16 cycle
+results, `autoFixCycleCount=0`, and `terminationReason=null`; no #77 approval
+file was present. The Issue's description of the stopped runtime is therefore
+only partly independently verifiable: reviewer prose, child-process logs, and
+the exact terminal-stop event were not recovered. This discrepancy is itself
+evidence that the terminal-state/audit boundary needs attention; it is not
+permission to repair or rewrite #77 state.
 
 ## 2. Current responsibility inventory
 
@@ -309,18 +312,18 @@ repair/rerun limits, and no Codex merge.
 
 ### What is available
 
-The Issue provides a 16-round #77 history with `CHANGES_REQUIRED` results,
-0 recorded AUTO_FIX cycles, and one to three structured findings per
-invocation. That history is not independently verified by the inspected
-worktree: its available ignored state files were empty/uninitialized, as
-recorded in Section 1. No GitHub PR for `feat/issue-77` was discoverable, and
-no approval file was present in the #77 worktree. The following table therefore
-reproduces Issue-provided history and analysis; it is not a claim that a
-durable accounting artifact or every reviewer conversation was recovered.
+The accounting file directly records 16 `CHANGES_REQUIRED` results, 0
+recorded AUTO_FIX cycles, and one to three structured findings per
+invocation. It preserves generalized rules and finding identities, but not
+reviewer prose, timestamps, review prompts, child-process logs, or a commit
+SHA for each finding. No GitHub PR for `feat/issue-77` was discoverable, and no
+approval file was present in the #77 worktree. The following table therefore
+uses directly observed durable finding evidence plus the ordered implementation
+commits; it does not claim that every reviewer conversation was recovered.
 
-The Issue-provided 16 rounds were:
+The 16 observed rounds were:
 
-| Round | Issue-provided finding theme | Issue-provided class | Confidence / limitation |
+| Round | Durable finding theme | Evidence-based class | Confidence / limitation |
 | ---: | --- | --- | --- |
 | 1 | Limit terminal state and complete stop/recovery documentation | Existing gap in the initial #77 implementation | High for the observed gap; exact pre-round baseline is not stored |
 | 2 | Retry snapshot identity, uncertain recovery, retry-history consistency | Existing/incomplete recovery contract | High; causal commit link unavailable |
