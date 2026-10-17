@@ -558,9 +558,19 @@ describe('validated view action boundary', () => {
           ],
         },
         proposal: parameterProposalWith('Threshold'),
+        mappings: [
+          {
+            semanticKey: 'threshold',
+            operation: 'set-parameter',
+            valueType: 'number',
+            target: { kind: 'parameter', name: 'Threshold' },
+            values: [{ from: 1, to: 1 }],
+          },
+        ],
       };
       expect(approvedViewActionConfigurationFromGlobal()).toMatchObject({
         policy: { parameterTargets: [{ allowedValues: [1] }] },
+        mappings: [{ semanticKey: 'threshold' }],
       });
       host.__ambientAnalystViewAction = { policy: null, proposal: {} };
       expect(approvedViewActionConfigurationFromGlobal()).toBeUndefined();

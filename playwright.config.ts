@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -14,7 +15,13 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm run debug:ui',
-    env: { PORT: '4173' },
+    env: {
+      PORT: '4173',
+      AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE: resolve(
+        process.cwd(),
+        'tests/fixtures/view-action-config.json',
+      ),
+    },
     url: 'http://localhost:4173',
     reuseExistingServer: false,
     timeout: 120_000,

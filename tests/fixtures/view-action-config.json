@@ -1,0 +1,40 @@
+{
+  "policy": {
+    "scope": { "dashboard": "fixture-dashboard" },
+    "filterTargets": [
+      {
+        "kind": "worksheet-field",
+        "dashboard": "fixture-dashboard",
+        "worksheet": "fixture-dashboard",
+        "field": "Region",
+        "valueType": "string",
+        "allowedValues": ["West"]
+      }
+    ],
+    "parameterTargets": [
+      {
+        "kind": "parameter",
+        "dashboard": "fixture-dashboard",
+        "name": "fixture-threshold",
+        "valueType": "number",
+        "allowedValues": [0, 1, 2]
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "semanticKey": "region",
+      "operation": "set-filter",
+      "valueType": "string",
+      "target": { "kind": "worksheet-field", "worksheet": "fixture-dashboard", "field": "Region" },
+      "values": [{ "from": "West", "to": "West" }]
+    },
+    {
+      "semanticKey": "threshold",
+      "operation": "set-parameter",
+      "valueType": "number",
+      "target": { "kind": "parameter", "name": "fixture-threshold" },
+      "values": [{ "from": 1, "to": 1 }]
+    }
+  ]
+}

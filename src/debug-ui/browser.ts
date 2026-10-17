@@ -17,11 +17,7 @@ import {
   type ViewActionAdapter,
   isViewActionEligible,
 } from './view-actions.js';
-import {
-  resolveViewIntent,
-  type ViewIntentMapping,
-  type ViewIntentResolution,
-} from './view-intents.js';
+import { resolveViewIntent, type ViewIntentResolution } from './view-intents.js';
 
 const client = new HttpAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
@@ -30,46 +26,11 @@ const status = document.querySelector<HTMLElement>('#status')!;
 const content = document.querySelector<HTMLElement>('#content')!;
 const hostStatus = document.querySelector<HTMLElement>('#host-status')!;
 
-// This is a synthetic fixture only. It is intentionally not a production
-// Tableau mapping; live mappings must be supplied and approved by the host.
-const syntheticViewActionPolicy: ViewActionPolicy = {
-  scope: { dashboard: 'fixture-dashboard' },
-  filterTargets: [
-    {
-      kind: 'worksheet-field',
-      dashboard: 'fixture-dashboard',
-      worksheet: 'fixture-dashboard',
-      field: 'Region',
-      valueType: 'string',
-      allowedValues: ['West'],
-    },
-  ],
-  parameterTargets: [
-    {
-      kind: 'parameter',
-      dashboard: 'fixture-dashboard',
-      name: 'fixture-threshold',
-      valueType: 'number',
-      allowedValues: [0, 1, 2],
-    },
-  ],
+const unconfiguredViewActionPolicy: ViewActionPolicy = {
+  scope: { dashboard: 'unconfigured' },
+  filterTargets: [],
+  parameterTargets: [],
 };
-const syntheticViewIntentMappings: readonly ViewIntentMapping[] = [
-  {
-    semanticKey: 'region',
-    operation: 'set-filter',
-    valueType: 'string',
-    target: { kind: 'worksheet-field', worksheet: 'fixture-dashboard', field: 'Region' },
-    values: [{ from: 'West', to: 'West' }],
-  },
-  {
-    semanticKey: 'threshold',
-    operation: 'set-parameter',
-    valueType: 'number',
-    target: { kind: 'parameter', name: 'fixture-threshold' },
-    values: [{ from: 1, to: 1 }],
-  },
-];
 const mockViewActionAdapter = new MockViewActionAdapter({
   filters: { 'fixture-dashboard.Region': ['All'] },
   parameters: { 'fixture-threshold': 0 },
@@ -83,20 +44,12 @@ const failClosedViewActionAdapter: ViewActionAdapter = {
   },
 };
 
-function isEmbeddedContext(): boolean {
-  try {
-    return window.self !== window.top;
-  } catch {
-    return true;
-  }
-}
-
 let viewActionController = new ViewActionController(
-  isEmbeddedContext() ? failClosedViewActionAdapter : mockViewActionAdapter,
-  syntheticViewActionPolicy,
+  failClosedViewActionAdapter,
+  unconfiguredViewActionPolicy,
 );
-let activeViewActionPolicy = syntheticViewActionPolicy;
-let activeViewIntentMappings: unknown = syntheticViewIntentMappings;
+let activeViewActionPolicy = unconfiguredViewActionPolicy;
+let activeViewIntentMappings: unknown = [];
 let hostMode: 'unknown' | 'standalone' | 'tableau' = 'unknown';
 let observedHostDashboard: string | undefined;
 let hostEpoch = 0;
@@ -400,12 +353,12 @@ void initializeTableauHost().then(({ mode }) => {
   hostStatus.dataset.host = mode;
   hostStatus.textContent = mode === 'standalone' ? 'Standalone' : `Host: ${mode}`;
   if (mode === 'standalone') {
-    viewActionController = new ViewActionController(
-      mockViewActionAdapter,
-      syntheticViewActionPolicy,
-    );
-    activeViewActionPolicy = syntheticViewActionPolicy;
-    activeViewIntentMappings = syntheticViewIntentMappings;
+    const configuration = approvedViewActionConfigurationFromGlobal();
+    if (configuration) {
+      viewActionController = new ViewActionController(mockViewActionAdapter, configuration.policy);
+      activeViewActionPolicy = configuration.policy;
+      activeViewIntentMappings = configuration.mappings ?? [];
+    }
   } else if (mode === 'tableau') {
     const configuration = approvedViewActionConfigurationFromGlobal();
     const api = tableauViewActionApiFromGlobal();
@@ -419,9 +372,9 @@ void initializeTableauHost().then(({ mode }) => {
     } else {
       viewActionController = new ViewActionController(
         failClosedViewActionAdapter,
-        syntheticViewActionPolicy,
+        unconfiguredViewActionPolicy,
       );
-      activeViewActionPolicy = syntheticViewActionPolicy;
+      activeViewActionPolicy = unconfiguredViewActionPolicy;
       activeViewIntentMappings = [];
     }
   }
