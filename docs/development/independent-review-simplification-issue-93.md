@@ -165,6 +165,31 @@ The matrix deliberately separates a reviewer execution failure from
 `CHANGES_REQUIRED`, a safe crash from unknown liveness, and a configured limit
 from a broken state. Missing error evidence never becomes PASS.
 
+### Bounded continuation policy evaluation
+
+Unattended continuation is safe only for a narrowly defined, known execution
+failure, not for an uncertain state. A future implementation may continue
+automatically when all of the following are durably evidenced in the same
+transition record: the child exited or timed out with a known result; the
+child is verified not to be live; Issue/branch/base/canonical-worktree/HEAD
+and reviewer-schema identity are unchanged; the failure record is complete and
+valid; and the current time, cost, invocation, AUTO_FIX, and CI limits still
+have room. The next reviewer attempt is a new invocation and consumes one
+invocation budget unit. No counter is refunded, reset, or extended. The
+continuation must remain within the configured timeout and retry bounds; where
+the failure is tied to an AUTO_FIX cycle, measurable repository progress is
+also required before another continuation is considered.
+
+This policy is an architecture evaluation, not a request to increase today's
+limits or to resume any existing Issue. It would make the normal transient
+reviewer-process exit/timeout path unattended while preserving the current
+accounting evidence. It must hard-stop on unknown child liveness, missing or
+malformed failure evidence, changed identity, concurrent invocation, partial
+or interrupted recovery, non-converging findings, exhausted limits, security
+or authorization questions, and any human-owned decision. A bounded retry
+that cannot prove these predicates returns `HUMAN_DECISION_REQUIRED`; it never
+counts missing error data as success.
+
 ## 6. Recommendation: B, with a narrow use of C
 
 Recommend a simplified single-writer runner, subject to explicit Human
