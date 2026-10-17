@@ -122,12 +122,14 @@ Use this sequence:
    directly affected dependency cone, generalizes findings to root-rule
    clusters, searches for in-scope siblings, and collects related findings and
    negative controls rather than stopping at the first error. Do not add
-   coverage telemetry or new fields to the reviewer JSON: the existing
-   `affected_locations`, `generalized_rule`, and `recommended_fix` fields are
-   the evidence path for material findings. Report an unresolved or untested
-   boundary only when it is a material finding; a clean PASS need not serialize
-   an inventory of inspected paths. Keep the search bounded to the Issue scope
-   and directly related code.
+   coverage telemetry or new fields to the reviewer JSON. For every review,
+   including a clean `PASS`, use one existing non-blocking structured finding
+   as a coverage record: set classification to `AUTO_FIX`, use
+   `generalized_rule` for the coverage purpose, and summarize inspected scope,
+   negative controls, and material unresolved or untested boundaries in the
+   existing finding fields. This evidence-only record does not request a code
+   fix or consume an AUTO_FIX cycle. Keep the search bounded to the Issue
+   scope and directly related code.
 9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
    fix batch grouped by invariant. Check every directly affected entry point,
    run targeted positive and negative regressions, and record fixed,
@@ -378,6 +380,11 @@ The following cross-field rules apply to every row and both finding arrays:
   require `escalationRequired: true`.
 - `escalationRequired: true` requires at least one
   `HUMAN_DECISION_REQUIRED` or `BLOCKED` finding in either array.
+- The existing `nonBlockingFindings` array may carry one evidence-only
+  coverage record on `PASS`. It uses the already-valid `AUTO_FIX`
+  classification and finding fields, requests no repository change, and never
+  increments the AUTO_FIX cycle counter. This is a bounded evidence channel,
+  not a new schema field or a second review framework.
 - legacy string findings, unknown properties, missing required fields, invalid
   enums, and wrong finding severity are invalid at the wire/parser boundary.
 - the Schema intentionally does not encode these cross-field rules with
@@ -517,11 +524,17 @@ approve PR creation when blocking findings remain.
 For high-risk changes, establish or verify a compact invariant/dependency map
 before the final verdict. Review every listed entry point and negative control,
 search for in-scope siblings of each generalized rule, and collect all related
-findings before returning `PASS` or `CHANGES_REQUIRED`. If a boundary remains
-materially unresolved or untested, report it through the existing structured
-finding fields; do not invent a new output field or require PASS to carry
-coverage telemetry. Do not treat an implementer map as evidence that a path is
-safe; independently revise it when necessary.
+findings before returning `PASS` or `CHANGES_REQUIRED`. Include the map's
+inspected cone and material unresolved or untested boundary in the existing
+non-blocking coverage record; do not invent a new output field. Do not treat
+an implementer map as evidence that a path is safe; independently revise it
+when necessary.
+
+For every review, including `PASS`, include exactly one evidence-only coverage
+record in `nonBlockingFindings` using the existing finding shape and
+classification `AUTO_FIX`. Summarize the inspected scope, negative controls,
+and material unresolved or untested boundaries. This record requests no code
+change and is not an AUTO_FIX cycle.
 
 Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
@@ -538,12 +551,12 @@ were unavailable. The #95 rows are supported by the Issue #96 description's
 read-only analysis; no additional #95 review was run and no new #95 state was
 opened or changed here.
 
-| Finding cluster | Evidence and confidence | Procedural vs structural interpretation |
-| --- | --- | --- |
-| Raw state publication versus a valid successor | #95 Issue evidence reports rollback/reset/fabricated-history concerns; exact reviewer artifacts are unavailable | Procedural gap: no explicit pre-fix successor invariant and dependency-cone check. Structural limitation: coupled durable transitions can expose new interactions after a local repair. |
-| Ownership release, reclaim, and mutation | #95 Issue evidence reports repeated ownership-related gaps; exact locations and round attribution are unavailable | Procedural gap: sibling entry points and negative ownership cases were not evidenced together. Structural limitation: ownership and mutation boundaries interact across recovery paths. |
-| Termination evidence | #77 historical analysis records missing termination proof and stale-lock/forced-termination themes; #95 Issue evidence also names termination evidence | Procedural gap: related termination cases were discovered serially rather than held for one coverage pass. Structural limitation: process/liveness proof depends on state and recovery boundaries. |
-| Legacy approvals and accounting semantics | #95 Issue evidence reports legacy approval/accounting gaps and that `autoFixCycleCount=0` did not prove no correction occurred | Procedural gap: compatibility and actual repair evidence were not checked as one cluster. Structural limitation: legacy read-only compatibility constrains what can be inferred. |
+| Finding cluster | Pre-existing rule not carried out | Ambiguous or missing instruction | Introduced/exposed by later correction | Architectural limitation outside this Issue | Evidence boundary |
+| --- | --- | --- | --- | --- | --- |
+| Raw state publication versus a valid successor | Not verified from the available #95 material. | No explicit successor invariant and dependency-cone check was evidenced. | Rollback/reset/fabricated-history concerns were reported by #95; whether a correction introduced or only exposed them is unverified. | No genuinely outside-Issue architecture decision was established; durable-transition coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
+| Ownership release, reclaim, and mutation | Not verified from the available #95 material. | Sibling entry points and adversarial ownership cases were not evidenced together. | Repeated ownership gaps were reported by #95; round attribution and causality are unavailable. | No outside-Issue limitation was established; lifecycle coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
+| Termination evidence | #77 historical analysis verifies recurring missing-proof themes, but not which prior rule execution failed. | Related termination cases were not held for one pre-fix coverage pass. | #77 records missing proof and stale-lock/forced-termination themes; whether later corrections introduced or exposed each gap is unverified. | Process/liveness proof has cross-boundary complexity, but no architectural change is authorized by this Issue. | #77 round prose and per-round diffs are unavailable; #95 is Issue-level evidence. |
+| Legacy approvals and accounting semantics | Existing compatibility rules are documented, but their complete execution is not verifiable from #95 evidence. | Compatibility and actual repair evidence were not checked as one cluster. | #95 reports legacy approval/accounting gaps and that `autoFixCycleCount=0` did not prove no correction occurred; causal ordering is unavailable. | Legacy read-only compatibility limits inference, but changing accounting or approval architecture is outside this Issue. | Exact #95 artifacts are unavailable; no state was reopened or changed. |
 
 The map distinguishes verified themes from inference: the recurring themes and
 the 16-round/#95 summary are evidence; the causal labels above are bounded
