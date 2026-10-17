@@ -305,7 +305,163 @@ The migration must preserve the Issue-to-PR contract: clean canonical
 worktree, independent PASS, no direct main push, latest exact-head CI, bounded
 repair/rerun limits, and no Codex merge.
 
-## 9. Human Decision required
+## 8. #77 review-iteration evidence and causal analysis
+
+### What is available
+
+The unmerged canonical #77 worktree has a read-only durable accounting file
+with 16 `CHANGES_REQUIRED` cycle results, 0 recorded AUTO_FIX cycles, and
+one to three structured findings per invocation. The file preserves
+generalized rules and finding identities, but not reviewer prose, timestamps,
+review prompts, child-process logs, or a commit SHA for each finding. No GitHub
+PR for `feat/issue-77` was discoverable, and no approval file was present in
+the #77 worktree. The following is therefore a classification of the durable
+finding evidence plus the ordered implementation commits, not a claim that
+every reviewer conversation was recovered.
+
+The #77 state was read without writing it. Its 16 rounds were:
+
+| Round | Durable finding theme | Evidence-based class | Confidence / limitation |
+| ---: | --- | --- | --- |
+| 1 | Limit terminal state and complete stop/recovery documentation | Existing gap in the initial #77 implementation | High for the observed gap; exact pre-round baseline is not stored |
+| 2 | Retry snapshot identity, uncertain recovery, retry-history consistency | Existing/incomplete recovery contract | High; causal commit link unavailable |
+| 3 | Base commit and runner compatibility were absent from snapshot bindings | Previously missed invariant | High |
+| 4 | Failure-name retry allowlist and optional snapshot bindings | Existing design gap, then exposed by the preceding binding work | Medium; no per-round diff reference |
+| 5 | Process liveness and separate retry/accounting transactions | New coordination risk exposed by retry implementation | Medium |
+| 6 | Optional bindings and missing accounting revalidation before retry | Same root contract left incomplete | High for repetition; causal “introduced by” status unverified |
+| 7 | Resume race and bounded-reason substring false positives | One recovery race plus an independently missed sibling/near-miss case | High for finding content; sibling-search procedure itself unrecorded |
+| 8 | Operation-lock check outside the accounting lock | New race exposed by the earlier repair | Medium |
+| 9 | Stale accounting lock and operation-lock absence treated as process proof | New recovery surface created by lock-based coordination | High for structural relationship; exact authoring round unverified |
+| 10 | Missing process-termination evidence accepted | Previously missed fail-closed parser invariant | High |
+| 11 | Retry proof, retry snapshot ordering, accounting-lock scope/race | New interactions among safety checks and recovery | Medium |
+| 12 | Interrupted lock archival and duplicate approval issuance | New recovery-of-recovery paths | High for the two concrete gaps |
+| 13 | Diagnostic labels as authorization and missing bounded-reason tests | Existing policy mismatch plus missed sibling tests | High |
+| 14 | Nonzero/empty diagnostics, missing termination proof, lexical sibling authorization | New failure classification edge plus recurring sibling-search weakness | High for repeated themes |
+| 15 | Empty stderr accepted and separate recovery mutex race | New near-miss and new lock interaction | High |
+| 16 | Operation locks can remain stale after forced termination | New lock failure mode, final stop after 16 invocations | High |
+
+The ordered commit messages support the broad sequence: initial recovery
+hardening, then terminal-state/snapshot/recovery binding, then liveness and
+serialization, followed by accounting-lock recovery. They do not bind a
+specific finding to a specific commit. In particular, it is **unverified**
+whether a given finding existed before the preceding repair, was introduced by
+that repair, or was merely made visible by it. No conclusion below treats that
+causal distinction as proven.
+
+### What the 16 rounds demonstrate
+
+The strongest verified pattern is not “the reviewer missed 16 unrelated bugs.”
+It is a chain of incomplete safety contracts:
+
+1. A recovery feature created new durable states and bindings.
+2. A review found one missing binding or race.
+3. The repair added a check at one boundary.
+4. A later review found the same invariant missing at another boundary, or
+   found a race between two separately updated records.
+
+The repeated generalized rules make this visible: process-absence proof,
+snapshot completeness, retry/accounting revalidation, serialized approval
+consumption, lock recovery, and lexical sibling authorization recur across
+multiple rounds. This is evidence of structural coupling and incomplete
+consolidation, not evidence that more lock handlers are the right remedy.
+
+### Did the existing review rules work?
+
+| Rule | Evidence of operation | Evidence of insufficiency |
+| --- | --- | --- |
+| Complete diff review | Findings cite runner, gate, CLI, docs, and tests across the changed diff | Related invariants were still discovered in later rounds; the durable state does not record a dependency-cone checklist or a consolidated pre-fix report |
+| Finding generalization | Every round stores generalized rules and identities | Similar rules recur in rounds 2–6, 9–12, and 13–16; generalization happened after each finding, not as a complete pre-fix closure step |
+| Bounded sibling search | Round 7 and rounds 13–14 identify near-miss bounded-reason cases | Search scope, sibling set, and negative controls are not persisted; therefore effectiveness is not independently verifiable |
+| Consolidated findings | Some rounds reported 2–3 related findings together | No evidence shows that all findings for one invariant cluster were held and reported before AUTO_FIX; the one-finding/one-repair pattern remained possible |
+| AUTO_FIX self-review | The accounting records `AUTO_FIX` classification and repositoryChanged fields | #77 records 0 AUTO_FIX cycles and no post-fix impact checklist; it cannot prove that a write-enabled implementer actually checked the full affected dependency cone |
+
+The practical change should therefore be to the review packet and repair
+protocol, not another duplicated prose rule: require a pre-fix invariant
+cluster report with complete-diff coverage, generalized rule, bounded sibling
+set, related locations, and negative controls; require the AUTO_FIX report to
+include before/after dependency-cone review and targeted regression evidence;
+and only then allow one consolidated fix batch. This reduces serial discovery
+without claiming one review is complete.
+
+## 9. Review continuation and budget alternatives
+
+The current 16-invocation counter, 8 AUTO_FIX bound, repeat threshold, and
+Human Decision rules remain unchanged. The following are future policy choices
+only.
+
+| Option | Infinite-loop prevention | Cost/accounting | Stop conditions | Human intervention | Auditability / unattended completion |
+| --- | --- | --- | --- | --- | --- |
+| A. Keep 16; improve review quality | Existing 16, repeat, no-progress, and CI bounds remain the hard ceiling | Simple and predictable; lowest policy/migration cost | Any current terminal state still stops at 16 | Human may decide what to do after terminal state; no implicit extension | Highest comparability and easiest audit; unattended completion improves only by reducing avoidable rounds |
+| B. Predefined total budget with objective progress | Global invocations/time/cost plus per-cluster and no-progress bounds; no reset/refund | More useful work can fit within a pre-approved total budget, but cost is less predictable per Issue | Unknown state, changed identity, malformed evidence, no measurable repository/test progress, cluster repeat, or total budget exhaustion | Human pre-approves policy and decides after total budget; no LLM-only extension | Auditable if progress is derived from commit/diff/test/finding-identity evidence; better unattended completion only when evidence is objective |
+| C. Separate budgets for execution failure, substantive cycles, and no-progress | Each class bounded; also retain a global wall/cost budget and consecutive no-progress stop | Distinguishes cheap launch failures from real review/fix work; requires more counters and migration | Failure-class budget, substantive-cycle budget, no-progress, unknown liveness, or any human/security stop | Human owns category budgets and any continuation beyond them | More diagnostic and potentially better completion, but more states and accounting complexity—the risk this Issue is trying to avoid |
+
+Option B is the narrowest candidate for future evaluation. “Progress” must be
+machine-observable: a new committed repository state, a changed normalized
+finding identity, a passing targeted validation that was previously failing,
+or a durable state transition that closes a known execution failure. An LLM
+self-report such as “I made progress” is insufficient. Every extra review is
+a new invocation; counters are never refunded or reset. Option C is useful as
+a measurement model even if its separate operational counters are not adopted.
+
+## 10. B案の効果、限界、成立条件
+
+The B candidate could remove the following current paths, provided the proof
+obligations in Section 6 pass:
+
+- routine recovery mutexes and stale-lock deletion/recovery commands that
+  exist only because multiple commands mutate the same transition;
+- separate “record failure, clear terminal state, then reserve again” windows;
+- approval issuance/consumption paths used to repair ordinary runner
+  bookkeeping rather than a genuine Human Decision;
+- recovery-of-recovery transactions for lock archival, duplicate approvals,
+  and interrupted multi-file coordination.
+
+B does **not** remove these hard stops: unknown child liveness, malformed or
+partial accounting, changed Issue/branch/base/HEAD/schema, concurrent active
+runner, unverifiable approval, non-converging findings, exhausted approved
+budget, security/authorization ambiguity, missing prerequisites, and final
+merge. A known child exit with complete failure evidence and unchanged identity
+may be retried automatically within the current bounded budget. A residual
+lock or unknown process cannot be age-deleted or assumed absent; it requires a
+Human Decision unless a platform-tested ownership protocol proves safe absence.
+
+The conditions for practical unattended completion are stronger than fewer
+lines: one active runner per canonical workspace, atomic publication of one
+complete transition record, a read-only compatibility reader for old
+accounting, objective progress evidence, and a tested child termination model.
+If any condition fails, A is the safer recommendation. A successful B spike
+must report not only code reduction but the measured rate of uninterrupted
+Issue-to-PR completion, human stops, recovery operations, and safe restarts.
+
+Platform checks must cover macOS and Windows separately: exclusive-create and
+rename semantics, flush/durability expectations, path and permission errors,
+PID/child-tree liveness and termination, forced process exit, antivirus/file
+sharing interference, and restart after each durable boundary. Node.js API
+parity is necessary but not sufficient evidence.
+
+## 11. Minimum spike and adoption criteria
+
+No implementation is authorized by this PR. The following is the smallest
+evidence package for a later decision:
+
+| Hypothesis | Minimum verification | PASS / FAIL | Fallback and metric |
+| --- | --- | --- | --- |
+| One runner can own a canonical workspace safely | Two concurrent starts plus restart/forced-exit tests on macOS and Windows using a temp workspace | PASS only one owner proceeds and the other fails closed with intact evidence; FAIL if both proceed, state is ambiguous, or cleanup requires age deletion | Keep A or obtain a separate concurrency design; measure competing-start rejection and human stops |
+| State publication is crash-atomic | Inject termination before/after each state and approval publication; reload repeatedly | PASS only prior/next complete record is observed and no counter is refunded; FAIL on partial success or unrecoverable intermediate state | Keep existing transactional paths; measure safe restart rate and manual recovery operations |
+| Known reviewer failure can restart safely | Child exit/timeout/launch failure fixtures with positive termination proof, changed HEAD, unknown liveness, permission-like exit, and malformed evidence | PASS only complete evidence + unchanged identity consumes one new invocation; FAIL if ambiguous failures retry or approval is accepted | Stop and require Human Decision; measure automatic safe restart rate and false-retry rate (must be zero) |
+| Old accounting remains auditable | Read #76/#77/#88/#29 fixtures through compatibility reader without writing them; compare hashes and fields | PASS if all supported records remain unchanged and unmapped records fail closed; FAIL on rewrite, inferred history, or counter change | Preserve A and isolate a read-only reader; measure migration coverage and rejected-shape count |
+| Consolidated review reduces serial rounds | Replay representative #77 finding clusters with a review packet containing diff, dependency cone, sibling set, and negative controls | PASS if related findings are reported in one batch without suppressing a known defect; FAIL if packet omits affected siblings or materially increases false negatives | Keep current review with better prompts/checklists; measure findings-per-invocation, repeated-root-cause rate, and post-fix regression rate |
+| Objective progress supports continuation | Use committed diff hashes, normalized finding identities, targeted test results, and bounded total budget; compare against no-progress fixtures | PASS only machine-observable progress permits continuation and no-progress stops; FAIL if LLM text alone changes the decision | Maintain A or use C only for measurement; measure added cost, completion rate, stop frequency, and audit completeness |
+
+Adoption requires a human review of the measured results. Minimum decision
+metrics are: (1) unattended Issue-to-PR completion rate, (2) human
+intervention stop count per Issue, (3) recovery operation count, (4) safe
+restart rate after abnormal exit, (5) duplicate/false retry rate, (6) review
+rounds and repeated-root-cause rate, (7) total review/AUTO_FIX cost, and (8)
+percentage of accounting states covered without mutation. No single metric,
+especially LOC or lock count, is sufficient.
+
+## 12. Human Decision required
 
 Before implementing B (or changing any authorization/security policy), a
 Human must decide whether the repository accepts the following recommendation:
@@ -328,7 +484,7 @@ blocked launch case remains a regression fixture/input. Any implementation
 must provide an explicit rollback and a human decision on how legacy
 recovery-only states are represented.
 
-## 10. Quality notes
+## 13. Quality notes
 
 - This deliverable changes documentation only.
 - No runner, CLI, accounting, approval, lock, authentication, or security
