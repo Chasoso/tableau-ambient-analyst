@@ -114,10 +114,7 @@ Use this sequence:
    criteria, `AGENTS.md`, relevant policies, the complete diff against the
    intended base, changed files, necessary surrounding code/docs, and relevant
    ADRs.
-7. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
-   `HUMAN_DECISION_REQUIRED` using the output contract below. Every finding is
-   classified as `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`.
-8. Before returning a verdict, the reviewer performs one bounded coverage
+7. Before returning a verdict, the reviewer performs one bounded coverage
    pass. It independently derives the relevant invariants, checks each
    directly affected dependency cone, generalizes findings to root-rule
    clusters, searches for in-scope siblings, and collects related findings and
@@ -125,6 +122,9 @@ Use this sequence:
    substantive findings or required escalations through the existing output
    contract; a clean `PASS` needs no coverage-only record. Keep the search
    bounded to the Issue scope and directly related code.
+8. The reviewer returns `PASS`, `CHANGES_REQUIRED`, or
+   `HUMAN_DECISION_REQUIRED` using the output contract below. Every finding is
+   classified as `AUTO_FIX`, `HUMAN_DECISION_REQUIRED`, or `BLOCKED`.
 9. If every blocking finding is `AUTO_FIX`, apply one deterministic in-scope
    fix batch grouped by invariant. Check every directly affected entry point,
    run targeted positive and negative regressions, and transiently check which
@@ -536,51 +536,6 @@ Do not approve PR creation when blocking findings remain. If a blocking
 finding is fixed, require a fresh independent re-review rather than accepting
 the implementer's self-assertion.
 ```
-
-## Issue #96 evidence and evaluation note
-
-The following mapping is deliberately evidence-bounded. The #77 rows are
-supported by the historical analysis in
-`independent-review-simplification-issue-93.md`, which records 16
-`CHANGES_REQUIRED` rounds and notes that reviewer prose and per-round diffs
-were unavailable. The #95 rows are supported by the Issue #96 description's
-read-only analysis; no additional #95 review was run and no new #95 state was
-opened or changed here.
-
-| Finding cluster | Pre-existing rule not carried out | Ambiguous or missing instruction | Introduced/exposed by later correction | Architectural limitation outside this Issue | Evidence boundary |
-| --- | --- | --- | --- | --- | --- |
-| Raw state publication versus a valid successor | Not verified from the available #95 material. | No explicit successor invariant and dependency-cone check was evidenced. | Rollback/reset/fabricated-history concerns were reported by #95; whether a correction introduced or only exposed them is unverified. | No genuinely outside-Issue architecture decision was established; durable-transition coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
-| Ownership release, reclaim, and mutation | Not verified from the available #95 material. | Sibling entry points and adversarial ownership cases were not evidenced together. | Repeated ownership gaps were reported by #95; round attribution and causality are unavailable. | No outside-Issue limitation was established; lifecycle coupling is a structural interaction within the review scope. | Exact reviewer artifacts and locations are unavailable. |
-| Termination evidence | #77 historical analysis verifies recurring missing-proof themes, but not which prior rule execution failed. | Related termination cases were not held for one pre-fix coverage pass. | #77 records missing proof and stale-lock/forced-termination themes; whether later corrections introduced or exposed each gap is unverified. | Process/liveness proof has cross-boundary complexity, but no architectural change is authorized by this Issue. | #77 round prose and per-round diffs are unavailable; #95 is Issue-level evidence. |
-| Legacy approvals and accounting semantics | Existing compatibility rules are documented, but their complete execution is not verifiable from #95 evidence. | Compatibility and actual repair evidence were not checked as one cluster. | #95 reports legacy approval/accounting gaps and that `autoFixCycleCount=0` did not prove no correction occurred; causal ordering is unavailable. | Legacy read-only compatibility limits inference, but changing accounting or approval architecture is outside this Issue. | Exact #95 artifacts are unavailable; no state was reopened or changed. |
-
-The map distinguishes verified themes from inference: the recurring themes and
-the 16-round/#95 summary are evidence; the causal labels above are bounded
-interpretations, not reconstructed reviewer transcripts. Per-finding causal
-ordering, exact prompts, and any unrecorded reviewer search remain
-unavailable. The following is a transient synthetic review input, not a new
-serialized reviewer output or mandatory per-Issue file:
-
-```text
-Invariant: every published transition is either the prior complete state or a valid successor; no fabricated history.
-Paths: publish/rollback, ownership release/reclaim/mutation, retry and termination recovery, legacy approval reader.
-Cases: valid successor; rollback after write failure; stale/unknown owner; forced termination with and without proof; legacy record read without mutation.
-Excluded: unrelated product/UI paths and live external services; they do not participate in the Issue's durable review contract.
-```
-
-Evaluation protocol: prepare a sanitized baseline packet and a revised packet
-from the same representative #77/#95 invariant clusters; keep the known answer
-paths in an evaluator-only record, not in reviewer instructions; run each with
-the same fresh-review budget; compare serious-defect detection, consolidated
-cluster coverage, repeated-root-cause count, false positives, and review
-effort. PASS requires all known in-scope defects to be reported without
-materially worse false negatives; substantive coverage gaps must remain
-reportable through the existing finding/escalation contract, but no persistent
-coverage inventory is required. No safe comparative run was performed for this
-Issue, and no claim
-of fewer invocations or better unattended completion is made: result
-`UNVERIFIED`. The protocol is executable in a future isolated evaluation and
-does not require a database, runner change, or extra live review.
 
 ## Pilot approach
 
