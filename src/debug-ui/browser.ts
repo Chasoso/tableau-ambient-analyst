@@ -229,6 +229,7 @@ function render(state: ReplayState): void {
           render(state);
           return;
         }
+        if (activeRunId !== state.runId) return;
         const runId = state.runId;
         const actionHostEpoch = hostEpoch;
         const result = await viewActionController.apply(state, currentResolution.proposal);
@@ -318,7 +319,12 @@ function selectedScenario(): DebugScenario {
   return scenarioById(select.value);
 }
 
-select.addEventListener('change', () => renderIdle(selectedScenario()));
+select.addEventListener('change', () => {
+  activeRunId = undefined;
+  viewActionController.resetForRun();
+  canUndoViewAction = false;
+  renderIdle(selectedScenario());
+});
 runButton.addEventListener('click', async () => {
   runButton.disabled = true;
   status.textContent = 'RUNNING';
@@ -330,6 +336,9 @@ runButton.addEventListener('click', async () => {
     status: 'NO_ACTION',
     reason: 'Resolving the verified view intent for this run.',
   };
+  content.replaceChildren(
+    Object.assign(document.createElement('p'), { textContent: 'Starting replay…' }),
+  );
   try {
     const state = await client.replay(selectedScenario());
     activeRunId = state.runId;
