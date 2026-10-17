@@ -80,7 +80,7 @@ function resolveRunAction(state: ReplayState): ViewIntentResolution {
       runId: state.runId,
       verification: scenarioStatus(state) === 'VERIFIED' ? 'VERIFIED' : 'UNVERIFIED',
       intervention: state.scenario.intervention?.decision,
-      verifiedEvidenceIds: state.scenario.evidence.map(({ provenance }) => provenance),
+      verifiedEvidenceIds: state.verifiedEvidenceIds ?? [],
     },
     mappings: activeViewIntentMappings,
     policy: activeViewActionPolicy,

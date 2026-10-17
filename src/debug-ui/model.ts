@@ -33,6 +33,7 @@ export type ReplayState = {
   scenario: DebugScenario;
   audit: string[];
   candidateIntent?: CandidateViewIntent;
+  verifiedEvidenceIds?: readonly string[];
   viewIntent?: ViewIntent;
 };
 
@@ -261,6 +262,15 @@ function isViewIntent(value: unknown): value is ViewIntent {
   );
 }
 
+function isVerifiedEvidenceIds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    value.every((item) => isBoundedString(item, 200) && item.length > 0)
+  );
+}
+
 export function hasValidReplayStateInvariants(
   status: ReplayState['status'],
   scenario: {
@@ -360,6 +370,12 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
     return false;
   if (!Array.isArray(value.audit) || value.audit.length > 64) return false;
   if (!value.audit.every((item) => isBoundedString(item, 200))) return false;
+  if (
+    value.verifiedEvidenceIds !== undefined &&
+    !isVerifiedEvidenceIds(value.verifiedEvidenceIds)
+  ) {
+    return false;
+  }
   if (value.viewIntent !== undefined && !isViewIntent(value.viewIntent)) return false;
 
   const scenario = value.scenario;

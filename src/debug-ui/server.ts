@@ -160,15 +160,24 @@ function isActionableCandidate(
   result: Awaited<ReturnType<AnalysisClient['replay']>>,
 ): result is Awaited<ReturnType<AnalysisClient['replay']>> & {
   candidateIntent: CandidateViewIntent;
+  verifiedEvidenceIds: readonly string[];
 } {
   return (
     result.status === 'completed' &&
     result.scenario.verifier.status === 'VERIFIED' &&
     result.scenario.intervention?.decision === 'INTERVENE' &&
     result.candidateIntent !== undefined &&
-    result.scenario.evidence.some(
-      ({ provenance }) => provenance === result.candidateIntent?.evidenceRef,
-    )
+    Array.isArray(result.verifiedEvidenceIds) &&
+    result.verifiedEvidenceIds.includes(result.candidateIntent.evidenceRef)
+  );
+}
+
+function isVerifiedEvidenceIds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 200)
   );
 }
 
@@ -211,6 +220,12 @@ function validClientResult(
   if (result.status === 'failed' && !scenario.error) return false;
   if (scenario.error !== undefined && result.status !== 'failed') return false;
   if (result.candidateIntent !== undefined && !isCandidateViewIntent(result.candidateIntent)) {
+    return false;
+  }
+  if (
+    result.verifiedEvidenceIds !== undefined &&
+    !isVerifiedEvidenceIds(result.verifiedEvidenceIds)
+  ) {
     return false;
   }
   return hasValidReplayTraceInvariants(result.status, scenario, result.audit);
@@ -277,7 +292,12 @@ function sanitizeRun(
     status: result.status,
     scenario,
     audit,
-    ...(isActionableCandidate(result) ? { viewIntent: { ...result.candidateIntent, runId } } : {}),
+    ...(isActionableCandidate(result)
+      ? {
+          viewIntent: { ...result.candidateIntent, runId },
+          verifiedEvidenceIds: [...result.verifiedEvidenceIds],
+        }
+      : {}),
   };
 }
 

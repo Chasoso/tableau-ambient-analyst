@@ -243,6 +243,13 @@ function project(
     status,
     scenario: projectedScenario,
     audit,
+    ...(flow.verification?.completion === 'COMPLETE'
+      ? {
+          verifiedEvidenceIds: flow.evidence
+            .slice(0, 64)
+            .map((_, index) => `evidence-${index + 1}`),
+        }
+      : {}),
     ...(scenario.id === 'verified-intervention'
       ? {
           // The deterministic fixture emits a structured candidate at the analysis boundary.
