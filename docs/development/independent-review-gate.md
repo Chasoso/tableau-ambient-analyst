@@ -482,14 +482,13 @@ human/other-session review, and do not present the gate as passed.
 The following prompt can be given to a fresh reviewer together with the
 bounded input artifacts above:
 
-The existing executable handoffs are the binding point for this document:
-the reviewer handoff already instructs the fresh reviewer to follow this
-canonical gate, and the AUTO_FIX handoff already instructs its implementer to
-read relevant repository docs and directly related siblings. Those existing
-references consume the procedure below; this Issue does not duplicate or
-modify `src/review/runner.ts`, the accounting, or approval machinery. The
-procedure below therefore remains the single source of truth for the bounded
-coverage and invariant-batched correction requirements.
+The reviewer handoff already instructs the fresh reviewer to follow this
+canonical gate. The AUTO_FIX handoff remains unchanged: it enforces only its
+existing bounded changed-file JSON contract and does not claim to parser-enforce
+the transient invariant-batched procedure below. Implementers use this
+procedure as review/self-review guidance; no new executable enforcement is
+claimed. This Issue does not duplicate or modify `src/review/runner.ts`, the
+accounting, or approval machinery.
 
 ```text
 You are an independent reviewer, not the implementer. Do not assume the
