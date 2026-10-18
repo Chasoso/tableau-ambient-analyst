@@ -212,7 +212,7 @@ For a local Windows Desktop smoke test, inject that configuration explicitly at
 server startup with `AMBIENT_ANALYST_VIEW_ACTION_CONFIG_FILE`. The variable must
 point to an absolute path for a local, non-secret JSON file containing the exact
 approved dashboard scope, worksheet/field or parameter target, allowed values,
-and proposal. Copy the shape below into an ignored `.local/` file and replace
+and evidence-linked semantic mappings. Copy the shape below into an ignored `.local/` file and replace
 every placeholder only after a human has approved the exact test target:
 
 ```json
@@ -231,20 +231,21 @@ every placeholder only after a human has approved the exact test target:
     ],
     "parameterTargets": []
   },
-  "proposal": {
-    "id": "windows-local-filter-test",
-    "evidenceRef": "human-approved-windows-smoke",
-    "scope": { "dashboard": "REPLACE_WITH_APPROVED_DASHBOARD" },
-    "action": {
-      "type": "set-filter",
+  "mappings": [
+    {
+      "semanticKey": "REPLACE_WITH_INTENT_KEY",
+      "operation": "set-filter",
+      "valueType": "string",
       "target": {
         "kind": "worksheet-field",
         "worksheet": "REPLACE_WITH_APPROVED_WORKSHEET",
         "field": "REPLACE_WITH_APPROVED_FIELD"
       },
-      "values": ["REPLACE_WITH_APPROVED_VALUE"]
+      "values": [
+        { "from": "REPLACE_WITH_VERIFIED_INTENT_VALUE", "to": "REPLACE_WITH_APPROVED_VALUE" }
+      ]
     }
-  }
+  ]
 }
 ```
 

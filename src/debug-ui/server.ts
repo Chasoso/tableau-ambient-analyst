@@ -11,6 +11,7 @@ import {
   type AnalysisRunEnvelope,
 } from './model.js';
 import { ApplicationAnalysisClient } from './application.js';
+import type { CandidateViewIntent } from './model.js';
 
 const port = Number(process.env.PORT ?? 4173);
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../ui');
@@ -124,6 +125,64 @@ function boundedText(value: unknown, max: number, fallback: string): string {
   return typeof value === 'string' && value.length <= max ? value : fallback;
 }
 
+function isCandidateViewIntent(value: unknown): value is CandidateViewIntent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.id !== 'string' ||
+    candidate.id.length === 0 ||
+    candidate.id.length > 200 ||
+    typeof candidate.evidenceRef !== 'string' ||
+    candidate.evidenceRef.length === 0 ||
+    candidate.evidenceRef.length > 200 ||
+    typeof candidate.semanticKey !== 'string' ||
+    candidate.semanticKey.length === 0 ||
+    candidate.semanticKey.length > 200 ||
+    !['set-filter', 'set-parameter'].includes(candidate.operation as string) ||
+    !['string', 'number', 'boolean'].includes(candidate.valueType as string) ||
+    !Array.isArray(candidate.values) ||
+    candidate.values.length === 0 ||
+    candidate.values.length > 16 ||
+    (candidate.operation === 'set-parameter' && candidate.values.length !== 1)
+  )
+    return false;
+  const valueType = candidate.valueType;
+  return candidate.values.every(
+    (item) =>
+      (typeof item === 'string' ||
+        typeof item === 'boolean' ||
+        (typeof item === 'number' && Number.isFinite(item))) &&
+      typeof item === valueType,
+  );
+}
+
+function isActionableCandidate(
+  result: Awaited<ReturnType<AnalysisClient['replay']>>,
+): result is Awaited<ReturnType<AnalysisClient['replay']>> & {
+  candidateIntent: CandidateViewIntent;
+  verifiedEvidenceIds: readonly string[];
+} {
+  const candidate = result.candidateIntent;
+  return (
+    result.status === 'completed' &&
+    result.scenario.verifier.status === 'VERIFIED' &&
+    result.scenario.intervention?.decision === 'INTERVENE' &&
+    candidate !== undefined &&
+    Array.isArray(result.verifiedEvidenceIds) &&
+    result.verifiedEvidenceIds.includes(candidate.evidenceRef) &&
+    result.scenario.evidence.some(({ provenance }) => provenance === candidate.evidenceRef)
+  );
+}
+
+function isVerifiedEvidenceIds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 200)
+  );
+}
+
 function validClientResult(
   result: Awaited<ReturnType<AnalysisClient['replay']>>,
   requestedId: string,
@@ -162,6 +221,15 @@ function validClientResult(
     return false;
   if (result.status === 'failed' && !scenario.error) return false;
   if (scenario.error !== undefined && result.status !== 'failed') return false;
+  if (result.candidateIntent !== undefined && !isCandidateViewIntent(result.candidateIntent)) {
+    return false;
+  }
+  if (
+    result.verifiedEvidenceIds !== undefined &&
+    !isVerifiedEvidenceIds(result.verifiedEvidenceIds)
+  ) {
+    return false;
+  }
   return hasValidReplayTraceInvariants(result.status, scenario, result.audit);
 }
 
@@ -221,7 +289,18 @@ function sanitizeRun(
     ...(result.status === 'failed' ? { error: 'The application flow failed closed.' } : {}),
   };
   const audit = result.audit.slice(0, 64).map((item) => boundedText(item, 200, 'audit.event'));
-  return { runId, status: result.status, scenario, audit };
+  return {
+    runId,
+    status: result.status,
+    scenario,
+    audit,
+    ...(isActionableCandidate(result)
+      ? {
+          viewIntent: { ...result.candidateIntent, runId },
+          verifiedEvidenceIds: [...result.verifiedEvidenceIds],
+        }
+      : {}),
+  };
 }
 
 async function withTimeout<T>(promise: Promise<T>): Promise<T> {

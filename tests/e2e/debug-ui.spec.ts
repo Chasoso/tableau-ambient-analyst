@@ -52,6 +52,19 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.getByText('view-action.undone')).toBeVisible();
   });
 
+  test('displays a distinct resolver proposal for a second verified run', async ({ page }) => {
+    await page.goto('/');
+    const proposal = page.getByTestId('view-action-proposal');
+
+    await page.getByLabel('Scenario').selectOption('verified-intervention');
+    await page.getByRole('button', { name: 'Replay' }).click();
+    await expect(proposal).toHaveText('Proposed change: set Region to West');
+
+    await page.getByLabel('Scenario').selectOption('verified-intervention-parameter');
+    await page.getByRole('button', { name: 'Replay' }).click();
+    await expect(proposal).toHaveText('Proposed change: set fixture-threshold to 1');
+  });
+
   test('keeps the intervention badge absent for HOLD and ignored scenarios', async ({ page }) => {
     await page.goto('/');
     const badge = page.getByTestId('intervention-badge');

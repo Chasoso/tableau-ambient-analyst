@@ -1,3 +1,7 @@
+import type { ViewIntent } from './view-intents.js';
+
+export type CandidateViewIntent = Omit<ViewIntent, 'runId'>;
+
 export type DebugRunStatus =
   'idle' | 'running' | 'completed' | 'failed' | 'ignored' | 'insufficient-evidence';
 
@@ -24,16 +28,23 @@ export type DebugScenario = {
 };
 
 export type ReplayState = {
+  runId?: string;
   status: Exclude<DebugRunStatus, 'idle' | 'running'>;
   scenario: DebugScenario;
   audit: string[];
+  candidateIntent?: CandidateViewIntent;
+  verifiedEvidenceIds?: readonly string[];
+  viewIntent?: ViewIntent;
 };
 
 export interface AnalysisClient {
   replay(scenario: DebugScenario): Promise<ReplayState>;
 }
 
-export type AnalysisRunEnvelope = ReplayState & { runId: string };
+export type AnalysisRunEnvelope = Omit<ReplayState, 'candidateIntent' | 'viewIntent'> & {
+  runId: string;
+  viewIntent?: ViewIntent;
+};
 
 export const scenarios: readonly DebugScenario[] = [
   {
@@ -71,6 +82,41 @@ export const scenarios: readonly DebugScenario[] = [
     intervention: {
       decision: 'INTERVENE',
       reason: 'Verified evidence contradicts the assumption underlying the decision.',
+    },
+  },
+  {
+    id: 'verified-intervention-parameter',
+    name: 'Verified threshold → INTERVENE',
+    description: 'A second deterministic verified fixture with a distinct evidence-linked intent.',
+    utterances: [
+      { speaker: 'Aki', text: 'The threshold should be raised for this decision.' },
+      { speaker: 'Morgan', text: 'The verified evidence supports a threshold change.' },
+    ],
+    trigger: {
+      decision: 'ANALYZE',
+      reason: 'assumption-based-decision',
+      claim: 'The current threshold is too low.',
+    },
+    questions: ['Is the threshold change supported by the data?'],
+    stages: [
+      { name: 'Trigger', status: 'complete', detail: 'Decision-relevant assumption detected.' },
+      { name: 'Analysis Contract', status: 'complete', detail: '1 bounded question created.' },
+      { name: 'Analysis', status: 'complete', detail: 'Fixture analysis completed.' },
+      { name: 'Evidence', status: 'complete', detail: '1 provenance-linked observation.' },
+      { name: 'Verifier', status: 'complete', detail: 'Evidence supports the assumption.' },
+      { name: 'Intervention', status: 'complete', detail: 'Mock intervention is available.' },
+    ],
+    evidence: [
+      {
+        source: 'fixture:threshold',
+        detail: 'Verified threshold: 1',
+        provenance: 'fixture-threshold-row-1',
+      },
+    ],
+    verifier: { status: 'VERIFIED', detail: 'Required evidence is complete and supportive.' },
+    intervention: {
+      decision: 'INTERVENE',
+      reason: 'Verified evidence supports the proposed threshold change.',
     },
   },
   {
@@ -192,6 +238,39 @@ function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length <= max;
 }
 
+function isViewIntent(value: unknown): value is ViewIntent {
+  if (!isRecord(value)) return false;
+  if (
+    !isBoundedString(value.id, 200) ||
+    !isBoundedString(value.runId, 100) ||
+    !isBoundedString(value.evidenceRef, 200) ||
+    !isBoundedString(value.semanticKey, 200) ||
+    !['set-filter', 'set-parameter'].includes(value.operation as string) ||
+    !['string', 'number', 'boolean'].includes(value.valueType as string) ||
+    !Array.isArray(value.values) ||
+    value.values.length === 0 ||
+    value.values.length > 16 ||
+    (value.operation === 'set-parameter' && value.values.length !== 1)
+  )
+    return false;
+  return value.values.every(
+    (item) =>
+      (typeof item === 'string' ||
+        typeof item === 'boolean' ||
+        (typeof item === 'number' && Number.isFinite(item))) &&
+      typeof item === value.valueType,
+  );
+}
+
+function isVerifiedEvidenceIds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    value.every((item) => isBoundedString(item, 200) && item.length > 0)
+  );
+}
+
 export function hasValidReplayStateInvariants(
   status: ReplayState['status'],
   scenario: {
@@ -291,6 +370,13 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
     return false;
   if (!Array.isArray(value.audit) || value.audit.length > 64) return false;
   if (!value.audit.every((item) => isBoundedString(item, 200))) return false;
+  if (
+    value.verifiedEvidenceIds !== undefined &&
+    !isVerifiedEvidenceIds(value.verifiedEvidenceIds)
+  ) {
+    return false;
+  }
+  if (value.viewIntent !== undefined && !isViewIntent(value.viewIntent)) return false;
 
   const scenario = value.scenario;
   if (!isRecord(scenario)) return false;
@@ -363,6 +449,17 @@ function isAnalysisRunEnvelope(value: unknown): value is AnalysisRunEnvelope {
       return false;
   }
   if (scenario.error !== undefined && !isBoundedString(scenario.error, 200)) return false;
+  const viewIntent = value.viewIntent;
+  if (
+    viewIntent !== undefined &&
+    (viewIntent.runId !== value.runId ||
+      !value.verifiedEvidenceIds ||
+      !value.verifiedEvidenceIds.includes(viewIntent.evidenceRef) ||
+      !scenario.evidence.some(
+        (item) => isRecord(item) && item.provenance === viewIntent.evidenceRef,
+      ))
+  )
+    return false;
   return hasValidReplayTraceInvariants(
     value.status as ReplayState['status'],
     {

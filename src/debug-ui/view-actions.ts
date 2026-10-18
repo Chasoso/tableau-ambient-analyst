@@ -257,6 +257,9 @@ export class ViewActionController {
   private lastReceipt: ViewActionReceipt | undefined;
   private readonly appliedProposalIds = new Set<string>();
   private inFlight = false;
+  private inFlightEpoch: number | undefined;
+  private epoch = 0;
+  private resetPending = false;
 
   constructor(
     private readonly adapter: ViewActionAdapter,
@@ -264,10 +267,14 @@ export class ViewActionController {
   ) {}
 
   resetForRun(): void {
+    this.epoch += 1;
     this.lastReceipt = undefined;
     this.appliedProposalIds.clear();
-    this.inFlight = false;
-    this.adapter.reset?.();
+    if (this.inFlight) {
+      this.resetPending = true;
+    } else {
+      this.adapter.reset?.();
+    }
   }
 
   async apply(
@@ -282,9 +289,18 @@ export class ViewActionController {
     if (this.appliedProposalIds.has(proposal.id)) {
       return { ok: false, error: 'This proposal was already applied.', partial: false };
     }
+    const operationEpoch = this.epoch;
     this.inFlight = true;
+    this.inFlightEpoch = operationEpoch;
     try {
       const receipt = await this.adapter.apply(proposal);
+      if (operationEpoch !== this.epoch) {
+        return {
+          ok: false,
+          error: 'This view action was invalidated by a new run or host scope.',
+          partial: true,
+        };
+      }
       this.lastReceipt = receipt;
       this.appliedProposalIds.add(proposal.id);
       return { ok: true, receipt };
@@ -298,16 +314,37 @@ export class ViewActionController {
         partial: error instanceof ViewActionFailure ? error.partial : true,
       };
     } finally {
-      this.inFlight = false;
+      if (this.inFlightEpoch === operationEpoch) {
+        this.inFlight = false;
+        this.inFlightEpoch = undefined;
+        if (this.resetPending) {
+          this.resetPending = false;
+          this.adapter.reset?.();
+        }
+      }
     }
   }
 
   async undo(): Promise<ViewActionUndoResult> {
+    if (this.inFlight) {
+      return { ok: false, error: 'Another view action is still in progress.', partial: false };
+    }
     if (!this.lastReceipt) {
       return { ok: false, error: 'There is no view action to undo.', partial: false };
     }
+    const operationEpoch = this.epoch;
+    const receipt = this.lastReceipt;
+    this.inFlight = true;
+    this.inFlightEpoch = operationEpoch;
     try {
-      await this.adapter.undo(this.lastReceipt);
+      await this.adapter.undo(receipt);
+      if (operationEpoch !== this.epoch) {
+        return {
+          ok: false,
+          error: 'This view action undo was invalidated by a new run or host scope.',
+          partial: true,
+        };
+      }
       this.lastReceipt = undefined;
       return { ok: true, message: 'The previous view action was undone.' };
     } catch (error) {
@@ -319,6 +356,15 @@ export class ViewActionController {
             : 'The previous view action may be only partially undone; verify the dashboard state.',
         partial: error instanceof ViewActionFailure ? error.partial : true,
       };
+    } finally {
+      if (this.inFlightEpoch === operationEpoch) {
+        this.inFlight = false;
+        this.inFlightEpoch = undefined;
+        if (this.resetPending) {
+          this.resetPending = false;
+          this.adapter.reset?.();
+        }
+      }
     }
   }
 }
@@ -435,7 +481,8 @@ export type TableauViewActionApi = {
 
 export type ApprovedViewActionConfiguration = {
   policy: ViewActionPolicy;
-  proposal: ViewActionProposal;
+  proposal?: ViewActionProposal;
+  mappings?: unknown;
 };
 
 export function approvedViewActionConfigurationFromGlobal():
@@ -591,10 +638,15 @@ function parseApprovedViewActionConfiguration(
   value: unknown,
 ): ApprovedViewActionConfiguration | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as { policy?: unknown; proposal?: unknown };
+  const candidate = value as { policy?: unknown; proposal?: unknown; mappings?: unknown };
   const policy = parsePolicy(candidate.policy);
   const proposal = parseProposal(candidate.proposal);
-  return policy && proposal ? { policy, proposal } : undefined;
+  if (!policy) return undefined;
+  return {
+    policy,
+    ...(proposal ? { proposal } : {}),
+    ...(candidate.mappings !== undefined ? { mappings: candidate.mappings } : {}),
+  };
 }
 
 export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefined {
