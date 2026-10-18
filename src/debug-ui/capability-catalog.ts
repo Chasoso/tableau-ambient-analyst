@@ -45,6 +45,7 @@ export type ParameterDomain =
 
 export type FilterCapability = {
   kind: 'filter';
+  operation: 'set-filter';
   identity: string;
   worksheet: { name: string; identity: string; index: number; worksheetId?: string };
   field: string;
@@ -65,6 +66,7 @@ export type FilterCapability = {
 
 export type ParameterCapability = {
   kind: 'parameter';
+  operation: 'set-parameter';
   identity: string;
   index: number;
   name: string;
@@ -159,7 +161,8 @@ function state(
 }
 
 function errorReason(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.length <= 200 ? error.message : fallback;
+  void error;
+  return fallback;
 }
 
 function boundedValues(
@@ -347,6 +350,7 @@ function filterCapability(
   if (!worksheetName) {
     return {
       kind: 'filter',
+      operation: 'set-filter',
       identity,
       worksheet: {
         name: '',
@@ -362,6 +366,7 @@ function filterCapability(
   if (!field) {
     return {
       kind: 'filter',
+      operation: 'set-filter',
       identity,
       worksheet: {
         name: worksheetName,
@@ -382,6 +387,7 @@ function filterCapability(
   ) {
     return {
       kind: 'filter',
+      operation: 'set-filter',
       identity,
       worksheet: {
         name: worksheetName,
@@ -397,6 +403,7 @@ function filterCapability(
   }
   return {
     kind: 'filter',
+    operation: 'set-filter',
     identity,
     worksheet: {
       name: worksheetName,
@@ -547,6 +554,7 @@ function failedFilterCapability(
   const worksheetIdentity = `${dashboardName}::worksheet:invalid#${worksheetIndex + 1}`;
   return {
     kind: 'filter',
+    operation: 'set-filter',
     identity: `${worksheetIdentity}::filter:invalid#${filterIndex + 1}`,
     worksheet: { name: '', identity: worksheetIdentity, index: worksheetIndex },
     field: '',
@@ -669,6 +677,7 @@ async function discoverParameter(
   if (!isRecord(parameter)) {
     return {
       kind: 'parameter',
+      operation: 'set-parameter',
       identity: `${dashboardName}::parameter:invalid#${index + 1}`,
       index,
       name: '',
@@ -687,6 +696,7 @@ async function discoverParameter(
   if (!name) {
     return {
       kind: 'parameter',
+      operation: 'set-parameter',
       identity,
       index,
       name,
@@ -698,6 +708,7 @@ async function discoverParameter(
   if (currentValue === undefined) {
     return {
       kind: 'parameter',
+      operation: 'set-parameter',
       identity,
       index,
       name,
@@ -716,6 +727,7 @@ async function discoverParameter(
     if (domain.status !== 'available') {
       return {
         kind: 'parameter',
+        operation: 'set-parameter',
         identity,
         index,
         name,
@@ -730,6 +742,7 @@ async function discoverParameter(
     if (domain.valueType && domain.valueType !== currentType) {
       return {
         kind: 'parameter',
+        operation: 'set-parameter',
         identity,
         index,
         name,
@@ -742,6 +755,7 @@ async function discoverParameter(
     }
     return {
       kind: 'parameter',
+      operation: 'set-parameter',
       identity,
       index,
       name,
@@ -768,6 +782,7 @@ async function discoverParameter(
   } catch (error) {
     return {
       kind: 'parameter',
+      operation: 'set-parameter',
       identity,
       index,
       name,

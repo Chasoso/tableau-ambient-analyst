@@ -109,6 +109,7 @@ describe('Tableau capability catalog discovery', () => {
     const filters = catalog.worksheets[0]!.filters;
     expect(filters[0]).toMatchObject({
       identity: 'Sales::worksheet-id:orders-worksheet-id::filter:region-id',
+      operation: 'set-filter',
       currentValues: ['East'],
       candidateValues: ['East', 'West'],
       state: {
@@ -148,6 +149,7 @@ describe('Tableau capability catalog discovery', () => {
     });
     expect(catalog.parameters[0]).toMatchObject({
       identity: 'Sales::parameter:threshold-id',
+      operation: 'set-parameter',
       currentValue: 1,
       candidateValues: [0, 1, 2],
       state: {
@@ -167,14 +169,14 @@ describe('Tableau capability catalog discovery', () => {
     const catalog = await discoverCapabilityCatalog(catalogApi());
     expect(catalog.worksheets[1]).toMatchObject({
       read: 'failed',
-      reason: 'worksheet permission denied',
+      reason: 'FILTER_LIST_READ_FAILED',
       filters: [],
     });
     expect(catalog.issues).toEqual(
       expect.arrayContaining([
         {
           scope: 'Sales::worksheet-id:summary-worksheet-id',
-          reason: 'worksheet permission denied',
+          reason: 'FILTER_LIST_READ_FAILED',
         },
       ]),
     );
@@ -451,13 +453,13 @@ describe('Tableau capability catalog discovery', () => {
       state: {
         read: 'failed',
         candidate: 'unknown',
-        candidateReason: 'selection unavailable',
+        candidateReason: 'FILTER_READ_FAILED',
       },
     });
     expect(catalog.worksheets[0]!.filters[1]!.state).toMatchObject({
       read: 'failed',
       candidate: 'unknown',
-      candidateReason: 'malformed filter',
+      candidateReason: 'FILTER_READ_FAILED',
     });
   });
 
@@ -636,7 +638,7 @@ describe('Tableau capability catalog discovery', () => {
     } as TableauViewActionApi;
     await expect(new CapabilityCatalogController(() => malformed).refresh()).resolves.toEqual({
       status: 'unavailable',
-      reason: 'dashboard malformed',
+      reason: 'TABLEAU_DISCOVERY_FAILED',
     });
   });
 });
