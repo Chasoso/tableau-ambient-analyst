@@ -60,6 +60,7 @@ let activeViewIntentMappings: unknown = [];
 let hostMode: 'unknown' | 'standalone' | 'tableau' = 'unknown';
 let observedHostDashboard: string | undefined;
 let observedHostDashboardObject: object | undefined;
+let observedHostDashboardObjectId: string | undefined;
 let hostEpoch = 0;
 let activeRunId: string | undefined;
 let activeViewActionResolution: ViewIntentResolution = {
@@ -109,7 +110,19 @@ function observeHostScope(): string | undefined {
         : undefined;
   const identity = typeof dashboard === 'string' ? dashboard : undefined;
   const dashboardObject = hostApi?.dashboard as object | undefined;
-  if (identity !== observedHostDashboard || dashboardObject !== observedHostDashboardObject) {
+  const dashboardObjectId =
+    typeof hostApi?.dashboardObjectId === 'string' && hostApi.dashboardObjectId.length <= 200
+      ? hostApi.dashboardObjectId
+      : typeof hostApi?.dashboardObjectId === 'number' &&
+          Number.isSafeInteger(hostApi.dashboardObjectId) &&
+          hostApi.dashboardObjectId >= 0
+        ? String(hostApi.dashboardObjectId)
+        : undefined;
+  if (
+    identity !== observedHostDashboard ||
+    dashboardObject !== observedHostDashboardObject ||
+    dashboardObjectId !== observedHostDashboardObjectId
+  ) {
     hostEpoch += 1;
     viewActionController.resetForRun();
     canUndoViewAction = false;
@@ -119,6 +132,7 @@ function observeHostScope(): string | undefined {
     };
     observedHostDashboard = identity;
     observedHostDashboardObject = dashboardObject;
+    observedHostDashboardObjectId = dashboardObjectId;
     if (hostMode === 'tableau') {
       capabilityController?.invalidate();
       capabilityCatalog = undefined;

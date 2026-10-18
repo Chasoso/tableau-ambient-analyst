@@ -662,6 +662,8 @@ async function discoverParameter(
       ? await parameter.getAllowableValuesAsync()
       : parameter.allowableValues;
     const domain = parameterRestriction(restriction as ParameterRestriction | undefined);
+    const dateSemantic =
+      dataType?.toLowerCase().includes('date') || parameter.currentValue instanceof Date;
     if (domain.status !== 'available') {
       return {
         kind: 'parameter',
@@ -670,7 +672,7 @@ async function discoverParameter(
         name,
         ...(parameterId ? { parameterId } : {}),
         ...(dataType ? { dataType } : {}),
-        valueType: typeof currentValue as ViewActionValueType,
+        ...(dateSemantic ? {} : { valueType: typeof currentValue as ViewActionValueType }),
         currentValue,
         state: state(domain.status, 'ineligible', domain.reason),
       };
@@ -696,7 +698,7 @@ async function discoverParameter(
       name,
       ...(parameterId ? { parameterId } : {}),
       ...(dataType ? { dataType } : {}),
-      valueType: domain.valueType ?? currentType,
+      ...(dateSemantic ? {} : { valueType: domain.valueType ?? currentType }),
       currentValue,
       ...(domain.domain.kind === 'list' && domain.domain.values
         ? { candidateValues: domain.domain.values }
@@ -704,12 +706,14 @@ async function discoverParameter(
       domain: domain.domain,
       state: state(
         'available',
-        parameterId && domain.domain.kind === 'list' ? 'eligible' : 'ineligible',
-        parameterId
-          ? domain.domain.kind === 'list'
-            ? undefined
-            : 'RANGE_DOMAIN_NOT_ENUMERATED'
-          : 'PARAMETER_ID_UNAVAILABLE',
+        parameterId && domain.domain.kind === 'list' && !dateSemantic ? 'eligible' : 'ineligible',
+        dateSemantic && domain.domain.kind === 'list'
+          ? 'DATE_VALUE_TYPE_UNSUPPORTED'
+          : parameterId
+            ? domain.domain.kind === 'list'
+              ? undefined
+              : 'RANGE_DOMAIN_NOT_ENUMERATED'
+            : 'PARAMETER_ID_UNAVAILABLE',
       ),
     };
   } catch (error) {
@@ -823,6 +827,7 @@ export class CapabilityCatalogController {
     this.invalidated = false;
     const initialDashboard = api.dashboard.name;
     const initialDashboardObject = api.dashboard;
+    const initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
     if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
       return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
     }
@@ -833,7 +838,8 @@ export class CapabilityCatalogController {
     if (
       !currentApi ||
       currentApi.dashboard !== initialDashboardObject ||
-      currentApi.dashboard.name !== initialDashboard
+      currentApi.dashboard.name !== initialDashboard ||
+      hostScopeId(currentApi.dashboardObjectId) !== initialDashboardObjectId
     ) {
       this.invalidate();
       return { status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' };

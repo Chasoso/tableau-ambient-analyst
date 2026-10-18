@@ -262,7 +262,11 @@ describe('Tableau capability catalog discovery', () => {
       currentValue: '2026-02-03T00:00:00.000Z',
       candidateValues: ['2026-02-03T00:00:00.000Z'],
       dataType: 'date',
-      state: { read: 'available', candidate: 'eligible' },
+      state: {
+        read: 'available',
+        candidate: 'ineligible',
+        candidateReason: 'DATE_VALUE_TYPE_UNSUPPORTED',
+      },
     });
   });
 
@@ -550,6 +554,21 @@ describe('Tableau capability catalog discovery', () => {
     active = catalogApi();
     sameNameRelease?.();
     await expect(sameName).resolves.toEqual({ status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' });
+
+    const sameObject = catalogApi();
+    let sameObjectRelease: (() => void) | undefined;
+    sameObject.dashboard.worksheets[0]!.getFiltersAsync = () =>
+      new Promise((resolve) => {
+        sameObjectRelease = () => resolve([]);
+      });
+    const sameObjectController = new CapabilityCatalogController(() => sameObject);
+    const sameObjectRefresh = sameObjectController.refresh(() => 'scope-id');
+    sameObject.dashboardObjectId = 'replacement-dashboard-id';
+    sameObjectRelease?.();
+    await expect(sameObjectRefresh).resolves.toEqual({
+      status: 'stale',
+      reason: 'DASHBOARD_SCOPE_CHANGED',
+    });
   });
 
   it('reports an unavailable host without creating a synthetic catalog', async () => {
