@@ -617,6 +617,7 @@ describe('validated view action boundary', () => {
               worksheets: [],
               getParametersAsync: async () => [],
             },
+            workbook: { getParametersAsync: async () => [] },
           },
         },
       };

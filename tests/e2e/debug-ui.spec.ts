@@ -12,6 +12,9 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.getByRole('heading', { name: 'Trigger' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Analysis Contract' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Analysis progress' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Action Capability Catalog' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Refresh capabilities' })).toBeDisabled();
+    await expect(page.getByTestId('capability-status')).toHaveText('Waiting for the Tableau host.');
     await expect(page.getByRole('heading', { name: 'Evidence / provenance' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Verifier' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Intervention' })).toBeVisible();
@@ -125,5 +128,68 @@ test.describe('Ambient Analyst debug console', () => {
       'ignored',
     );
     await expect(page.getByTestId('intervention-badge')).toHaveCount(0);
+  });
+
+  test('displays bounded embedded discovery without authorizing an action', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (window.self === window.top) return;
+      const filter = {
+        fieldName: 'Region',
+        fieldId: 'region-id',
+        filterType: 'categorical',
+        isAllSelected: false,
+        getAppliedValues: async () => ['East'],
+        getDomainAsync: async () => ({ values: ['East', 'West'] }),
+      };
+      const worksheet = {
+        name: 'Orders',
+        id: 'orders-worksheet-id',
+        getFiltersAsync: async () => [filter],
+        applyFilterAsync: async () => undefined,
+      };
+      const dashboard = {
+        name: 'Discovery dashboard',
+        worksheets: [worksheet],
+        getParametersAsync: async () => [
+          {
+            name: 'Threshold',
+            id: 'threshold-id',
+            dataType: 'float',
+            currentValue: 1,
+            allowableValues: { type: 'list', allowableValues: [0, 1, 2] },
+            changeValueAsync: async () => undefined,
+          },
+        ],
+      };
+      (globalThis as typeof globalThis & { tableau?: unknown }).tableau = {
+        extensions: {
+          initializeAsync: async () => undefined,
+          dashboardObjectId: 101,
+          dashboardContent: { dashboard },
+        },
+        FilterUpdateType: { Replace: 'replace' },
+        FilterType: { Categorical: 'categorical' },
+      };
+    });
+    await page.goto('/');
+    await page.evaluate(() => {
+      const iframe = document.createElement('iframe');
+      iframe.src = window.location.href;
+      iframe.title = 'embedded debug console';
+      document.body.append(iframe);
+    });
+    await expect(page.locator('iframe[title="embedded debug console"]')).toHaveCount(1);
+    const frame = page.frameLocator('iframe[title="embedded debug console"]');
+    await expect(frame.getByRole('heading', { name: 'Action Capability Catalog' })).toBeVisible();
+    await expect(frame.getByTestId('capability-status')).toContainText('Discovery dashboard');
+    await expect(frame.getByText('Filter Region (categorical)', { exact: false })).toContainText(
+      'current: East',
+    );
+    const parameterRow = frame.getByRole('listitem').filter({ hasText: 'Parameter Threshold = 1' });
+    await expect(parameterRow).toBeVisible();
+    await expect(
+      parameterRow.getByText('available · candidate eligible', { exact: false }),
+    ).toBeVisible();
+    await expect(frame.getByRole('button', { name: '! INTERVENE' })).toHaveCount(0);
   });
 });

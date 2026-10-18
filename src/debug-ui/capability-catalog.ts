@@ -1,0 +1,1004 @@
+import type {
+  TableauFilter,
+  TableauParameter,
+  TableauViewActionApi,
+  TableauWorksheet,
+  ViewActionScalar,
+  ViewActionValueType,
+} from './view-actions.js';
+
+export const capabilityCatalogLimits = {
+  worksheets: 32,
+  filtersPerWorksheet: 32,
+  parameters: 32,
+  valuesPerCapability: 32,
+} as const;
+
+export type CapabilityReadStatus = 'available' | 'unavailable' | 'unsupported' | 'failed';
+export type CandidateStatus = 'eligible' | 'ineligible' | 'unknown';
+
+export type CapabilityState = {
+  read: CapabilityReadStatus;
+  candidate: CandidateStatus;
+  candidateReason?: string;
+  /** Discovery never changes these states or grants policy authorization. */
+  authorization: { approved: false; executable: false; reason: 'DISCOVERY_ONLY' };
+};
+
+export type CapabilityIssue = {
+  scope: string;
+  reason: string;
+};
+
+export type CapabilityValue = ViewActionScalar;
+
+export type ParameterDomain =
+  | { kind: 'list'; values?: readonly CapabilityValue[]; reason?: string }
+  | {
+      kind: 'range';
+      minValue?: CapabilityValue;
+      maxValue?: CapabilityValue;
+      stepSize?: number;
+      dateStepPeriod?: string;
+      reason?: string;
+    };
+
+export type FilterCapability = {
+  kind: 'filter';
+  operation: 'set-filter';
+  identity: string;
+  worksheet: { name: string; identity: string; index: number; worksheetId?: string };
+  field: string;
+  fieldId?: string;
+  filterType: string;
+  excludeMode?: boolean;
+  valueType?: ViewActionValueType;
+  currentValues?: readonly CapabilityValue[];
+  allSelected?: boolean;
+  candidateValues?: readonly CapabilityValue[];
+  range?: {
+    currentMin: CapabilityValue;
+    currentMax: CapabilityValue;
+    domainMin?: CapabilityValue;
+    domainMax?: CapabilityValue;
+  };
+  state: CapabilityState;
+};
+
+export type ParameterCapability = {
+  kind: 'parameter';
+  operation: 'set-parameter';
+  identity: string;
+  index: number;
+  name: string;
+  parameterId?: string;
+  dataType?: string;
+  valueType?: ViewActionValueType;
+  currentValue?: CapabilityValue;
+  candidateValues?: readonly CapabilityValue[];
+  domain?: ParameterDomain;
+  state: CapabilityState;
+};
+
+export type WorksheetCapability = {
+  name: string;
+  worksheetId?: string;
+  identity: string;
+  index: number;
+  read: CapabilityReadStatus;
+  reason?: string;
+  filters: readonly FilterCapability[];
+};
+
+export type CapabilityCatalog = {
+  version: 1;
+  dashboard: { name: string; identity: string; hostId?: string };
+  source: { scope: 'active-tableau-dashboard'; host: 'tableau-extensions-api' };
+  freshness: { status: 'fresh'; capturedAt: string; requestId: number };
+  worksheets: readonly WorksheetCapability[];
+  parameters: readonly ParameterCapability[];
+  issues: readonly CapabilityIssue[];
+};
+
+export type DiscoveryResult =
+  | { status: 'applied'; catalog: CapabilityCatalog }
+  | { status: 'unavailable'; reason: string }
+  | { status: 'stale'; reason: 'SUPERSEDED_REFRESH' | 'DASHBOARD_SCOPE_CHANGED' };
+
+const authorization = {
+  approved: false,
+  executable: false,
+  reason: 'DISCOVERY_ONLY' as const,
+} as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBoundedName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 200;
+}
+
+function hostScopeId(value: unknown): string | undefined {
+  if (isBoundedName(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function scalarFrom(value: unknown): CapabilityValue | undefined {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
+  if (
+    (typeof value === 'string' && value.length <= 200) ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  )
+    return value;
+  if (isRecord(value) && 'value' in value) return scalarFrom(value.value);
+  return undefined;
+}
+
+function typeOfValues(values: readonly CapabilityValue[]): ViewActionValueType | undefined {
+  if (values.length === 0) return undefined;
+  const type = typeof values[0] as ViewActionValueType;
+  return values.every((value) => typeof value === type) &&
+    ['string', 'number', 'boolean'].includes(type)
+    ? type
+    : undefined;
+}
+
+function orderedScalars(minValue: CapabilityValue, maxValue: CapabilityValue): boolean {
+  if (typeof minValue !== typeof maxValue) return false;
+  if (typeof minValue === 'number' && typeof maxValue === 'number') return minValue <= maxValue;
+  if (typeof minValue === 'string' && typeof maxValue === 'string') return minValue <= maxValue;
+  return false;
+}
+
+function state(
+  read: CapabilityReadStatus,
+  candidate: CandidateStatus,
+  candidateReason?: string,
+): CapabilityState {
+  return {
+    read,
+    candidate,
+    ...(candidateReason ? { candidateReason } : {}),
+    authorization,
+  };
+}
+
+function errorReason(error: unknown, fallback: string): string {
+  void error;
+  return fallback;
+}
+
+function boundedValues(
+  value: unknown,
+  allowEmpty = false,
+):
+  | { status: 'available'; values: CapabilityValue[]; valueType?: ViewActionValueType }
+  | { status: 'unavailable' | 'unsupported' | 'failed'; reason: string } {
+  if (!Array.isArray(value)) return { status: 'unavailable', reason: 'VALUES_UNAVAILABLE' };
+  if (value.length === 0 && !allowEmpty) {
+    return { status: 'unavailable', reason: 'EMPTY_DOMAIN_UNAVAILABLE' };
+  }
+  if (value.length > capabilityCatalogLimits.valuesPerCapability) {
+    return { status: 'unsupported', reason: 'VALUE_DOMAIN_TOO_LARGE' };
+  }
+  const values = value.map(scalarFrom);
+  if (values.some((entry) => entry === undefined)) {
+    return { status: 'failed', reason: 'MALFORMED_VALUE' };
+  }
+  const normalized = values as CapabilityValue[];
+  const valueType = typeOfValues(normalized);
+  if (normalized.length > 0 && !valueType) {
+    return { status: 'failed', reason: 'MIXED_VALUE_TYPES' };
+  }
+  return { status: 'available', values: normalized, ...(valueType ? { valueType } : {}) };
+}
+
+type ParameterRestriction = {
+  type?: unknown;
+  allowableValues?: unknown;
+  minValue?: unknown;
+  maxValue?: unknown;
+  stepSize?: unknown;
+  dateStepPeriod?: unknown;
+};
+
+function parameterRestriction(
+  restriction: ParameterRestriction | undefined,
+):
+  | { status: 'available'; domain: ParameterDomain; valueType?: ViewActionValueType }
+  | { status: 'unavailable' | 'unsupported' | 'failed'; reason: string } {
+  if (!restriction) return { status: 'unavailable', reason: 'PARAMETER_DOMAIN_UNAVAILABLE' };
+  const type = isBoundedName(restriction.type) ? restriction.type.toLowerCase() : undefined;
+  if (type !== 'list' && type !== 'range') {
+    return { status: 'unsupported', reason: 'PARAMETER_DOMAIN_TYPE_UNSUPPORTED' };
+  }
+  if (
+    type === 'range' ||
+    restriction.minValue !== undefined ||
+    restriction.maxValue !== undefined
+  ) {
+    const minValue = scalarFrom(restriction.minValue);
+    const maxValue = scalarFrom(restriction.maxValue);
+    if (minValue === undefined || maxValue === undefined) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_BOUNDS_MALFORMED' };
+    }
+    const valueType = typeOfValues([minValue, maxValue]);
+    if (!valueType) return { status: 'failed', reason: 'PARAMETER_RANGE_TYPE_MISMATCH' };
+    if (!orderedScalars(minValue, maxValue)) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_BOUNDS_INVALID' };
+    }
+    const stepSize = restriction.stepSize;
+    if (
+      stepSize !== undefined &&
+      (typeof stepSize !== 'number' || !Number.isFinite(stepSize) || stepSize <= 0)
+    ) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_STEP_MALFORMED' };
+    }
+    const dateStepPeriod = restriction.dateStepPeriod;
+    if (dateStepPeriod !== undefined && !isBoundedName(dateStepPeriod)) {
+      return { status: 'failed', reason: 'PARAMETER_DATE_STEP_MALFORMED' };
+    }
+    return {
+      status: 'available',
+      valueType,
+      domain: {
+        kind: 'range',
+        minValue,
+        maxValue,
+        ...(typeof stepSize === 'number' ? { stepSize } : {}),
+        ...(typeof dateStepPeriod === 'string' ? { dateStepPeriod } : {}),
+      },
+    };
+  }
+  const values = boundedValues(restriction.allowableValues);
+  if (values.status !== 'available') return values;
+  return {
+    status: 'available',
+    ...(values.valueType ? { valueType: values.valueType } : {}),
+    domain: { kind: 'list', values: values.values },
+  };
+}
+
+async function readFilterValues(filter: TableauFilter): Promise<{
+  current: ReturnType<typeof boundedValues>;
+  allSelected: boolean | undefined;
+}> {
+  const current = boundedValues(
+    filter.getAppliedValues ? await filter.getAppliedValues() : filter.appliedValues,
+    true,
+  );
+  return {
+    current,
+    allSelected: typeof filter.isAllSelected === 'boolean' ? filter.isAllSelected : undefined,
+  };
+}
+
+async function readFilterDomain(filter: TableauFilter): Promise<ReturnType<typeof boundedValues>> {
+  if (!filter.getDomainAsync) return { status: 'unavailable', reason: 'FILTER_DOMAIN_UNAVAILABLE' };
+  try {
+    return boundedValues((await filter.getDomainAsync()).values);
+  } catch (error) {
+    return { status: 'failed', reason: errorReason(error, 'FILTER_DOMAIN_READ_FAILED') };
+  }
+}
+
+async function discoverRangeFilter(
+  capability: FilterCapability,
+  filter: TableauFilter,
+): Promise<FilterCapability> {
+  const currentMin = scalarFrom(filter.minValue);
+  const currentMax = scalarFrom(filter.maxValue);
+  if (currentMin === undefined || currentMax === undefined) {
+    return {
+      ...capability,
+      state: state('unavailable', 'ineligible', 'RANGE_CURRENT_SELECTION_UNAVAILABLE'),
+    };
+  }
+  if (!orderedScalars(currentMin, currentMax)) {
+    return { ...capability, state: state('failed', 'ineligible', 'RANGE_CURRENT_BOUNDS_INVALID') };
+  }
+  let domainMin: CapabilityValue | undefined;
+  let domainMax: CapabilityValue | undefined;
+  try {
+    if (filter.getDomainAsync) {
+      const domain = (await filter.getDomainAsync()) as unknown as {
+        min?: unknown;
+        max?: unknown;
+        minValue?: unknown;
+        maxValue?: unknown;
+      };
+      domainMin = scalarFrom(domain.minValue ?? domain.min);
+      domainMax = scalarFrom(domain.maxValue ?? domain.max);
+    }
+  } catch {
+    return {
+      ...capability,
+      currentValues: [currentMin, currentMax],
+      range: { currentMin, currentMax },
+      state: state('available', 'ineligible', 'RANGE_DOMAIN_READ_FAILED'),
+    };
+  }
+  const valueType = typeOfValues([currentMin, currentMax]);
+  if (domainMin !== undefined && domainMax !== undefined) {
+    if (!orderedScalars(domainMin, domainMax)) {
+      return { ...capability, state: state('failed', 'ineligible', 'RANGE_DOMAIN_BOUNDS_INVALID') };
+    }
+    if (
+      typeof currentMin !== typeof domainMin ||
+      currentMin < domainMin ||
+      currentMax > domainMax
+    ) {
+      return {
+        ...capability,
+        state: state('failed', 'ineligible', 'RANGE_CURRENT_OUTSIDE_DOMAIN'),
+      };
+    }
+  }
+  return {
+    ...capability,
+    ...(valueType ? { valueType } : {}),
+    currentValues: [currentMin, currentMax],
+    range: {
+      currentMin,
+      currentMax,
+      ...(domainMin !== undefined ? { domainMin } : {}),
+      ...(domainMax !== undefined ? { domainMax } : {}),
+    },
+    state: state(
+      'available',
+      'ineligible',
+      capability.fieldId ? 'RANGE_VALUE_PROPOSALS_NOT_EXECUTABLE' : 'FILTER_FIELD_ID_UNAVAILABLE',
+    ),
+  };
+}
+
+function filterCapability(
+  dashboardName: string,
+  worksheet: TableauWorksheet,
+  worksheetIndex: number,
+  filter: TableauFilter,
+  filterIndex: number,
+  filterTypeCategorical: unknown,
+): FilterCapability {
+  const worksheetName = isBoundedName(worksheet.name) ? worksheet.name : '';
+  const worksheetId = isBoundedName(worksheet.id) ? worksheet.id : undefined;
+  const field = isBoundedName(filter.fieldName) ? filter.fieldName : '';
+  const fieldId = isBoundedName((filter as TableauFilter & { fieldId?: unknown }).fieldId)
+    ? (filter as TableauFilter & { fieldId: string }).fieldId
+    : undefined;
+  const worksheetIdentity = worksheetId
+    ? `${dashboardName}::worksheet-id:${worksheetId}`
+    : `${dashboardName}::worksheet:${worksheetName || 'invalid'}#${worksheetIndex + 1}`;
+  const identity = `${worksheetIdentity}::filter:${fieldId ?? `caption:${field || 'invalid'}#${filterIndex + 1}`}`;
+  const filterType = isBoundedName(filter.filterType) ? filter.filterType : 'unknown';
+  const excludeMode = typeof filter.isExcludeMode === 'boolean' ? filter.isExcludeMode : undefined;
+  if (!worksheetName) {
+    return {
+      kind: 'filter',
+      operation: 'set-filter',
+      identity,
+      worksheet: {
+        name: '',
+        identity: worksheetIdentity,
+        index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
+      },
+      field: '',
+      filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
+      state: state('failed', 'unknown', 'WORKSHEET_NAME_UNAVAILABLE'),
+    };
+  }
+  if (!field) {
+    return {
+      kind: 'filter',
+      operation: 'set-filter',
+      identity,
+      worksheet: {
+        name: worksheetName,
+        identity: worksheetIdentity,
+        index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
+      },
+      field: '',
+      filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
+      state: state('failed', 'unknown', 'FIELD_NAME_UNAVAILABLE'),
+    };
+  }
+  const filterTypeLower = filterType.toLowerCase();
+  if (
+    filter.filterType !== filterTypeCategorical &&
+    !filterTypeLower.includes('range') &&
+    !filterTypeLower.includes('hierarchical')
+  ) {
+    return {
+      kind: 'filter',
+      operation: 'set-filter',
+      identity,
+      worksheet: {
+        name: worksheetName,
+        identity: worksheetIdentity,
+        index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
+      },
+      field,
+      ...(fieldId ? { fieldId } : {}),
+      filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
+      state: state('available', 'ineligible', 'UNSUPPORTED_FILTER_TYPE'),
+    };
+  }
+  return {
+    kind: 'filter',
+    operation: 'set-filter',
+    identity,
+    worksheet: {
+      name: worksheetName,
+      identity: worksheetIdentity,
+      index: worksheetIndex,
+      ...(worksheetId ? { worksheetId } : {}),
+    },
+    field,
+    ...(fieldId ? { fieldId } : {}),
+    filterType,
+    ...(excludeMode !== undefined ? { excludeMode } : {}),
+    state: state(
+      'available',
+      excludeMode ? 'ineligible' : fieldId ? 'unknown' : 'ineligible',
+      excludeMode
+        ? 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
+        : fieldId
+          ? 'READING_FILTER_STATE'
+          : 'FILTER_FIELD_ID_UNAVAILABLE',
+    ),
+  };
+}
+
+async function discoverFilter(
+  dashboardName: string,
+  worksheet: TableauWorksheet,
+  worksheetIndex: number,
+  filter: TableauFilter,
+  filterIndex: number,
+  filterTypeCategorical: unknown,
+): Promise<FilterCapability> {
+  const capability = filterCapability(
+    dashboardName,
+    worksheet,
+    worksheetIndex,
+    filter,
+    filterIndex,
+    filterTypeCategorical,
+  );
+  if (capability.state.read !== 'available') return capability;
+  try {
+    const filterTypeLower = capability.filterType.toLowerCase();
+    const unsupportedReadAvailable =
+      filter.getAppliedValues !== undefined ||
+      filter.appliedValues !== undefined ||
+      filter.getDomainAsync !== undefined ||
+      filter.minValue !== undefined ||
+      filter.maxValue !== undefined;
+    if (
+      capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' &&
+      !unsupportedReadAvailable
+    ) {
+      return capability;
+    }
+    if (filterTypeLower.includes('range')) {
+      return discoverRangeFilter(capability, filter);
+    }
+    let current: Awaited<ReturnType<typeof readFilterValues>>;
+    try {
+      current = await readFilterValues(filter);
+    } catch (error) {
+      current = {
+        current: { status: 'failed', reason: errorReason(error, 'FILTER_READ_FAILED') },
+        allSelected: undefined,
+      };
+    }
+    const domain = await readFilterDomain(filter);
+    if (current.current.status !== 'available') {
+      if (domain.status !== 'available') {
+        return {
+          ...capability,
+          state: state(
+            current.current.status,
+            capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+              ? 'ineligible'
+              : 'unknown',
+            capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+              ? capability.state.candidateReason
+              : current.current.reason,
+          ),
+        };
+      }
+      return {
+        ...capability,
+        ...(domain.valueType ? { valueType: domain.valueType } : {}),
+        candidateValues: domain.values,
+        state: state(
+          current.current.status,
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ? 'ineligible' : 'unknown',
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+            ? capability.state.candidateReason
+            : current.current.reason,
+        ),
+      };
+    }
+    if (domain.status !== 'available') {
+      return {
+        ...capability,
+        ...(current.current.valueType ? { valueType: current.current.valueType } : {}),
+        currentValues: current.current.values,
+        ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
+        state: state(
+          domain.status,
+          'ineligible',
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+            ? capability.state.candidateReason
+            : domain.reason,
+        ),
+      };
+    }
+    if (
+      current.current.valueType &&
+      domain.valueType &&
+      current.current.valueType !== domain.valueType
+    ) {
+      return {
+        ...capability,
+        valueType: current.current.valueType,
+        currentValues: current.current.values,
+        ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
+        state: state('failed', 'ineligible', 'FILTER_VALUE_TYPE_MISMATCH'),
+      };
+    }
+    const valueType = domain.valueType ?? current.current.valueType;
+    return {
+      ...capability,
+      ...(valueType ? { valueType } : {}),
+      currentValues: current.current.values,
+      ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
+      candidateValues: domain.values,
+      state: state(
+        'available',
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ||
+          capability.state.candidateReason === 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
+          ? 'ineligible'
+          : capability.filterType.toLowerCase().includes('hierarchical')
+            ? 'ineligible'
+            : capability.fieldId && current.allSelected !== undefined
+              ? 'eligible'
+              : 'ineligible',
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ||
+          capability.state.candidateReason === 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
+          ? capability.state.candidateReason
+          : capability.filterType.toLowerCase().includes('hierarchical')
+            ? 'HIERARCHICAL_VALUE_PROPOSALS_NOT_EXECUTABLE'
+            : capability.fieldId
+              ? current.allSelected !== undefined
+                ? undefined
+                : 'FILTER_SELECTION_MODE_UNAVAILABLE'
+              : 'FILTER_FIELD_ID_UNAVAILABLE',
+      ),
+    };
+  } catch (error) {
+    return {
+      ...capability,
+      state: state('failed', 'unknown', errorReason(error, 'FILTER_READ_FAILED')),
+    };
+  }
+}
+
+function failedFilterCapability(
+  dashboardName: string,
+  worksheetIndex: number,
+  filterIndex: number,
+  reason: string,
+): FilterCapability {
+  const worksheetIdentity = `${dashboardName}::worksheet:invalid#${worksheetIndex + 1}`;
+  return {
+    kind: 'filter',
+    operation: 'set-filter',
+    identity: `${worksheetIdentity}::filter:invalid#${filterIndex + 1}`,
+    worksheet: { name: '', identity: worksheetIdentity, index: worksheetIndex },
+    field: '',
+    filterType: 'unknown',
+    state: state('failed', 'unknown', reason),
+  };
+}
+
+async function discoverWorksheet(
+  dashboardName: string,
+  worksheet: TableauWorksheet,
+  index: number,
+  filterTypeCategorical: unknown,
+): Promise<WorksheetCapability> {
+  const name = isBoundedName(worksheet.name) ? worksheet.name : '';
+  const worksheetId = isBoundedName(worksheet.id) ? worksheet.id : undefined;
+  const identity = worksheetId
+    ? `${dashboardName}::worksheet-id:${worksheetId}`
+    : `${dashboardName}::worksheet:${name || 'invalid'}#${index + 1}`;
+  if (!name) {
+    return {
+      name,
+      identity,
+      index,
+      read: 'failed',
+      reason: 'WORKSHEET_NAME_UNAVAILABLE',
+      filters: [],
+    };
+  }
+  try {
+    const filters = await worksheet.getFiltersAsync();
+    if (!Array.isArray(filters))
+      return {
+        name,
+        identity,
+        index,
+        read: 'failed',
+        reason: 'FILTER_LIST_MALFORMED',
+        filters: [],
+      };
+    if (filters.length > capabilityCatalogLimits.filtersPerWorksheet) {
+      return {
+        name,
+        identity,
+        index,
+        read: 'unsupported',
+        reason: 'FILTER_LIST_TOO_LARGE',
+        filters: [],
+      };
+    }
+    return {
+      name,
+      ...(isBoundedName(worksheet.id) ? { worksheetId: worksheet.id } : {}),
+      identity,
+      index,
+      read: 'available',
+      filters: await Promise.all(
+        filters.map((filter, filterIndex) => {
+          try {
+            if (!isRecord(filter))
+              return Promise.resolve(
+                failedFilterCapability(dashboardName, index, filterIndex, 'FILTER_ENTRY_MALFORMED'),
+              );
+            return discoverFilter(
+              dashboardName,
+              worksheet,
+              index,
+              filter as TableauFilter,
+              filterIndex,
+              filterTypeCategorical,
+            ).catch((error) =>
+              failedFilterCapability(
+                dashboardName,
+                index,
+                filterIndex,
+                errorReason(error, 'FILTER_READ_FAILED'),
+              ),
+            );
+          } catch (error) {
+            return Promise.resolve(
+              failedFilterCapability(
+                dashboardName,
+                index,
+                filterIndex,
+                errorReason(error, 'FILTER_READ_FAILED'),
+              ),
+            );
+          }
+        }),
+      ),
+    };
+  } catch (error) {
+    return {
+      name,
+      identity,
+      index,
+      read: 'failed',
+      reason: errorReason(error, 'FILTER_LIST_READ_FAILED'),
+      filters: [],
+    };
+  }
+}
+
+function malformedWorksheet(dashboardName: string, index: number): WorksheetCapability {
+  return {
+    name: '',
+    identity: `${dashboardName}::worksheet:invalid#${index + 1}`,
+    index,
+    read: 'failed',
+    reason: 'WORKSHEET_ENTRY_MALFORMED',
+    filters: [],
+  };
+}
+
+async function discoverParameter(
+  dashboardName: string,
+  parameter: TableauParameter,
+  index: number,
+): Promise<ParameterCapability> {
+  if (!isRecord(parameter)) {
+    return {
+      kind: 'parameter',
+      operation: 'set-parameter',
+      identity: `${dashboardName}::parameter:invalid#${index + 1}`,
+      index,
+      name: '',
+      state: state('failed', 'unknown', 'PARAMETER_ENTRY_MALFORMED'),
+    };
+  }
+  const name = isBoundedName(parameter.name) ? parameter.name : '';
+  const parameterId = isBoundedName((parameter as TableauParameter & { id?: unknown }).id)
+    ? (parameter as TableauParameter & { id: string }).id
+    : undefined;
+  const dataType = isBoundedName((parameter as TableauParameter & { dataType?: unknown }).dataType)
+    ? (parameter as TableauParameter & { dataType: string }).dataType
+    : undefined;
+  const identity = `${dashboardName}::parameter:${parameterId ?? `caption:${name || 'invalid'}#${index + 1}`}`;
+  const currentValue = scalarFrom(parameter.currentValue);
+  if (!name) {
+    return {
+      kind: 'parameter',
+      operation: 'set-parameter',
+      identity,
+      index,
+      name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
+      state: state('failed', 'unknown', 'PARAMETER_NAME_UNAVAILABLE'),
+    };
+  }
+  if (currentValue === undefined) {
+    return {
+      kind: 'parameter',
+      operation: 'set-parameter',
+      identity,
+      index,
+      name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
+      state: state('failed', 'unknown', 'PARAMETER_VALUE_UNAVAILABLE'),
+    };
+  }
+  try {
+    const restriction = parameter.getAllowableValuesAsync
+      ? await parameter.getAllowableValuesAsync()
+      : parameter.allowableValues;
+    const domain = parameterRestriction(restriction as ParameterRestriction | undefined);
+    const dateSemantic =
+      dataType?.toLowerCase().includes('date') || parameter.currentValue instanceof Date;
+    if (domain.status !== 'available') {
+      return {
+        kind: 'parameter',
+        operation: 'set-parameter',
+        identity,
+        index,
+        name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
+        ...(dateSemantic ? {} : { valueType: typeof currentValue as ViewActionValueType }),
+        currentValue,
+        state: state(domain.status, 'ineligible', domain.reason),
+      };
+    }
+    const currentType = typeof currentValue as ViewActionValueType;
+    if (domain.valueType && domain.valueType !== currentType) {
+      return {
+        kind: 'parameter',
+        operation: 'set-parameter',
+        identity,
+        index,
+        name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
+        valueType: currentType,
+        currentValue,
+        state: state('failed', 'ineligible', 'PARAMETER_VALUE_TYPE_MISMATCH'),
+      };
+    }
+    if (
+      domain.domain.kind === 'list' &&
+      domain.domain.values &&
+      !domain.domain.values.some((value) => Object.is(value, currentValue))
+    ) {
+      return {
+        kind: 'parameter',
+        operation: 'set-parameter',
+        identity,
+        index,
+        name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
+        currentValue,
+        state: state('failed', 'ineligible', 'PARAMETER_CURRENT_OUTSIDE_DOMAIN'),
+      };
+    }
+    return {
+      kind: 'parameter',
+      operation: 'set-parameter',
+      identity,
+      index,
+      name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
+      ...(dateSemantic ? {} : { valueType: domain.valueType ?? currentType }),
+      currentValue,
+      ...(domain.domain.kind === 'list' && domain.domain.values
+        ? { candidateValues: domain.domain.values }
+        : {}),
+      domain: domain.domain,
+      state: state(
+        'available',
+        parameterId && domain.domain.kind === 'list' && !dateSemantic ? 'eligible' : 'ineligible',
+        dateSemantic && domain.domain.kind === 'list'
+          ? 'DATE_VALUE_TYPE_UNSUPPORTED'
+          : parameterId
+            ? domain.domain.kind === 'list'
+              ? undefined
+              : 'RANGE_DOMAIN_NOT_ENUMERATED'
+            : 'PARAMETER_ID_UNAVAILABLE',
+      ),
+    };
+  } catch (error) {
+    return {
+      kind: 'parameter',
+      operation: 'set-parameter',
+      identity,
+      index,
+      name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
+      state: state('failed', 'unknown', errorReason(error, 'PARAMETER_READ_FAILED')),
+    };
+  }
+}
+
+export async function discoverCapabilityCatalog(
+  api: TableauViewActionApi,
+  requestId = 1,
+  now = () => new Date().toISOString(),
+): Promise<CapabilityCatalog> {
+  if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
+  const dashboardName = api.dashboard.name;
+  const dashboardHostId = hostScopeId(api.dashboardObjectId);
+  if (!dashboardHostId) throw new Error('DASHBOARD_SCOPE_IDENTITY_UNAVAILABLE');
+  const worksheetValue = (api.dashboard as unknown as { worksheets?: unknown }).worksheets;
+  const issues: CapabilityIssue[] = [];
+  const worksheets = Array.isArray(worksheetValue) ? worksheetValue : [];
+  if (!Array.isArray(worksheetValue)) {
+    issues.push({ scope: 'worksheets', reason: 'WORKSHEET_LIST_MALFORMED' });
+  }
+  const boundedWorksheets = worksheets.slice(0, capabilityCatalogLimits.worksheets);
+  if (worksheets.length > capabilityCatalogLimits.worksheets)
+    issues.push({ scope: 'dashboard', reason: 'WORKSHEET_LIST_TOO_LARGE' });
+  const worksheetCapabilities = await Promise.all(
+    boundedWorksheets.map((worksheet, index) =>
+      isRecord(worksheet)
+        ? discoverWorksheet(
+            dashboardName,
+            worksheet as TableauWorksheet,
+            index,
+            api.filterTypeCategorical,
+          )
+        : Promise.resolve(malformedWorksheet(dashboardName, index)),
+    ),
+  );
+  worksheetCapabilities.forEach((worksheet) => {
+    if (worksheet.read !== 'available')
+      issues.push({
+        scope: worksheet.identity,
+        reason: worksheet.reason ?? 'WORKSHEET_UNAVAILABLE',
+      });
+    worksheet.filters.forEach((filter) => {
+      if (filter.state.read !== 'available')
+        issues.push({
+          scope: filter.identity,
+          reason: filter.state.candidateReason ?? 'FILTER_UNAVAILABLE',
+        });
+    });
+  });
+  let parameters: readonly TableauParameter[] = [];
+  try {
+    parameters = await api.dashboard.getParametersAsync();
+    if (!Array.isArray(parameters)) throw new Error('PARAMETER_LIST_MALFORMED');
+  } catch (error) {
+    issues.push({ scope: 'parameters', reason: errorReason(error, 'PARAMETER_LIST_READ_FAILED') });
+  }
+  if (parameters.length > capabilityCatalogLimits.parameters) {
+    issues.push({ scope: 'parameters', reason: 'PARAMETER_LIST_TOO_LARGE' });
+  }
+  const parameterCapabilities = await Promise.all(
+    parameters
+      .slice(0, capabilityCatalogLimits.parameters)
+      .map((parameter, index) => discoverParameter(dashboardName, parameter, index)),
+  );
+  parameterCapabilities.forEach((parameter) => {
+    if (parameter.state.read !== 'available')
+      issues.push({
+        scope: parameter.identity,
+        reason: parameter.state.candidateReason ?? 'PARAMETER_UNAVAILABLE',
+      });
+  });
+  return {
+    version: 1,
+    dashboard: {
+      name: dashboardName,
+      identity: `tableau-dashboard:${dashboardHostId ?? dashboardName}`,
+      ...(dashboardHostId ? { hostId: dashboardHostId } : {}),
+    },
+    source: { scope: 'active-tableau-dashboard', host: 'tableau-extensions-api' },
+    freshness: { status: 'fresh', capturedAt: now(), requestId },
+    worksheets: worksheetCapabilities,
+    parameters: parameterCapabilities,
+    issues,
+  };
+}
+
+export class CapabilityCatalogController {
+  private generation = 0;
+  private invalidated = false;
+
+  constructor(private readonly getApi: () => TableauViewActionApi | undefined) {}
+
+  invalidate(): void {
+    this.generation += 1;
+    this.invalidated = true;
+  }
+
+  async refresh(now = () => new Date().toISOString()): Promise<DiscoveryResult> {
+    let api: TableauViewActionApi | undefined;
+    try {
+      api = this.getApi();
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_HOST_UNAVAILABLE') };
+    }
+    if (!api) return { status: 'unavailable', reason: 'TABLEAU_HOST_UNAVAILABLE' };
+    const requestId = ++this.generation;
+    this.invalidated = false;
+    let initialDashboard: unknown;
+    let initialDashboardObject: TableauViewActionApi['dashboard'];
+    let initialDashboardObjectId: string | undefined;
+    let catalog: CapabilityCatalog;
+    try {
+      initialDashboardObject = api.dashboard;
+      initialDashboard = initialDashboardObject.name;
+      initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
+      if (!initialDashboardObjectId) {
+        return { status: 'unavailable', reason: 'DASHBOARD_SCOPE_IDENTITY_UNAVAILABLE' };
+      }
+      if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
+        return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
+      }
+      catalog = await discoverCapabilityCatalog(api, requestId, now);
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_DISCOVERY_FAILED') };
+    }
+    let currentApi: TableauViewActionApi | undefined;
+    try {
+      currentApi = this.getApi();
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_HOST_UNAVAILABLE') };
+    }
+    if (this.invalidated || requestId !== this.generation)
+      return { status: 'stale', reason: 'SUPERSEDED_REFRESH' };
+    if (
+      !currentApi ||
+      currentApi.dashboard !== initialDashboardObject ||
+      currentApi.dashboard.name !== initialDashboard ||
+      hostScopeId(currentApi.dashboardObjectId) !== initialDashboardObjectId
+    ) {
+      this.invalidate();
+      return { status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' };
+    }
+    return { status: 'applied', catalog };
+  }
+}

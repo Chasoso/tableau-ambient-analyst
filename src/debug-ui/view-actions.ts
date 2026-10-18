@@ -440,15 +440,26 @@ export class MockViewActionAdapter implements ViewActionAdapter {
 }
 
 export type TableauFilter = {
+  fieldId?: unknown;
   fieldName?: unknown;
   filterType?: unknown;
+  isExcludeMode?: unknown;
+  minValue?: unknown;
+  maxValue?: unknown;
   isAllSelected?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
-  getDomainAsync?: () => Promise<{ values?: readonly unknown[] }>;
+  getDomainAsync?: () => Promise<{
+    values?: readonly unknown[];
+    min?: unknown;
+    max?: unknown;
+    minValue?: unknown;
+    maxValue?: unknown;
+  }>;
 };
 
 export type TableauWorksheet = {
+  id?: unknown;
   name?: unknown;
   getFiltersAsync: () => Promise<readonly TableauFilter[]>;
   applyFilterAsync: (
@@ -460,21 +471,39 @@ export type TableauWorksheet = {
 };
 
 export type TableauParameter = {
+  id?: unknown;
+  dataType?: unknown;
   name?: unknown;
   currentValue?: unknown;
-  allowableValues?: { allowableValues?: readonly unknown[] };
-  getAllowableValuesAsync?: () => Promise<{ allowableValues?: readonly unknown[] }>;
+  allowableValues?: {
+    type?: unknown;
+    allowableValues?: readonly unknown[];
+    minValue?: unknown;
+    maxValue?: unknown;
+    stepSize?: unknown;
+    dateStepPeriod?: unknown;
+  };
+  getAllowableValuesAsync?: () => Promise<{
+    type?: unknown;
+    allowableValues?: readonly unknown[];
+    minValue?: unknown;
+    maxValue?: unknown;
+    stepSize?: unknown;
+    dateStepPeriod?: unknown;
+  }>;
   changeValueAsync: (value: ViewActionScalar) => Promise<void>;
 };
 
 export type TableauDashboard = {
   name?: unknown;
+  activeDashboardObjectId?: unknown;
   worksheets: readonly TableauWorksheet[];
   getParametersAsync: () => Promise<readonly TableauParameter[]>;
 };
 
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
+  dashboardObjectId?: unknown;
   filterUpdateTypeReplace: unknown;
   filterTypeCategorical: unknown;
 };
@@ -653,13 +682,17 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   const tableau = (
     globalThis as unknown as {
       tableau?: {
-        extensions?: { dashboardContent?: { dashboard?: TableauDashboard } };
+        extensions?: {
+          dashboardContent?: { dashboard?: TableauDashboard };
+          dashboardObjectId?: unknown;
+        };
         FilterUpdateType?: { Replace?: unknown };
         FilterType?: { Categorical?: unknown };
       };
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
+  const dashboardObjectId = tableau?.extensions?.dashboardObjectId;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
   if (
@@ -672,7 +705,12 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   ) {
     return undefined;
   }
-  return { dashboard, filterUpdateTypeReplace, filterTypeCategorical };
+  return {
+    dashboard,
+    ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
+    filterUpdateTypeReplace,
+    filterTypeCategorical,
+  };
 }
 
 function scalarFrom(value: unknown): ViewActionScalar | undefined {
@@ -742,6 +780,10 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
     private readonly policy: ViewActionPolicy,
   ) {}
 
+  private getParameters(): Promise<readonly TableauParameter[]> {
+    return this.api.dashboard.getParametersAsync();
+  }
+
   async apply(proposal: ViewActionProposal): Promise<ViewActionReceipt> {
     const authorization = validateApprovedProposal(proposal, this.policy);
     if (!authorization.ok) {
@@ -783,7 +825,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         previous: { type: 'filter', target: action.target, ...previous },
       };
     }
-    const parameter = (await this.api.dashboard.getParametersAsync()).find(
+    const parameter = (await this.getParameters()).find(
       (candidate) => candidate.name === action.target.name,
     );
     const previous = parameter && scalarFrom(parameter.currentValue);
@@ -856,7 +898,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       }
       return;
     }
-    const parameter = (await this.api.dashboard.getParametersAsync()).find(
+    const parameter = (await this.getParameters()).find(
       (candidate) => candidate.name === previous.target.name,
     );
     if (!parameter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
