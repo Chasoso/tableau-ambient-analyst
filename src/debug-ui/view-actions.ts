@@ -495,18 +495,13 @@ export type TableauParameter = {
 
 export type TableauDashboard = {
   name?: unknown;
+  activeDashboardObjectId?: unknown;
   worksheets: readonly TableauWorksheet[];
-  getParametersAsync: () => Promise<readonly TableauParameter[]>;
-};
-
-export type TableauWorkbook = {
   getParametersAsync: () => Promise<readonly TableauParameter[]>;
 };
 
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
-  workbook?: TableauWorkbook;
-  dashboardObjectId?: unknown;
   filterUpdateTypeReplace: unknown;
   filterTypeCategorical: unknown;
 };
@@ -686,9 +681,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     globalThis as unknown as {
       tableau?: {
         extensions?: {
-          dashboardContent?: { dashboard?: TableauDashboard; workbook?: TableauWorkbook };
-          workbook?: TableauWorkbook;
-          dashboardObjectId?: unknown;
+          dashboardContent?: { dashboard?: TableauDashboard };
         };
         FilterUpdateType?: { Replace?: unknown };
         FilterType?: { Categorical?: unknown };
@@ -696,10 +689,8 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
-  const workbook = tableau?.extensions?.workbook ?? tableau?.extensions?.dashboardContent?.workbook;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
-  const dashboardObjectId = tableau?.extensions?.dashboardObjectId;
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
@@ -712,8 +703,6 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   }
   return {
     dashboard,
-    ...(workbook ? { workbook } : {}),
-    ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
     filterUpdateTypeReplace,
     filterTypeCategorical,
   };

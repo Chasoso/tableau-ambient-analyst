@@ -110,13 +110,14 @@ function observeHostScope(): string | undefined {
         : undefined;
   const identity = typeof dashboard === 'string' ? dashboard : undefined;
   const dashboardObject = hostApi?.dashboard as object | undefined;
+  const rawDashboardObjectId = hostApi?.dashboard.activeDashboardObjectId;
   const dashboardObjectId =
-    typeof hostApi?.dashboardObjectId === 'string' && hostApi.dashboardObjectId.length <= 200
-      ? hostApi.dashboardObjectId
-      : typeof hostApi?.dashboardObjectId === 'number' &&
-          Number.isSafeInteger(hostApi.dashboardObjectId) &&
-          hostApi.dashboardObjectId >= 0
-        ? String(hostApi.dashboardObjectId)
+    typeof rawDashboardObjectId === 'string' && rawDashboardObjectId.length <= 200
+      ? rawDashboardObjectId
+      : typeof rawDashboardObjectId === 'number' &&
+          Number.isSafeInteger(rawDashboardObjectId) &&
+          rawDashboardObjectId >= 0
+        ? String(rawDashboardObjectId)
         : undefined;
   if (
     identity !== observedHostDashboard ||

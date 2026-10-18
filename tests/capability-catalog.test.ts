@@ -13,9 +13,9 @@ function api(
   return {
     filterTypeCategorical,
     filterUpdateTypeReplace: 'replace',
-    dashboardObjectId: 'dashboard-object-id',
     dashboard: {
       name: 'Sales',
+      activeDashboardObjectId: 'dashboard-object-id',
       worksheets: [],
       getParametersAsync: async () => [],
       ...overrides,
@@ -634,7 +634,7 @@ describe('Tableau capability catalog discovery', () => {
       });
     const sameObjectController = new CapabilityCatalogController(() => sameObject);
     const sameObjectRefresh = sameObjectController.refresh(() => 'scope-id');
-    sameObject.dashboardObjectId = 'replacement-dashboard-id';
+    sameObject.dashboard.activeDashboardObjectId = 'replacement-dashboard-id';
     sameObjectRelease?.();
     await expect(sameObjectRefresh).resolves.toEqual({
       status: 'stale',

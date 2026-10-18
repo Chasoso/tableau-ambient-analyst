@@ -164,7 +164,6 @@ test.describe('Ambient Analyst debug console', () => {
       (globalThis as typeof globalThis & { tableau?: unknown }).tableau = {
         extensions: {
           initializeAsync: async () => undefined,
-          dashboardObjectId: 101,
           dashboardContent: { dashboard },
         },
         FilterUpdateType: { Replace: 'replace' },

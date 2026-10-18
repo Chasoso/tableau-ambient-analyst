@@ -441,6 +441,18 @@ async function discoverFilter(
   if (capability.state.read !== 'available') return capability;
   try {
     const filterTypeLower = capability.filterType.toLowerCase();
+    const unsupportedReadAvailable =
+      filter.getAppliedValues !== undefined ||
+      filter.appliedValues !== undefined ||
+      filter.getDomainAsync !== undefined ||
+      filter.minValue !== undefined ||
+      filter.maxValue !== undefined;
+    if (
+      capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' &&
+      !unsupportedReadAvailable
+    ) {
+      return capability;
+    }
     if (filterTypeLower.includes('range')) {
       return discoverRangeFilter(capability, filter);
     }
@@ -800,7 +812,7 @@ export async function discoverCapabilityCatalog(
 ): Promise<CapabilityCatalog> {
   if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
   const dashboardName = api.dashboard.name;
-  const dashboardHostId = hostScopeId(api.dashboardObjectId);
+  const dashboardHostId = hostScopeId(api.dashboard.activeDashboardObjectId);
   const worksheetValue = (api.dashboard as unknown as { worksheets?: unknown }).worksheets;
   const issues: CapabilityIssue[] = [];
   const worksheets = Array.isArray(worksheetValue) ? worksheetValue : [];
@@ -901,7 +913,7 @@ export class CapabilityCatalogController {
     try {
       initialDashboardObject = api.dashboard;
       initialDashboard = initialDashboardObject.name;
-      initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
+      initialDashboardObjectId = hostScopeId(api.dashboard.activeDashboardObjectId);
       if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
         return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
       }
@@ -921,7 +933,7 @@ export class CapabilityCatalogController {
       !currentApi ||
       currentApi.dashboard !== initialDashboardObject ||
       currentApi.dashboard.name !== initialDashboard ||
-      hostScopeId(currentApi.dashboardObjectId) !== initialDashboardObjectId
+      hostScopeId(currentApi.dashboard.activeDashboardObjectId) !== initialDashboardObjectId
     ) {
       this.invalidate();
       return { status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' };
