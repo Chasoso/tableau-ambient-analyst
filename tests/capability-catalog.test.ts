@@ -228,6 +228,27 @@ describe('Tableau capability catalog discovery', () => {
     });
   });
 
+  it('isolates malformed worksheet entries from valid siblings', async () => {
+    const sibling = catalogApi();
+    const malformed = api({
+      worksheets: [
+        null,
+        sibling.dashboard.worksheets[0]!,
+      ] as unknown as typeof sibling.dashboard.worksheets,
+      getParametersAsync: sibling.dashboard.getParametersAsync,
+    });
+    const catalog = await discoverCapabilityCatalog(malformed);
+    expect(catalog.worksheets[0]).toMatchObject({
+      read: 'failed',
+      reason: 'WORKSHEET_ENTRY_MALFORMED',
+    });
+    expect(catalog.worksheets[1]).toMatchObject({ name: 'Orders', read: 'available' });
+    expect(catalog.parameters[0]).toMatchObject({
+      name: 'Threshold',
+      state: { read: 'available' },
+    });
+  });
+
   it('discards superseded refreshes and dashboard scope changes', async () => {
     let current: TableauViewActionApi | undefined = catalogApi();
     let release: (() => void) | undefined;

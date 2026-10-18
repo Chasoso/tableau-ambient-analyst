@@ -397,6 +397,17 @@ async function discoverWorksheet(
   }
 }
 
+function malformedWorksheet(dashboardName: string, index: number): WorksheetCapability {
+  return {
+    name: '',
+    identity: `${dashboardName}::worksheet:invalid#${index + 1}`,
+    index,
+    read: 'failed',
+    reason: 'WORKSHEET_ENTRY_MALFORMED',
+    filters: [],
+  };
+}
+
 async function discoverParameter(
   dashboardName: string,
   parameter: TableauParameter,
@@ -488,14 +499,25 @@ export async function discoverCapabilityCatalog(
 ): Promise<CapabilityCatalog> {
   if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
   const dashboardName = api.dashboard.name;
-  const worksheets = api.dashboard.worksheets;
+  const worksheetValue = (api.dashboard as unknown as { worksheets?: unknown }).worksheets;
   const issues: CapabilityIssue[] = [];
+  const worksheets = Array.isArray(worksheetValue) ? worksheetValue : [];
+  if (!Array.isArray(worksheetValue)) {
+    issues.push({ scope: 'worksheets', reason: 'WORKSHEET_LIST_MALFORMED' });
+  }
   const boundedWorksheets = worksheets.slice(0, capabilityCatalogLimits.worksheets);
   if (worksheets.length > capabilityCatalogLimits.worksheets)
     issues.push({ scope: 'dashboard', reason: 'WORKSHEET_LIST_TOO_LARGE' });
   const worksheetCapabilities = await Promise.all(
     boundedWorksheets.map((worksheet, index) =>
-      discoverWorksheet(dashboardName, worksheet, index, api.filterTypeCategorical),
+      isRecord(worksheet)
+        ? discoverWorksheet(
+            dashboardName,
+            worksheet as TableauWorksheet,
+            index,
+            api.filterTypeCategorical,
+          )
+        : Promise.resolve(malformedWorksheet(dashboardName, index)),
     ),
   );
   worksheetCapabilities.forEach((worksheet) => {
