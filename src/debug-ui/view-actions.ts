@@ -501,6 +501,7 @@ export type TableauDashboard = {
 
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
+  dashboardObjectId?: unknown;
   filterUpdateTypeReplace: unknown;
   filterTypeCategorical: unknown;
 };
@@ -679,7 +680,10 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   const tableau = (
     globalThis as unknown as {
       tableau?: {
-        extensions?: { dashboardContent?: { dashboard?: TableauDashboard } };
+        extensions?: {
+          dashboardContent?: { dashboard?: TableauDashboard };
+          dashboardObjectId?: unknown;
+        };
         FilterUpdateType?: { Replace?: unknown };
         FilterType?: { Categorical?: unknown };
       };
@@ -688,6 +692,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
+  const dashboardObjectId = tableau?.extensions?.dashboardObjectId;
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
@@ -698,7 +703,12 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   ) {
     return undefined;
   }
-  return { dashboard, filterUpdateTypeReplace, filterTypeCategorical };
+  return {
+    dashboard,
+    ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
+    filterUpdateTypeReplace,
+    filterTypeCategorical,
+  };
 }
 
 function scalarFrom(value: unknown): ViewActionScalar | undefined {

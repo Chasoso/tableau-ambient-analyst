@@ -13,6 +13,7 @@ function api(
   return {
     filterTypeCategorical,
     filterUpdateTypeReplace: 'replace',
+    dashboardObjectId: 'dashboard-object-id',
     dashboard: {
       name: 'Sales',
       worksheets: [],
@@ -58,6 +59,8 @@ function catalogApi(): TableauViewActionApi {
             fieldName: 'Trend',
             fieldId: 'trend-id',
             filterType: 'trend',
+            appliedValues: ['East'],
+            getDomainAsync: async () => ({ values: ['East', 'West'] }),
           },
         ],
       },
@@ -130,7 +133,19 @@ describe('Tableau capability catalog discovery', () => {
       range: { currentMin: 1, currentMax: 10, domainMin: 0, domainMax: 20 },
       state: { read: 'available', candidate: 'ineligible' },
     });
-    expect(filters[3]!.state).toMatchObject({ read: 'unsupported', candidate: 'ineligible' });
+    expect(filters[3]).toMatchObject({
+      currentValues: ['East'],
+      candidateValues: ['East', 'West'],
+      state: {
+        read: 'available',
+        candidate: 'ineligible',
+        candidateReason: 'UNSUPPORTED_FILTER_TYPE',
+      },
+    });
+    expect(catalog.dashboard).toMatchObject({
+      identity: 'tableau-dashboard:dashboard-object-id',
+      hostId: 'dashboard-object-id',
+    });
     expect(catalog.parameters[0]).toMatchObject({
       identity: 'Sales::parameter:threshold-id',
       currentValue: 1,

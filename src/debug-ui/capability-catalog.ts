@@ -89,7 +89,7 @@ export type WorksheetCapability = {
 
 export type CapabilityCatalog = {
   version: 1;
-  dashboard: { name: string; identity: string };
+  dashboard: { name: string; identity: string; hostId?: string };
   source: { scope: 'active-tableau-dashboard'; host: 'tableau-extensions-api' };
   freshness: { status: 'fresh'; capturedAt: string; requestId: number };
   worksheets: readonly WorksheetCapability[];
@@ -114,6 +114,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isBoundedName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 200;
+}
+
+function hostScopeId(value: unknown): string | undefined {
+  if (isBoundedName(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  return undefined;
 }
 
 function scalarFrom(value: unknown): CapabilityValue | undefined {
@@ -384,7 +392,7 @@ function filterCapability(
       field,
       ...(fieldId ? { fieldId } : {}),
       filterType,
-      state: state('unsupported', 'ineligible', 'UNSUPPORTED_FILTER_TYPE'),
+      state: state('available', 'ineligible', 'UNSUPPORTED_FILTER_TYPE'),
     };
   }
   return {
@@ -434,7 +442,13 @@ async function discoverFilter(
       const readStatus = current.current.status;
       return {
         ...capability,
-        state: state(readStatus, 'unknown', current.current.reason),
+        state: state(
+          readStatus,
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ? 'ineligible' : 'unknown',
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+            ? capability.state.candidateReason
+            : current.current.reason,
+        ),
       };
     }
     const domain = await readFilterDomain(filter);
@@ -444,7 +458,13 @@ async function discoverFilter(
         ...(current.current.valueType ? { valueType: current.current.valueType } : {}),
         currentValues: current.current.values,
         ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
-        state: state(domain.status, 'ineligible', domain.reason),
+        state: state(
+          domain.status,
+          'ineligible',
+          capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+            ? capability.state.candidateReason
+            : domain.reason,
+        ),
       };
     }
     if (
@@ -469,18 +489,22 @@ async function discoverFilter(
       candidateValues: domain.values,
       state: state(
         'available',
-        capability.filterType.toLowerCase().includes('hierarchical')
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
           ? 'ineligible'
-          : capability.fieldId && current.allSelected !== undefined
-            ? 'eligible'
-            : 'ineligible',
-        capability.filterType.toLowerCase().includes('hierarchical')
-          ? 'HIERARCHICAL_VALUE_PROPOSALS_NOT_EXECUTABLE'
-          : capability.fieldId
-            ? current.allSelected !== undefined
-              ? undefined
-              : 'FILTER_SELECTION_MODE_UNAVAILABLE'
-            : 'FILTER_FIELD_ID_UNAVAILABLE',
+          : capability.filterType.toLowerCase().includes('hierarchical')
+            ? 'ineligible'
+            : capability.fieldId && current.allSelected !== undefined
+              ? 'eligible'
+              : 'ineligible',
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+          ? 'UNSUPPORTED_FILTER_TYPE'
+          : capability.filterType.toLowerCase().includes('hierarchical')
+            ? 'HIERARCHICAL_VALUE_PROPOSALS_NOT_EXECUTABLE'
+            : capability.fieldId
+              ? current.allSelected !== undefined
+                ? undefined
+                : 'FILTER_SELECTION_MODE_UNAVAILABLE'
+              : 'FILTER_FIELD_ID_UNAVAILABLE',
       ),
     };
   } catch (error) {
@@ -708,6 +732,7 @@ export async function discoverCapabilityCatalog(
 ): Promise<CapabilityCatalog> {
   if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
   const dashboardName = api.dashboard.name;
+  const dashboardHostId = hostScopeId(api.dashboardObjectId);
   const worksheetValue = (api.dashboard as unknown as { worksheets?: unknown }).worksheets;
   const issues: CapabilityIssue[] = [];
   const worksheets = Array.isArray(worksheetValue) ? worksheetValue : [];
@@ -767,7 +792,11 @@ export async function discoverCapabilityCatalog(
   });
   return {
     version: 1,
-    dashboard: { name: dashboardName, identity: `tableau-dashboard:${dashboardName}` },
+    dashboard: {
+      name: dashboardName,
+      identity: `tableau-dashboard:${dashboardHostId ?? dashboardName}`,
+      ...(dashboardHostId ? { hostId: dashboardHostId } : {}),
+    },
     source: { scope: 'active-tableau-dashboard', host: 'tableau-extensions-api' },
     freshness: { status: 'fresh', capturedAt: now(), requestId },
     worksheets: worksheetCapabilities,
