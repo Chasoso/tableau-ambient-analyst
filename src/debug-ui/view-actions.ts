@@ -496,7 +496,7 @@ export type TableauParameter = {
 export type TableauDashboard = {
   name?: unknown;
   worksheets: readonly TableauWorksheet[];
-  getParametersAsync?: () => Promise<readonly TableauParameter[]>;
+  getParametersAsync: () => Promise<readonly TableauParameter[]>;
 };
 
 export type TableauWorkbook = {
@@ -703,8 +703,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
-    !workbook ||
-    typeof workbook.getParametersAsync !== 'function' ||
+    typeof dashboard.getParametersAsync !== 'function' ||
     filterUpdateTypeReplace === undefined ||
     filterTypeCategorical === undefined ||
     !isBoundedName(dashboard.name)
@@ -713,7 +712,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   }
   return {
     dashboard,
-    workbook,
+    ...(workbook ? { workbook } : {}),
     ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
     filterUpdateTypeReplace,
     filterTypeCategorical,
@@ -787,10 +786,8 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
     private readonly policy: ViewActionPolicy,
   ) {}
 
-  private async getParameters(): Promise<readonly TableauParameter[]> {
-    if (this.api.workbook) return this.api.workbook.getParametersAsync();
-    if (this.api.dashboard.getParametersAsync) return this.api.dashboard.getParametersAsync();
-    throw new ViewActionFailure('PARAMETER_API_UNAVAILABLE', false);
+  private getParameters(): Promise<readonly TableauParameter[]> {
+    return this.api.dashboard.getParametersAsync();
   }
 
   async apply(proposal: ViewActionProposal): Promise<ViewActionReceipt> {

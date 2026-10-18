@@ -838,13 +838,7 @@ export async function discoverCapabilityCatalog(
   });
   let parameters: readonly TableauParameter[] = [];
   try {
-    parameters = api.workbook
-      ? await api.workbook.getParametersAsync()
-      : api.dashboard.getParametersAsync
-        ? await api.dashboard.getParametersAsync()
-        : (() => {
-            throw new Error('PARAMETER_API_UNAVAILABLE');
-          })();
+    parameters = await api.dashboard.getParametersAsync();
     if (!Array.isArray(parameters)) throw new Error('PARAMETER_LIST_MALFORMED');
   } catch (error) {
     issues.push({ scope: 'parameters', reason: errorReason(error, 'PARAMETER_LIST_READ_FAILED') });
