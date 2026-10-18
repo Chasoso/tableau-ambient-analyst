@@ -10,15 +10,16 @@ function api(
   overrides: Partial<NonNullable<TableauViewActionApi['dashboard']>> = {},
 ): TableauViewActionApi {
   const filterTypeCategorical = 'categorical';
+  const { getParametersAsync, ...dashboardOverrides } = overrides;
   return {
     filterTypeCategorical,
     filterUpdateTypeReplace: 'replace',
     dashboardObjectId: 'dashboard-object-id',
+    workbook: { getParametersAsync: getParametersAsync ?? (async () => []) },
     dashboard: {
       name: 'Sales',
       worksheets: [],
-      getParametersAsync: async () => [],
-      ...overrides,
+      ...dashboardOverrides,
     },
   };
 }
@@ -518,7 +519,7 @@ describe('Tableau capability catalog discovery', () => {
         null,
         sibling.dashboard.worksheets[0]!,
       ] as unknown as typeof sibling.dashboard.worksheets,
-      getParametersAsync: sibling.dashboard.getParametersAsync,
+      ...(sibling.workbook ? { getParametersAsync: sibling.workbook.getParametersAsync } : {}),
     });
     const catalog = await discoverCapabilityCatalog(malformed);
     expect(catalog.worksheets[0]).toMatchObject({
@@ -624,15 +625,12 @@ describe('Tableau capability catalog discovery', () => {
 
   it('reports malformed dashboard reads as unavailable', async () => {
     const malformed = {
-      dashboard: Object.defineProperty(
-        { worksheets: [], getParametersAsync: async () => [] },
-        'name',
-        {
-          get() {
-            throw new Error('dashboard malformed');
-          },
+      dashboard: Object.defineProperty({ worksheets: [] }, 'name', {
+        get() {
+          throw new Error('dashboard malformed');
         },
-      ),
+      }),
+      workbook: { getParametersAsync: async () => [] },
       filterUpdateTypeReplace: 'replace',
       filterTypeCategorical: 'categorical',
     } as TableauViewActionApi;

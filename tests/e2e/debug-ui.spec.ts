@@ -150,6 +150,8 @@ test.describe('Ambient Analyst debug console', () => {
       const dashboard = {
         name: 'Discovery dashboard',
         worksheets: [worksheet],
+      };
+      const workbook = {
         getParametersAsync: async () => [
           {
             name: 'Threshold',
@@ -165,7 +167,7 @@ test.describe('Ambient Analyst debug console', () => {
         extensions: {
           initializeAsync: async () => undefined,
           dashboardObjectId: 101,
-          dashboardContent: { dashboard },
+          dashboardContent: { dashboard, workbook },
         },
         FilterUpdateType: { Replace: 'replace' },
         FilterType: { Categorical: 'categorical' },

@@ -496,11 +496,16 @@ export type TableauParameter = {
 export type TableauDashboard = {
   name?: unknown;
   worksheets: readonly TableauWorksheet[];
+  getParametersAsync?: () => Promise<readonly TableauParameter[]>;
+};
+
+export type TableauWorkbook = {
   getParametersAsync: () => Promise<readonly TableauParameter[]>;
 };
 
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
+  workbook?: TableauWorkbook;
   dashboardObjectId?: unknown;
   filterUpdateTypeReplace: unknown;
   filterTypeCategorical: unknown;
@@ -681,7 +686,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     globalThis as unknown as {
       tableau?: {
         extensions?: {
-          dashboardContent?: { dashboard?: TableauDashboard };
+          dashboardContent?: { dashboard?: TableauDashboard; workbook?: TableauWorkbook };
           dashboardObjectId?: unknown;
         };
         FilterUpdateType?: { Replace?: unknown };
@@ -690,13 +695,15 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
+  const workbook = tableau?.extensions?.dashboardContent?.workbook;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
   const dashboardObjectId = tableau?.extensions?.dashboardObjectId;
   if (
     !dashboard ||
     !Array.isArray(dashboard.worksheets) ||
-    typeof dashboard.getParametersAsync !== 'function' ||
+    !workbook ||
+    typeof workbook.getParametersAsync !== 'function' ||
     filterUpdateTypeReplace === undefined ||
     filterTypeCategorical === undefined ||
     !isBoundedName(dashboard.name)
@@ -705,6 +712,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   }
   return {
     dashboard,
+    workbook,
     ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
     filterUpdateTypeReplace,
     filterTypeCategorical,
@@ -778,6 +786,12 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
     private readonly policy: ViewActionPolicy,
   ) {}
 
+  private async getParameters(): Promise<readonly TableauParameter[]> {
+    if (this.api.workbook) return this.api.workbook.getParametersAsync();
+    if (this.api.dashboard.getParametersAsync) return this.api.dashboard.getParametersAsync();
+    throw new ViewActionFailure('PARAMETER_API_UNAVAILABLE', false);
+  }
+
   async apply(proposal: ViewActionProposal): Promise<ViewActionReceipt> {
     const authorization = validateApprovedProposal(proposal, this.policy);
     if (!authorization.ok) {
@@ -819,7 +833,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
         previous: { type: 'filter', target: action.target, ...previous },
       };
     }
-    const parameter = (await this.api.dashboard.getParametersAsync()).find(
+    const parameter = (await this.getParameters()).find(
       (candidate) => candidate.name === action.target.name,
     );
     const previous = parameter && scalarFrom(parameter.currentValue);
@@ -892,7 +906,7 @@ export class TableauViewActionAdapter implements ViewActionAdapter {
       }
       return;
     }
-    const parameter = (await this.api.dashboard.getParametersAsync()).find(
+    const parameter = (await this.getParameters()).find(
       (candidate) => candidate.name === previous.target.name,
     );
     if (!parameter) throw new ViewActionFailure('UNDO_TARGET_NOT_FOUND', true);
