@@ -156,7 +156,7 @@ test.describe('Ambient Analyst debug console', () => {
             id: 'threshold-id',
             dataType: 'float',
             currentValue: 1,
-            allowableValues: { allowableValues: [0, 1, 2] },
+            allowableValues: { type: 'list', allowableValues: [0, 1, 2] },
             changeValueAsync: async () => undefined,
           },
         ],

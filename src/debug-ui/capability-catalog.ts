@@ -156,10 +156,14 @@ function errorReason(error: unknown, fallback: string): string {
 
 function boundedValues(
   value: unknown,
+  allowEmpty = false,
 ):
   | { status: 'available'; values: CapabilityValue[]; valueType?: ViewActionValueType }
   | { status: 'unavailable' | 'unsupported' | 'failed'; reason: string } {
   if (!Array.isArray(value)) return { status: 'unavailable', reason: 'VALUES_UNAVAILABLE' };
+  if (value.length === 0 && !allowEmpty) {
+    return { status: 'unavailable', reason: 'EMPTY_DOMAIN_UNAVAILABLE' };
+  }
   if (value.length > capabilityCatalogLimits.valuesPerCapability) {
     return { status: 'unsupported', reason: 'VALUE_DOMAIN_TOO_LARGE' };
   }
@@ -191,6 +195,9 @@ function parameterRestriction(
   | { status: 'unavailable' | 'unsupported' | 'failed'; reason: string } {
   if (!restriction) return { status: 'unavailable', reason: 'PARAMETER_DOMAIN_UNAVAILABLE' };
   const type = isBoundedName(restriction.type) ? restriction.type.toLowerCase() : undefined;
+  if (type !== 'list' && type !== 'range') {
+    return { status: 'unsupported', reason: 'PARAMETER_DOMAIN_TYPE_UNSUPPORTED' };
+  }
   if (
     type === 'range' ||
     restriction.minValue !== undefined ||
@@ -241,6 +248,7 @@ async function readFilterValues(filter: TableauFilter): Promise<{
 }> {
   const current = boundedValues(
     filter.getAppliedValues ? await filter.getAppliedValues() : filter.appliedValues,
+    true,
   );
   return {
     current,
@@ -461,12 +469,18 @@ async function discoverFilter(
       candidateValues: domain.values,
       state: state(
         'available',
-        capability.fieldId && current.allSelected !== undefined ? 'eligible' : 'ineligible',
-        capability.fieldId
-          ? current.allSelected !== undefined
-            ? undefined
-            : 'FILTER_SELECTION_MODE_UNAVAILABLE'
-          : 'FILTER_FIELD_ID_UNAVAILABLE',
+        capability.filterType.toLowerCase().includes('hierarchical')
+          ? 'ineligible'
+          : capability.fieldId && current.allSelected !== undefined
+            ? 'eligible'
+            : 'ineligible',
+        capability.filterType.toLowerCase().includes('hierarchical')
+          ? 'HIERARCHICAL_VALUE_PROPOSALS_NOT_EXECUTABLE'
+          : capability.fieldId
+            ? current.allSelected !== undefined
+              ? undefined
+              : 'FILTER_SELECTION_MODE_UNAVAILABLE'
+            : 'FILTER_FIELD_ID_UNAVAILABLE',
       ),
     };
   } catch (error) {

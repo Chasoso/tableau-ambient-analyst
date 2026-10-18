@@ -77,7 +77,7 @@ function catalogApi(): TableauViewActionApi {
         dataType: 'float',
         currentValue: { value: 1 },
         changeValueAsync: async () => undefined,
-        getAllowableValuesAsync: async () => ({ allowableValues: [0, 1, 2] }),
+        getAllowableValuesAsync: async () => ({ type: 'list', allowableValues: [0, 1, 2] }),
       },
       {
         name: 'Unbounded',
@@ -86,6 +86,7 @@ function catalogApi(): TableauViewActionApi {
         currentValue: 'x',
         changeValueAsync: async () => undefined,
         getAllowableValuesAsync: async () => ({
+          type: 'list',
           allowableValues: Array.from({ length: 33 }, (_, i) => i),
         }),
       },
@@ -176,7 +177,7 @@ describe('Tableau capability catalog discovery', () => {
           name: `Parameter-${index}`,
           currentValue: index,
           changeValueAsync: async () => undefined,
-          allowableValues: { allowableValues: [index] },
+          allowableValues: { type: 'list', allowableValues: [index] },
         })),
     });
     const catalog = await discoverCapabilityCatalog(huge);
@@ -250,6 +251,26 @@ describe('Tableau capability catalog discovery', () => {
     });
   });
 
+  it('does not treat an unknown parameter restriction as an allowlist', async () => {
+    const unknown = api({
+      getParametersAsync: async () => [
+        {
+          id: 'unknown-domain-id',
+          name: 'Unknown domain',
+          currentValue: 1,
+          changeValueAsync: async () => undefined,
+          allowableValues: { type: 'future-domain', allowableValues: [1, 2] },
+        },
+      ],
+    });
+    const catalog = await discoverCapabilityCatalog(unknown);
+    expect(catalog.parameters[0]!.state).toMatchObject({
+      read: 'unsupported',
+      candidate: 'ineligible',
+      candidateReason: 'PARAMETER_DOMAIN_TYPE_UNSUPPORTED',
+    });
+  });
+
   it('fails closed for malformed identities, current state, and values', async () => {
     const malformed = api({
       name: '',
@@ -270,7 +291,7 @@ describe('Tableau capability catalog discovery', () => {
           name: '',
           currentValue: 1,
           changeValueAsync: async () => undefined,
-          allowableValues: { allowableValues: [1] },
+          allowableValues: { type: 'list', allowableValues: [1] },
         },
       ],
     });
@@ -306,7 +327,7 @@ describe('Tableau capability catalog discovery', () => {
           name: '',
           currentValue: 1,
           changeValueAsync: async () => undefined,
-          allowableValues: { allowableValues: [1] },
+          allowableValues: { type: 'list', allowableValues: [1] },
         },
       ],
     });
@@ -346,6 +367,14 @@ describe('Tableau capability catalog discovery', () => {
               appliedValues: [{ value: 'Furniture' }],
               getDomainAsync: async () => ({ values: [{ value: 'Furniture' }] }),
             },
+            {
+              fieldName: 'Empty',
+              fieldId: 'empty-id',
+              filterType: 'categorical',
+              isAllSelected: false,
+              appliedValues: ['East'],
+              getDomainAsync: async () => ({ values: [] }),
+            },
           ],
         },
       ],
@@ -364,6 +393,59 @@ describe('Tableau capability catalog discovery', () => {
       currentValues: ['Furniture'],
       candidateValues: ['Furniture'],
       state: { read: 'available', candidate: 'ineligible' },
+    });
+    expect(catalog.worksheets[0]!.filters[2]!.state).toMatchObject({
+      read: 'unavailable',
+      candidate: 'ineligible',
+      candidateReason: 'EMPTY_DOMAIN_UNAVAILABLE',
+    });
+  });
+
+  it('never invokes Tableau mutation methods during discovery or refresh', async () => {
+    let applyCalls = 0;
+    let clearCalls = 0;
+    let changeCalls = 0;
+    const readOnlyApi = api({
+      worksheets: [
+        {
+          name: 'Orders',
+          id: 'orders-worksheet-id',
+          applyFilterAsync: async () => {
+            applyCalls += 1;
+          },
+          clearFilterAsync: async () => {
+            clearCalls += 1;
+          },
+          getFiltersAsync: async () => [
+            {
+              fieldName: 'Region',
+              fieldId: 'region-id',
+              filterType: 'categorical',
+              isAllSelected: false,
+              appliedValues: ['East'],
+              getDomainAsync: async () => ({ values: ['East', 'West'] }),
+            },
+          ],
+        },
+      ],
+      getParametersAsync: async () => [
+        {
+          id: 'threshold-id',
+          name: 'Threshold',
+          currentValue: 1,
+          changeValueAsync: async () => {
+            changeCalls += 1;
+          },
+          allowableValues: { type: 'list', allowableValues: [0, 1, 2] },
+        },
+      ],
+    });
+    await discoverCapabilityCatalog(readOnlyApi);
+    await new CapabilityCatalogController(() => readOnlyApi).refresh();
+    expect({ applyCalls, clearCalls, changeCalls }).toEqual({
+      applyCalls: 0,
+      clearCalls: 0,
+      changeCalls: 0,
     });
   });
 
