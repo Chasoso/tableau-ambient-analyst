@@ -129,4 +129,62 @@ test.describe('Ambient Analyst debug console', () => {
     );
     await expect(page.getByTestId('intervention-badge')).toHaveCount(0);
   });
+
+  test('displays bounded embedded discovery without authorizing an action', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (window.self === window.top) return;
+      const filter = {
+        fieldName: 'Region',
+        filterType: 'categorical',
+        isAllSelected: false,
+        getAppliedValues: async () => ['East'],
+        getDomainAsync: async () => ({ values: ['East', 'West'] }),
+      };
+      const worksheet = {
+        name: 'Orders',
+        getFiltersAsync: async () => [filter],
+        applyFilterAsync: async () => undefined,
+      };
+      const dashboard = {
+        name: 'Discovery dashboard',
+        worksheets: [worksheet],
+        getParametersAsync: async () => [
+          {
+            name: 'Threshold',
+            currentValue: 1,
+            allowableValues: { allowableValues: [0, 1, 2] },
+            changeValueAsync: async () => undefined,
+          },
+        ],
+      };
+      (globalThis as typeof globalThis & { tableau?: unknown }).tableau = {
+        extensions: {
+          initializeAsync: async () => undefined,
+          dashboardContent: { dashboard },
+        },
+        FilterUpdateType: { Replace: 'replace' },
+        FilterType: { Categorical: 'categorical' },
+      };
+    });
+    await page.goto('/');
+    await page.evaluate(() => {
+      const iframe = document.createElement('iframe');
+      iframe.src = window.location.href;
+      iframe.title = 'embedded debug console';
+      document.body.append(iframe);
+    });
+    await expect(page.locator('iframe[title="embedded debug console"]')).toHaveCount(1);
+    const frame = page.frameLocator('iframe[title="embedded debug console"]');
+    await expect(frame.getByRole('heading', { name: 'Action Capability Catalog' })).toBeVisible();
+    await expect(frame.getByTestId('capability-status')).toContainText('Discovery dashboard');
+    await expect(frame.getByText('Filter Region (categorical)', { exact: false })).toContainText(
+      'current: East',
+    );
+    const parameterRow = frame.getByRole('listitem').filter({ hasText: 'Parameter Threshold = 1' });
+    await expect(parameterRow).toBeVisible();
+    await expect(
+      parameterRow.getByText('available · candidate eligible', { exact: false }),
+    ).toBeVisible();
+    await expect(frame.getByRole('button', { name: '! INTERVENE' })).toHaveCount(0);
+  });
 });

@@ -90,6 +90,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isBoundedName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 200;
+}
+
 function scalarFrom(value: unknown): CapabilityValue | undefined {
   if (
     typeof value === 'string' ||
@@ -178,11 +182,24 @@ function filterCapability(
   filterIndex: number,
   filterTypeCategorical: unknown,
 ): FilterCapability {
-  const worksheetName =
-    typeof worksheet.name === 'string' ? worksheet.name : `worksheet-${worksheetIndex + 1}`;
-  const field = typeof filter.fieldName === 'string' ? filter.fieldName : '';
-  const identity = `${dashboardName}::worksheet:${worksheetName}#${worksheetIndex + 1}::filter:${field || 'unknown'}#${filterIndex + 1}`;
-  const filterType = typeof filter.filterType === 'string' ? filter.filterType : 'unknown';
+  const worksheetName = isBoundedName(worksheet.name) ? worksheet.name : '';
+  const field = isBoundedName(filter.fieldName) ? filter.fieldName : '';
+  const identity = `${dashboardName}::worksheet:${worksheetName || 'invalid'}#${worksheetIndex + 1}::filter:${field || 'invalid'}#${filterIndex + 1}`;
+  const filterType = isBoundedName(filter.filterType) ? filter.filterType : 'unknown';
+  if (!worksheetName) {
+    return {
+      kind: 'filter',
+      identity,
+      worksheet: {
+        name: '',
+        identity: `${dashboardName}::worksheet:invalid#${worksheetIndex + 1}`,
+        index: worksheetIndex,
+      },
+      field: '',
+      filterType,
+      state: state('failed', 'unknown', 'WORKSHEET_NAME_UNAVAILABLE'),
+    };
+  }
   if (!field) {
     return {
       kind: 'filter',
@@ -192,7 +209,7 @@ function filterCapability(
         identity: `${dashboardName}::worksheet:${worksheetName}#${worksheetIndex + 1}`,
         index: worksheetIndex,
       },
-      field: `unknown-${filterIndex + 1}`,
+      field: '',
       filterType,
       state: state('failed', 'unknown', 'FIELD_NAME_UNAVAILABLE'),
     };
@@ -304,8 +321,18 @@ async function discoverWorksheet(
   index: number,
   filterTypeCategorical: unknown,
 ): Promise<WorksheetCapability> {
-  const name = typeof worksheet.name === 'string' ? worksheet.name : `worksheet-${index + 1}`;
-  const identity = `${dashboardName}::worksheet:${name}#${index + 1}`;
+  const name = isBoundedName(worksheet.name) ? worksheet.name : '';
+  const identity = `${dashboardName}::worksheet:${name || 'invalid'}#${index + 1}`;
+  if (!name) {
+    return {
+      name,
+      identity,
+      index,
+      read: 'failed',
+      reason: 'WORKSHEET_NAME_UNAVAILABLE',
+      filters: [],
+    };
+  }
   try {
     const filters = await worksheet.getFiltersAsync();
     if (!Array.isArray(filters))
@@ -378,16 +405,25 @@ async function discoverParameter(
   if (!isRecord(parameter)) {
     return {
       kind: 'parameter',
-      identity: `${dashboardName}::parameter:unknown#${index + 1}`,
+      identity: `${dashboardName}::parameter:invalid#${index + 1}`,
       index,
-      name: `parameter-${index + 1}`,
+      name: '',
       state: state('failed', 'unknown', 'PARAMETER_ENTRY_MALFORMED'),
     };
   }
-  const name = typeof parameter.name === 'string' ? parameter.name : `parameter-${index + 1}`;
-  const identity = `${dashboardName}::parameter:${name}#${index + 1}`;
+  const name = isBoundedName(parameter.name) ? parameter.name : '';
+  const identity = `${dashboardName}::parameter:${name || 'invalid'}#${index + 1}`;
   const currentValue = scalarFrom(parameter.currentValue);
-  if (!name || currentValue === undefined) {
+  if (!name) {
+    return {
+      kind: 'parameter',
+      identity,
+      index,
+      name,
+      state: state('failed', 'unknown', 'PARAMETER_NAME_UNAVAILABLE'),
+    };
+  }
+  if (currentValue === undefined) {
     return {
       kind: 'parameter',
       identity,
@@ -450,8 +486,8 @@ export async function discoverCapabilityCatalog(
   requestId = 1,
   now = () => new Date().toISOString(),
 ): Promise<CapabilityCatalog> {
-  const dashboardName =
-    typeof api.dashboard.name === 'string' ? api.dashboard.name : 'unknown-dashboard';
+  if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
+  const dashboardName = api.dashboard.name;
   const worksheets = api.dashboard.worksheets;
   const issues: CapabilityIssue[] = [];
   const boundedWorksheets = worksheets.slice(0, capabilityCatalogLimits.worksheets);

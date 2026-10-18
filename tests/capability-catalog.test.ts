@@ -156,6 +156,78 @@ describe('Tableau capability catalog discovery', () => {
     );
   });
 
+  it('fails closed for malformed identities, current state, and values', async () => {
+    const malformed = api({
+      name: '',
+      worksheets: [
+        {
+          name: '',
+          applyFilterAsync: async () => undefined,
+          getFiltersAsync: async () => [],
+        },
+        {
+          name: '',
+          applyFilterAsync: async () => undefined,
+          getFiltersAsync: async () => [],
+        },
+      ],
+      getParametersAsync: async () => [
+        {
+          name: '',
+          currentValue: 1,
+          changeValueAsync: async () => undefined,
+          allowableValues: { allowableValues: [1] },
+        },
+      ],
+    });
+    await expect(discoverCapabilityCatalog(malformed)).rejects.toThrow(
+      'DASHBOARD_IDENTITY_UNAVAILABLE',
+    );
+
+    const valid = api({
+      worksheets: [
+        {
+          name: '',
+          applyFilterAsync: async () => undefined,
+          getFiltersAsync: async () => [],
+        },
+        {
+          name: 'Orders',
+          applyFilterAsync: async () => undefined,
+          getFiltersAsync: async () => [
+            {
+              fieldName: 'Region',
+              filterType: 'categorical',
+              isAllSelected: false,
+              appliedValues: [{ bad: true }],
+              getDomainAsync: async () => ({ values: ['East'] }),
+            },
+          ],
+        },
+      ],
+      getParametersAsync: async () => [
+        {
+          name: '',
+          currentValue: 1,
+          changeValueAsync: async () => undefined,
+          allowableValues: { allowableValues: [1] },
+        },
+      ],
+    });
+    const catalog = await discoverCapabilityCatalog(valid);
+    expect(catalog.worksheets[1]!.filters[0]!.state).toMatchObject({
+      read: 'failed',
+      candidate: 'unknown',
+      candidateReason: 'MALFORMED_VALUE',
+    });
+    expect(catalog.worksheets[0]!.read).toBe('failed');
+    expect(catalog.parameters[0]!.state).toMatchObject({
+      read: 'failed',
+      candidate: 'unknown',
+      candidateReason: 'PARAMETER_NAME_UNAVAILABLE',
+    });
+  });
+
   it('discards superseded refreshes and dashboard scope changes', async () => {
     let current: TableauViewActionApi | undefined = catalogApi();
     let release: (() => void) | undefined;
@@ -177,6 +249,38 @@ describe('Tableau capability catalog discovery', () => {
     expect((result as { catalog: CapabilityCatalog }).catalog.dashboard.name).toBe(
       original.dashboard.name,
     );
+  });
+
+  it('discards an older concurrent refresh and a result from a changed dashboard', async () => {
+    const firstRelease: { resolve?: () => void } = {};
+    const secondRelease: { resolve?: () => void } = {};
+    let calls = 0;
+    const current = catalogApi();
+    current.dashboard.worksheets[0]!.getFiltersAsync = () => {
+      calls += 1;
+      return new Promise((resolve) => {
+        (calls === 1 ? firstRelease : secondRelease).resolve = () => resolve([]);
+      });
+    };
+    const controller = new CapabilityCatalogController(() => current);
+    const first = controller.refresh(() => 'first');
+    const second = controller.refresh(() => 'second');
+    firstRelease.resolve?.();
+    await expect(first).resolves.toEqual({ status: 'stale', reason: 'SUPERSEDED_REFRESH' });
+    secondRelease.resolve?.();
+    await expect(second).resolves.toMatchObject({ status: 'applied' });
+
+    const changing = catalogApi();
+    let release: (() => void) | undefined;
+    changing.dashboard.worksheets[0]!.getFiltersAsync = () =>
+      new Promise((resolve) => {
+        release = () => resolve([]);
+      });
+    const scopeController = new CapabilityCatalogController(() => changing);
+    const scoped = scopeController.refresh(() => 'scope');
+    changing.dashboard.name = 'Other dashboard';
+    release?.();
+    await expect(scoped).resolves.toEqual({ status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' });
   });
 
   it('reports an unavailable host without creating a synthetic catalog', async () => {

@@ -193,7 +193,10 @@ function renderCapabilityCatalog(): HTMLElement {
       const values = filter.candidateValues
         ? ` · candidates: ${filter.candidateValues.join(', ') || 'none'}`
         : '';
-      filterRow.append(text(`Filter ${filter.field} (${filter.filterType})${values}`));
+      const current = filter.currentValues
+        ? ` · current: ${filter.currentValues.join(', ') || 'none'}${filter.allSelected ? ' (all selected)' : ''}`
+        : ` · current: unavailable (${filter.state.candidateReason ?? 'CURRENT_SELECTION_UNAVAILABLE'})`;
+      filterRow.append(text(`Filter ${filter.field} (${filter.filterType})${current}${values}`));
       filterRow.append(
         Object.assign(document.createElement('small'), {
           textContent: `${capabilityState(filter)}${filter.state.candidateReason ? ` · ${filter.state.candidateReason}` : ''}`,
