@@ -443,6 +443,7 @@ export type TableauFilter = {
   fieldId?: unknown;
   fieldName?: unknown;
   filterType?: unknown;
+  isExcludeMode?: unknown;
   minValue?: unknown;
   maxValue?: unknown;
   isAllSelected?: unknown;
@@ -502,6 +503,7 @@ export type TableauDashboard = {
 
 export type TableauViewActionApi = {
   dashboard: TableauDashboard;
+  dashboardObjectId?: unknown;
   filterUpdateTypeReplace: unknown;
   filterTypeCategorical: unknown;
 };
@@ -682,6 +684,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
       tableau?: {
         extensions?: {
           dashboardContent?: { dashboard?: TableauDashboard };
+          dashboardObjectId?: unknown;
         };
         FilterUpdateType?: { Replace?: unknown };
         FilterType?: { Categorical?: unknown };
@@ -689,6 +692,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
+  const dashboardObjectId = tableau?.extensions?.dashboardObjectId;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
   if (
@@ -703,6 +707,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
   }
   return {
     dashboard,
+    ...(dashboardObjectId !== undefined ? { dashboardObjectId } : {}),
     filterUpdateTypeReplace,
     filterTypeCategorical,
   };

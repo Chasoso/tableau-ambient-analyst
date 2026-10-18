@@ -51,6 +51,7 @@ export type FilterCapability = {
   field: string;
   fieldId?: string;
   filterType: string;
+  excludeMode?: boolean;
   valueType?: ViewActionValueType;
   currentValues?: readonly CapabilityValue[];
   allSelected?: boolean;
@@ -147,6 +148,13 @@ function typeOfValues(values: readonly CapabilityValue[]): ViewActionValueType |
     : undefined;
 }
 
+function orderedScalars(minValue: CapabilityValue, maxValue: CapabilityValue): boolean {
+  if (typeof minValue !== typeof maxValue) return false;
+  if (typeof minValue === 'number' && typeof maxValue === 'number') return minValue <= maxValue;
+  if (typeof minValue === 'string' && typeof maxValue === 'string') return minValue <= maxValue;
+  return false;
+}
+
 function state(
   read: CapabilityReadStatus,
   candidate: CandidateStatus,
@@ -221,6 +229,9 @@ function parameterRestriction(
     }
     const valueType = typeOfValues([minValue, maxValue]);
     if (!valueType) return { status: 'failed', reason: 'PARAMETER_RANGE_TYPE_MISMATCH' };
+    if (!orderedScalars(minValue, maxValue)) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_BOUNDS_INVALID' };
+    }
     const stepSize = restriction.stepSize;
     if (
       stepSize !== undefined &&
@@ -288,6 +299,9 @@ async function discoverRangeFilter(
       state: state('unavailable', 'ineligible', 'RANGE_CURRENT_SELECTION_UNAVAILABLE'),
     };
   }
+  if (!orderedScalars(currentMin, currentMax)) {
+    return { ...capability, state: state('failed', 'ineligible', 'RANGE_CURRENT_BOUNDS_INVALID') };
+  }
   let domainMin: CapabilityValue | undefined;
   let domainMax: CapabilityValue | undefined;
   try {
@@ -310,6 +324,21 @@ async function discoverRangeFilter(
     };
   }
   const valueType = typeOfValues([currentMin, currentMax]);
+  if (domainMin !== undefined && domainMax !== undefined) {
+    if (!orderedScalars(domainMin, domainMax)) {
+      return { ...capability, state: state('failed', 'ineligible', 'RANGE_DOMAIN_BOUNDS_INVALID') };
+    }
+    if (
+      typeof currentMin !== typeof domainMin ||
+      currentMin < domainMin ||
+      currentMax > domainMax
+    ) {
+      return {
+        ...capability,
+        state: state('failed', 'ineligible', 'RANGE_CURRENT_OUTSIDE_DOMAIN'),
+      };
+    }
+  }
   return {
     ...capability,
     ...(valueType ? { valueType } : {}),
@@ -347,6 +376,7 @@ function filterCapability(
     : `${dashboardName}::worksheet:${worksheetName || 'invalid'}#${worksheetIndex + 1}`;
   const identity = `${worksheetIdentity}::filter:${fieldId ?? `caption:${field || 'invalid'}#${filterIndex + 1}`}`;
   const filterType = isBoundedName(filter.filterType) ? filter.filterType : 'unknown';
+  const excludeMode = typeof filter.isExcludeMode === 'boolean' ? filter.isExcludeMode : undefined;
   if (!worksheetName) {
     return {
       kind: 'filter',
@@ -360,6 +390,7 @@ function filterCapability(
       },
       field: '',
       filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
       state: state('failed', 'unknown', 'WORKSHEET_NAME_UNAVAILABLE'),
     };
   }
@@ -376,6 +407,7 @@ function filterCapability(
       },
       field: '',
       filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
       state: state('failed', 'unknown', 'FIELD_NAME_UNAVAILABLE'),
     };
   }
@@ -398,6 +430,7 @@ function filterCapability(
       field,
       ...(fieldId ? { fieldId } : {}),
       filterType,
+      ...(excludeMode !== undefined ? { excludeMode } : {}),
       state: state('available', 'ineligible', 'UNSUPPORTED_FILTER_TYPE'),
     };
   }
@@ -414,10 +447,15 @@ function filterCapability(
     field,
     ...(fieldId ? { fieldId } : {}),
     filterType,
+    ...(excludeMode !== undefined ? { excludeMode } : {}),
     state: state(
       'available',
-      fieldId ? 'unknown' : 'ineligible',
-      fieldId ? 'READING_FILTER_STATE' : 'FILTER_FIELD_ID_UNAVAILABLE',
+      excludeMode ? 'ineligible' : fieldId ? 'unknown' : 'ineligible',
+      excludeMode
+        ? 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
+        : fieldId
+          ? 'READING_FILTER_STATE'
+          : 'FILTER_FIELD_ID_UNAVAILABLE',
     ),
   };
 }
@@ -531,15 +569,17 @@ async function discoverFilter(
       candidateValues: domain.values,
       state: state(
         'available',
-        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ||
+          capability.state.candidateReason === 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
           ? 'ineligible'
           : capability.filterType.toLowerCase().includes('hierarchical')
             ? 'ineligible'
             : capability.fieldId && current.allSelected !== undefined
               ? 'eligible'
               : 'ineligible',
-        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
-          ? 'UNSUPPORTED_FILTER_TYPE'
+        capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ||
+          capability.state.candidateReason === 'FILTER_EXCLUDE_MODE_UNSUPPORTED'
+          ? capability.state.candidateReason
           : capability.filterType.toLowerCase().includes('hierarchical')
             ? 'HIERARCHICAL_VALUE_PROPOSALS_NOT_EXECUTABLE'
             : capability.fieldId
@@ -765,6 +805,23 @@ async function discoverParameter(
         state: state('failed', 'ineligible', 'PARAMETER_VALUE_TYPE_MISMATCH'),
       };
     }
+    if (
+      domain.domain.kind === 'list' &&
+      domain.domain.values &&
+      !domain.domain.values.some((value) => Object.is(value, currentValue))
+    ) {
+      return {
+        kind: 'parameter',
+        operation: 'set-parameter',
+        identity,
+        index,
+        name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
+        currentValue,
+        state: state('failed', 'ineligible', 'PARAMETER_CURRENT_OUTSIDE_DOMAIN'),
+      };
+    }
     return {
       kind: 'parameter',
       operation: 'set-parameter',
@@ -812,7 +869,8 @@ export async function discoverCapabilityCatalog(
 ): Promise<CapabilityCatalog> {
   if (!isBoundedName(api.dashboard.name)) throw new Error('DASHBOARD_IDENTITY_UNAVAILABLE');
   const dashboardName = api.dashboard.name;
-  const dashboardHostId = hostScopeId(api.dashboard.activeDashboardObjectId);
+  const dashboardHostId = hostScopeId(api.dashboardObjectId);
+  if (!dashboardHostId) throw new Error('DASHBOARD_SCOPE_IDENTITY_UNAVAILABLE');
   const worksheetValue = (api.dashboard as unknown as { worksheets?: unknown }).worksheets;
   const issues: CapabilityIssue[] = [];
   const worksheets = Array.isArray(worksheetValue) ? worksheetValue : [];
@@ -913,7 +971,10 @@ export class CapabilityCatalogController {
     try {
       initialDashboardObject = api.dashboard;
       initialDashboard = initialDashboardObject.name;
-      initialDashboardObjectId = hostScopeId(api.dashboard.activeDashboardObjectId);
+      initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
+      if (!initialDashboardObjectId) {
+        return { status: 'unavailable', reason: 'DASHBOARD_SCOPE_IDENTITY_UNAVAILABLE' };
+      }
       if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
         return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
       }
@@ -933,7 +994,7 @@ export class CapabilityCatalogController {
       !currentApi ||
       currentApi.dashboard !== initialDashboardObject ||
       currentApi.dashboard.name !== initialDashboard ||
-      hostScopeId(currentApi.dashboard.activeDashboardObjectId) !== initialDashboardObjectId
+      hostScopeId(currentApi.dashboardObjectId) !== initialDashboardObjectId
     ) {
       this.invalidate();
       return { status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' };
