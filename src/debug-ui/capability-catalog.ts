@@ -111,6 +111,7 @@ function isBoundedName(value: unknown): value is string {
 }
 
 function scalarFrom(value: unknown): CapabilityValue | undefined {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
   if (
     typeof value === 'string' ||
     typeof value === 'boolean' ||
@@ -319,8 +320,9 @@ function filterCapability(
     identity,
     worksheet: {
       name: worksheetName,
-      identity: `${dashboardName}::worksheet:${worksheetName}#${worksheetIndex + 1}`,
+      identity: worksheetIdentity,
       index: worksheetIndex,
+      ...(worksheetId ? { worksheetId } : {}),
     },
     field,
     ...(fieldId ? { fieldId } : {}),
@@ -712,6 +714,7 @@ export class CapabilityCatalogController {
     const requestId = ++this.generation;
     this.invalidated = false;
     const initialDashboard = api.dashboard.name;
+    const initialDashboardObject = api.dashboard;
     if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
       return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
     }
@@ -719,7 +722,11 @@ export class CapabilityCatalogController {
     const currentApi = this.getApi();
     if (this.invalidated || requestId !== this.generation)
       return { status: 'stale', reason: 'SUPERSEDED_REFRESH' };
-    if (!currentApi || currentApi.dashboard.name !== initialDashboard) {
+    if (
+      !currentApi ||
+      currentApi.dashboard !== initialDashboardObject ||
+      currentApi.dashboard.name !== initialDashboard
+    ) {
       this.invalidate();
       return { status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' };
     }

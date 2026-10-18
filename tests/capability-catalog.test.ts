@@ -106,6 +106,7 @@ describe('Tableau capability catalog discovery', () => {
         authorization: { approved: false, executable: false },
       },
     });
+    expect(filters[0]!.worksheet.identity).toBe('Sales::worksheet-id:orders-worksheet-id');
     expect(filters[1]!.identity).toBe(
       'Sales::worksheet-id:orders-worksheet-id::filter:region-id-duplicate',
     );
@@ -213,6 +214,29 @@ describe('Tableau capability catalog discovery', () => {
       },
     });
     expect(catalog.parameters[0]!.candidateValues).toBeUndefined();
+  });
+
+  it('normalizes Tableau Date values without exposing Date objects', async () => {
+    const date = new Date('2026-02-03T00:00:00.000Z');
+    const dateApi = api({
+      getParametersAsync: async () => [
+        {
+          id: 'date-id',
+          name: 'As of',
+          dataType: 'date',
+          currentValue: date,
+          changeValueAsync: async () => undefined,
+          allowableValues: { type: 'list', allowableValues: [date] },
+        },
+      ],
+    });
+    const catalog = await discoverCapabilityCatalog(dateApi);
+    expect(catalog.parameters[0]).toMatchObject({
+      currentValue: '2026-02-03T00:00:00.000Z',
+      candidateValues: ['2026-02-03T00:00:00.000Z'],
+      dataType: 'date',
+      state: { read: 'available', candidate: 'eligible' },
+    });
   });
 
   it('fails closed for malformed identities, current state, and values', async () => {
@@ -363,6 +387,18 @@ describe('Tableau capability catalog discovery', () => {
     changing.dashboard.name = 'Other dashboard';
     release?.();
     await expect(scoped).resolves.toEqual({ status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' });
+
+    let active = catalogApi();
+    let sameNameRelease: (() => void) | undefined;
+    active.dashboard.worksheets[0]!.getFiltersAsync = () =>
+      new Promise((resolve) => {
+        sameNameRelease = () => resolve([]);
+      });
+    const sameNameController = new CapabilityCatalogController(() => active);
+    const sameName = sameNameController.refresh(() => 'same-name');
+    active = catalogApi();
+    sameNameRelease?.();
+    await expect(sameName).resolves.toEqual({ status: 'stale', reason: 'DASHBOARD_SCOPE_CHANGED' });
   });
 
   it('reports an unavailable host without creating a synthetic catalog', async () => {

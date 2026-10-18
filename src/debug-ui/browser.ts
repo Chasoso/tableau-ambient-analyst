@@ -59,6 +59,7 @@ let activeViewActionPolicy = unconfiguredViewActionPolicy;
 let activeViewIntentMappings: unknown = [];
 let hostMode: 'unknown' | 'standalone' | 'tableau' = 'unknown';
 let observedHostDashboard: string | undefined;
+let observedHostDashboardObject: object | undefined;
 let hostEpoch = 0;
 let activeRunId: string | undefined;
 let activeViewActionResolution: ViewIntentResolution = {
@@ -99,14 +100,16 @@ function resolveRunAction(state: ReplayState): ViewIntentResolution {
 }
 
 function observeHostScope(): string | undefined {
+  const hostApi = hostMode === 'tableau' ? tableauViewActionApiFromGlobal() : undefined;
   const dashboard =
     hostMode === 'standalone'
       ? activeViewActionPolicy.scope.dashboard
       : hostMode === 'tableau'
-        ? tableauViewActionApiFromGlobal()?.dashboard.name
+        ? hostApi?.dashboard.name
         : undefined;
   const identity = typeof dashboard === 'string' ? dashboard : undefined;
-  if (identity !== observedHostDashboard) {
+  const dashboardObject = hostApi?.dashboard as object | undefined;
+  if (identity !== observedHostDashboard || dashboardObject !== observedHostDashboardObject) {
     hostEpoch += 1;
     viewActionController.resetForRun();
     canUndoViewAction = false;
@@ -115,6 +118,7 @@ function observeHostScope(): string | undefined {
       reason: 'The host dashboard scope changed; the previous action was invalidated.',
     };
     observedHostDashboard = identity;
+    observedHostDashboardObject = dashboardObject;
     if (hostMode === 'tableau') {
       capabilityController?.invalidate();
       capabilityCatalog = undefined;
