@@ -200,7 +200,12 @@ function renderCapabilityCatalog(): HTMLElement {
       const current = filter.currentValues
         ? ` · current: ${filter.currentValues.join(', ') || 'none'}${filter.allSelected ? ' (all selected)' : ''}`
         : ` · current: unavailable (${filter.state.candidateReason ?? 'CURRENT_SELECTION_UNAVAILABLE'})`;
-      filterRow.append(text(`Filter ${filter.field} (${filter.filterType})${current}${values}`));
+      const range = filter.range
+        ? ` · domain: ${String(filter.range.domainMin ?? 'unavailable')}–${String(filter.range.domainMax ?? 'unavailable')}`
+        : '';
+      filterRow.append(
+        text(`Filter ${filter.field} (${filter.filterType})${current}${values}${range}`),
+      );
       filterRow.append(
         Object.assign(document.createElement('small'), {
           textContent: `${capabilityState(filter)}${filter.state.candidateReason ? ` · ${filter.state.candidateReason}` : ''}`,

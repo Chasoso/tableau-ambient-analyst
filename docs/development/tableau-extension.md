@@ -72,7 +72,9 @@ and array position as disambiguation metadata. When an older host omits an
 identifier, the fallback identity is refresh-local and is not treated as a
 stable target or made candidate-eligible. Read status, candidate-value
 eligibility, and authorization/execution state are displayed separately.
-Unsupported filter types, missing current state, malformed values, failed
+Range and hierarchical filters retain their readable current/domain metadata
+but remain ineligible for View Action execution in this Issue. Truly
+unsupported filter types, missing current state, malformed values, failed
 worksheet reads, and domains larger than the bounded catalog limit remain
 explicit and are not converted into candidate values. Parameter list domains
 are bounded as candidate values; supported range restrictions retain validated

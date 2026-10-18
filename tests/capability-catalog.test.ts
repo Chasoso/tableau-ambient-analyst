@@ -49,8 +49,15 @@ function catalogApi(): TableauViewActionApi {
           {
             fieldName: 'Date',
             fieldId: 'date-id',
-            filterType: 'range',
-            appliedValues: [],
+            filterType: 'RANGE',
+            minValue: 1,
+            maxValue: 10,
+            getDomainAsync: async () => ({ min: 0, max: 20 }),
+          },
+          {
+            fieldName: 'Trend',
+            fieldId: 'trend-id',
+            filterType: 'trend',
           },
         ],
       },
@@ -118,7 +125,11 @@ describe('Tableau capability catalog discovery', () => {
     expect(reorderedCatalog.worksheets[0]!.filters.map(({ identity }) => identity).sort()).toEqual(
       filters.map(({ identity }) => identity).sort(),
     );
-    expect(filters[2]!.state).toMatchObject({ read: 'unsupported', candidate: 'ineligible' });
+    expect(filters[2]).toMatchObject({
+      range: { currentMin: 1, currentMax: 10, domainMin: 0, domainMax: 20 },
+      state: { read: 'available', candidate: 'ineligible' },
+    });
+    expect(filters[3]!.state).toMatchObject({ read: 'unsupported', candidate: 'ineligible' });
     expect(catalog.parameters[0]).toMatchObject({
       identity: 'Sales::parameter:threshold-id',
       currentValue: 1,
@@ -310,6 +321,49 @@ describe('Tableau capability catalog discovery', () => {
       read: 'failed',
       candidate: 'unknown',
       candidateReason: 'PARAMETER_NAME_UNAVAILABLE',
+    });
+  });
+
+  it('preserves current values when selection mode is unknown', async () => {
+    const unknownSelection = api({
+      worksheets: [
+        {
+          name: 'Orders',
+          id: 'orders-worksheet-id',
+          applyFilterAsync: async () => undefined,
+          getFiltersAsync: async () => [
+            {
+              fieldName: 'Region',
+              fieldId: 'region-id',
+              filterType: 'categorical',
+              appliedValues: ['East'],
+              getDomainAsync: async () => ({ values: ['East', 'West'] }),
+            },
+            {
+              fieldName: 'Category',
+              fieldId: 'category-id',
+              filterType: 'hierarchical',
+              appliedValues: [{ value: 'Furniture' }],
+              getDomainAsync: async () => ({ values: [{ value: 'Furniture' }] }),
+            },
+          ],
+        },
+      ],
+      getParametersAsync: async () => [],
+    });
+    const catalog = await discoverCapabilityCatalog(unknownSelection);
+    expect(catalog.worksheets[0]!.filters[0]).toMatchObject({
+      currentValues: ['East'],
+      state: {
+        read: 'available',
+        candidate: 'ineligible',
+        candidateReason: 'FILTER_SELECTION_MODE_UNAVAILABLE',
+      },
+    });
+    expect(catalog.worksheets[0]!.filters[1]).toMatchObject({
+      currentValues: ['Furniture'],
+      candidateValues: ['Furniture'],
+      state: { read: 'available', candidate: 'ineligible' },
     });
   });
 

@@ -54,6 +54,12 @@ export type FilterCapability = {
   currentValues?: readonly CapabilityValue[];
   allSelected?: boolean;
   candidateValues?: readonly CapabilityValue[];
+  range?: {
+    currentMin: CapabilityValue;
+    currentMax: CapabilityValue;
+    domainMin?: CapabilityValue;
+    domainMax?: CapabilityValue;
+  };
   state: CapabilityState;
 };
 
@@ -251,6 +257,58 @@ async function readFilterDomain(filter: TableauFilter): Promise<ReturnType<typeo
   }
 }
 
+async function discoverRangeFilter(
+  capability: FilterCapability,
+  filter: TableauFilter,
+): Promise<FilterCapability> {
+  const currentMin = scalarFrom(filter.minValue);
+  const currentMax = scalarFrom(filter.maxValue);
+  if (currentMin === undefined || currentMax === undefined) {
+    return {
+      ...capability,
+      state: state('unavailable', 'ineligible', 'RANGE_CURRENT_SELECTION_UNAVAILABLE'),
+    };
+  }
+  let domainMin: CapabilityValue | undefined;
+  let domainMax: CapabilityValue | undefined;
+  try {
+    if (filter.getDomainAsync) {
+      const domain = (await filter.getDomainAsync()) as unknown as {
+        min?: unknown;
+        max?: unknown;
+        minValue?: unknown;
+        maxValue?: unknown;
+      };
+      domainMin = scalarFrom(domain.minValue ?? domain.min);
+      domainMax = scalarFrom(domain.maxValue ?? domain.max);
+    }
+  } catch {
+    return {
+      ...capability,
+      currentValues: [currentMin, currentMax],
+      range: { currentMin, currentMax },
+      state: state('available', 'ineligible', 'RANGE_DOMAIN_READ_FAILED'),
+    };
+  }
+  const valueType = typeOfValues([currentMin, currentMax]);
+  return {
+    ...capability,
+    ...(valueType ? { valueType } : {}),
+    currentValues: [currentMin, currentMax],
+    range: {
+      currentMin,
+      currentMax,
+      ...(domainMin !== undefined ? { domainMin } : {}),
+      ...(domainMax !== undefined ? { domainMax } : {}),
+    },
+    state: state(
+      'available',
+      'ineligible',
+      capability.fieldId ? 'RANGE_VALUE_PROPOSALS_NOT_EXECUTABLE' : 'FILTER_FIELD_ID_UNAVAILABLE',
+    ),
+  };
+}
+
 function filterCapability(
   dashboardName: string,
   worksheet: TableauWorksheet,
@@ -300,7 +358,12 @@ function filterCapability(
       state: state('failed', 'unknown', 'FIELD_NAME_UNAVAILABLE'),
     };
   }
-  if (filter.filterType !== filterTypeCategorical) {
+  const filterTypeLower = filterType.toLowerCase();
+  if (
+    filter.filterType !== filterTypeCategorical &&
+    !filterTypeLower.includes('range') &&
+    !filterTypeLower.includes('hierarchical')
+  ) {
     return {
       kind: 'filter',
       identity,
@@ -311,6 +374,7 @@ function filterCapability(
         ...(worksheetId ? { worksheetId } : {}),
       },
       field,
+      ...(fieldId ? { fieldId } : {}),
       filterType,
       state: state('unsupported', 'ineligible', 'UNSUPPORTED_FILTER_TYPE'),
     };
@@ -353,19 +417,16 @@ async function discoverFilter(
   );
   if (capability.state.read !== 'available') return capability;
   try {
+    const filterTypeLower = capability.filterType.toLowerCase();
+    if (filterTypeLower.includes('range')) {
+      return discoverRangeFilter(capability, filter);
+    }
     const current = await readFilterValues(filter);
-    if (current.current.status !== 'available' || current.allSelected === undefined) {
-      const readStatus =
-        current.current.status === 'available' ? 'unavailable' : current.current.status;
+    if (current.current.status !== 'available') {
+      const readStatus = current.current.status;
       return {
         ...capability,
-        state: state(
-          readStatus,
-          'unknown',
-          current.current.status === 'available'
-            ? 'FILTER_SELECTION_MODE_UNAVAILABLE'
-            : current.current.reason,
-        ),
+        state: state(readStatus, 'unknown', current.current.reason),
       };
     }
     const domain = await readFilterDomain(filter);
@@ -374,7 +435,7 @@ async function discoverFilter(
         ...capability,
         ...(current.current.valueType ? { valueType: current.current.valueType } : {}),
         currentValues: current.current.values,
-        allSelected: current.allSelected,
+        ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
         state: state(domain.status, 'ineligible', domain.reason),
       };
     }
@@ -387,7 +448,7 @@ async function discoverFilter(
         ...capability,
         valueType: current.current.valueType,
         currentValues: current.current.values,
-        allSelected: current.allSelected,
+        ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
         state: state('failed', 'ineligible', 'FILTER_VALUE_TYPE_MISMATCH'),
       };
     }
@@ -396,12 +457,16 @@ async function discoverFilter(
       ...capability,
       ...(valueType ? { valueType } : {}),
       currentValues: current.current.values,
-      allSelected: current.allSelected,
+      ...(current.allSelected !== undefined ? { allSelected: current.allSelected } : {}),
       candidateValues: domain.values,
       state: state(
         'available',
-        capability.fieldId ? 'eligible' : 'ineligible',
-        capability.fieldId ? undefined : 'FILTER_FIELD_ID_UNAVAILABLE',
+        capability.fieldId && current.allSelected !== undefined ? 'eligible' : 'ineligible',
+        capability.fieldId
+          ? current.allSelected !== undefined
+            ? undefined
+            : 'FILTER_SELECTION_MODE_UNAVAILABLE'
+          : 'FILTER_FIELD_ID_UNAVAILABLE',
       ),
     };
   } catch (error) {

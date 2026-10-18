@@ -443,10 +443,18 @@ export type TableauFilter = {
   fieldId?: unknown;
   fieldName?: unknown;
   filterType?: unknown;
+  minValue?: unknown;
+  maxValue?: unknown;
   isAllSelected?: unknown;
   appliedValues?: readonly unknown[];
   getAppliedValues?: () => Promise<readonly unknown[]>;
-  getDomainAsync?: () => Promise<{ values?: readonly unknown[] }>;
+  getDomainAsync?: () => Promise<{
+    values?: readonly unknown[];
+    min?: unknown;
+    max?: unknown;
+    minValue?: unknown;
+    maxValue?: unknown;
+  }>;
 };
 
 export type TableauWorksheet = {
