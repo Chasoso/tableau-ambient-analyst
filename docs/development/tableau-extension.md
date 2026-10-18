@@ -56,6 +56,33 @@ explicit approved configuration and the Tableau dashboard API is available. In
 the absence of either, a badge click is rejected safely. The synthetic fixture
 configuration is never treated as a live Tableau mapping.
 
+## Read-only Action Capability Catalog
+
+When the embedded host is initialized, the console can read the active
+dashboard's worksheet filters and parameters through the Tableau Extensions
+API. Use **Refresh capabilities** to request a new bounded catalog. The
+catalog is discovery data only: it does not create policy entries, approve
+targets, or apply/undo a view action. Existing approved JSON remains the only
+authorization mechanism, and the final adapter revalidates the live target
+before a click-only action.
+
+Each worksheet and target has a stable display identity that includes its
+worksheet index, so same-named fields on different worksheets (or repeated
+fields returned by the host) are not conflated. Read status, candidate-value
+eligibility, and authorization/execution state are displayed separately.
+Unsupported filter types, missing current state, malformed values, failed
+worksheet reads, and domains larger than the bounded catalog limit remain
+explicit and are not converted into candidate values.
+
+The refresh controller discards a superseded request and clears the catalog
+when the observable dashboard identity changes. The Extensions API does not
+provide a reliable cross-version event for every workbook/dashboard scope
+change; therefore a manual refresh after navigation is required. A catalog
+must be treated as stale until that refresh completes, and no catalog entry
+is evidence of authorization. The discovery implementation is
+`src/debug-ui/capability-catalog.ts` and has deterministic no-network tests;
+the real Tableau Desktop host remains **UNVERIFIED** until a manual smoke run.
+
 ### Local approved configuration injection
 
 The Windows smoke test can supply the approved configuration through a local
@@ -103,6 +130,16 @@ On a supported Tableau Desktop installation:
    cannot be verified, the adapter must fail closed and the result is
    **UNVERIFIED**, not a successful smoke test.
 7. Remove the extension or restore the original dashboard state after testing.
+
+For the discovery portion of the smoke test, after the extension renders click
+**Refresh capabilities** and record the displayed dashboard name, worksheet
+names, filter/parameter statuses, and any explicit unavailable/unsupported
+reasons. Navigate to another dashboard (or reopen the extension on a different
+dashboard), refresh again, and confirm the previous catalog is cleared rather
+than presented as current. This verifies display behavior only; do not treat
+candidate values as permission to apply a view action. Windows and macOS
+Desktop results are **UNVERIFIED** until actually performed and recorded with
+the Desktop version and workbook used.
 
 If Tableau refuses the extension, shows a blank zone, or reports a trust or
 security error:

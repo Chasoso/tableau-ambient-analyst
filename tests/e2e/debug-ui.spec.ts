@@ -12,6 +12,9 @@ test.describe('Ambient Analyst debug console', () => {
     await expect(page.getByRole('heading', { name: 'Trigger' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Analysis Contract' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Analysis progress' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Action Capability Catalog' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Refresh capabilities' })).toBeDisabled();
+    await expect(page.getByTestId('capability-status')).toHaveText('Waiting for the Tableau host.');
     await expect(page.getByRole('heading', { name: 'Evidence / provenance' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Verifier' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Intervention' })).toBeVisible();

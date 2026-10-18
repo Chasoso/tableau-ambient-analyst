@@ -18,6 +18,12 @@ import {
   isViewActionEligible,
 } from './view-actions.js';
 import { resolveViewIntent, type ViewIntentResolution } from './view-intents.js';
+import {
+  CapabilityCatalogController,
+  type CapabilityCatalog,
+  type FilterCapability,
+  type ParameterCapability,
+} from './capability-catalog.js';
 
 const client = new HttpAnalysisClient();
 const select = document.querySelector<HTMLSelectElement>('#scenario')!;
@@ -25,6 +31,7 @@ const runButton = document.querySelector<HTMLButtonElement>('#run')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const content = document.querySelector<HTMLElement>('#content')!;
 const hostStatus = document.querySelector<HTMLElement>('#host-status')!;
+const capabilityRefreshButton = document.querySelector<HTMLButtonElement>('#refresh-capabilities')!;
 
 const unconfiguredViewActionPolicy: ViewActionPolicy = {
   scope: { dashboard: 'unconfigured' },
@@ -59,6 +66,10 @@ let activeViewActionResolution: ViewIntentResolution = {
   reason: 'No verified view intent is available for this run.',
 };
 let canUndoViewAction = false;
+let capabilityController: CapabilityCatalogController | undefined;
+let capabilityCatalog: CapabilityCatalog | undefined;
+let capabilityMessage = 'Waiting for the Tableau host.';
+let capabilityRefreshInFlight = false;
 
 function resolveRunAction(state: ReplayState): ViewIntentResolution {
   const hostDashboard = observeHostScope();
@@ -104,6 +115,13 @@ function observeHostScope(): string | undefined {
       reason: 'The host dashboard scope changed; the previous action was invalidated.',
     };
     observedHostDashboard = identity;
+    if (hostMode === 'tableau') {
+      capabilityController?.invalidate();
+      capabilityCatalog = undefined;
+      capabilityMessage = identity
+        ? 'Dashboard scope changed; refresh the capability catalog.'
+        : 'The active dashboard scope is unavailable.';
+    }
   }
   return identity;
 }
@@ -146,6 +164,78 @@ function list(items: readonly string[], empty = 'None'): HTMLUListElement {
   return result;
 }
 
+function capabilityState(capability: FilterCapability | ParameterCapability): string {
+  const authorization = capability.state.authorization;
+  return `${capability.state.read} · candidate ${capability.state.candidate} · approved ${authorization.approved ? 'yes' : 'no'} · executable ${authorization.executable ? 'yes' : 'no'}`;
+}
+
+function renderCapabilityCatalog(): HTMLElement {
+  if (!capabilityCatalog) {
+    const message = document.createElement('p');
+    message.dataset.testid = 'capability-status';
+    message.textContent = capabilityMessage;
+    return panel('Action Capability Catalog', message);
+  }
+  const body = document.createElement('div');
+  const summary = document.createElement('p');
+  summary.dataset.testid = 'capability-status';
+  summary.textContent = `Dashboard: ${capabilityCatalog.dashboard.name} · captured ${capabilityCatalog.freshness.capturedAt}`;
+  body.append(summary);
+  const groups = document.createElement('ul');
+  for (const worksheet of capabilityCatalog.worksheets) {
+    const row = document.createElement('li');
+    row.append(text(`Worksheet ${worksheet.name} (${worksheet.read})`));
+    if (worksheet.reason)
+      row.append(Object.assign(document.createElement('small'), { textContent: worksheet.reason }));
+    const filters = document.createElement('ul');
+    for (const filter of worksheet.filters) {
+      const filterRow = document.createElement('li');
+      const values = filter.candidateValues
+        ? ` · candidates: ${filter.candidateValues.join(', ') || 'none'}`
+        : '';
+      filterRow.append(text(`Filter ${filter.field} (${filter.filterType})${values}`));
+      filterRow.append(
+        Object.assign(document.createElement('small'), {
+          textContent: `${capabilityState(filter)}${filter.state.candidateReason ? ` · ${filter.state.candidateReason}` : ''}`,
+        }),
+      );
+      filters.append(filterRow);
+    }
+    if (worksheet.filters.length > 0) row.append(filters);
+    groups.append(row);
+  }
+  for (const parameter of capabilityCatalog.parameters) {
+    const row = document.createElement('li');
+    const values = parameter.candidateValues
+      ? ` · candidates: ${parameter.candidateValues.join(', ') || 'none'}`
+      : '';
+    row.append(
+      text(
+        `Parameter ${parameter.name} = ${String(parameter.currentValue ?? 'unavailable')}${values}`,
+      ),
+    );
+    row.append(
+      Object.assign(document.createElement('small'), {
+        textContent: `${capabilityState(parameter)}${parameter.state.candidateReason ? ` · ${parameter.state.candidateReason}` : ''}`,
+      }),
+    );
+    groups.append(row);
+  }
+  if (groups.childElementCount === 0)
+    groups.append(
+      Object.assign(document.createElement('li'), {
+        textContent: 'No readable worksheet filters or parameters.',
+      }),
+    );
+  body.append(groups);
+  if (capabilityCatalog.issues.length > 0) {
+    const issues = document.createElement('p');
+    issues.textContent = `Read issues: ${capabilityCatalog.issues.map((issue) => `${issue.scope} (${issue.reason})`).join('; ')}`;
+    body.append(issues);
+  }
+  return panel('Action Capability Catalog', body);
+}
+
 function renderIdle(scenario: DebugScenario): void {
   status.textContent = 'IDLE';
   status.dataset.status = 'idle';
@@ -154,6 +244,7 @@ function renderIdle(scenario: DebugScenario): void {
       'Replay',
       Object.assign(document.createElement('p'), { textContent: scenario.description }),
     ),
+    renderCapabilityCatalog(),
   );
 }
 
@@ -299,12 +390,39 @@ function render(state: ReplayState): void {
     panel('Verifier', verifier),
     panel('Intervention', intervention),
     panel('Audit timeline', list(state.audit)),
+    renderCapabilityCatalog(),
   );
   if (scenario.error) {
     const error = document.createElement('p');
     error.className = 'error';
     error.textContent = scenario.error;
     content.prepend(error);
+  }
+}
+
+async function refreshCapabilityCatalog(): Promise<void> {
+  if (!capabilityController || capabilityRefreshInFlight) return;
+  observeHostScope();
+  capabilityRefreshInFlight = true;
+  capabilityRefreshButton.disabled = true;
+  capabilityMessage = 'Reading the active Tableau dashboard…';
+  capabilityCatalog = undefined;
+  renderIdle(selectedScenario());
+  try {
+    const result = await capabilityController.refresh();
+    if (result.status === 'applied') {
+      capabilityCatalog = result.catalog;
+      capabilityMessage = 'Capability catalog refreshed.';
+    } else {
+      capabilityMessage =
+        result.status === 'stale' ? `Catalog discarded: ${result.reason}.` : result.reason;
+    }
+  } catch {
+    capabilityMessage = 'Capability discovery failed closed.';
+  } finally {
+    capabilityRefreshInFlight = false;
+    capabilityRefreshButton.disabled = !capabilityController;
+    renderIdle(selectedScenario());
   }
 }
 
@@ -357,6 +475,10 @@ runButton.addEventListener('click', async () => {
   }
 });
 
+capabilityRefreshButton.addEventListener('click', () => {
+  void refreshCapabilityCatalog();
+});
+
 renderIdle(selectedScenario());
 
 void initializeTableauHost().then(({ mode }) => {
@@ -388,5 +510,15 @@ void initializeTableauHost().then(({ mode }) => {
       activeViewActionPolicy = unconfiguredViewActionPolicy;
       activeViewIntentMappings = [];
     }
+    capabilityController = new CapabilityCatalogController(() => tableauViewActionApiFromGlobal());
+    capabilityRefreshButton.disabled = false;
+    void refreshCapabilityCatalog();
+  } else {
+    capabilityRefreshButton.disabled = true;
+    capabilityMessage =
+      mode === 'tableau-unavailable'
+        ? 'Tableau Extensions API is unavailable.'
+        : 'Tableau host initialization failed.';
+    renderIdle(selectedScenario());
   }
 });
