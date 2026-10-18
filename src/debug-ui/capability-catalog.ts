@@ -129,7 +129,7 @@ function hostScopeId(value: unknown): string | undefined {
 function scalarFrom(value: unknown): CapabilityValue | undefined {
   if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
   if (
-    typeof value === 'string' ||
+    (typeof value === 'string' && value.length <= 200) ||
     typeof value === 'boolean' ||
     (typeof value === 'number' && Number.isFinite(value))
   )

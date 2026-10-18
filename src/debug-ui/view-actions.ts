@@ -687,6 +687,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
       tableau?: {
         extensions?: {
           dashboardContent?: { dashboard?: TableauDashboard; workbook?: TableauWorkbook };
+          workbook?: TableauWorkbook;
           dashboardObjectId?: unknown;
         };
         FilterUpdateType?: { Replace?: unknown };
@@ -695,7 +696,7 @@ export function tableauViewActionApiFromGlobal(): TableauViewActionApi | undefin
     }
   ).tableau;
   const dashboard = tableau?.extensions?.dashboardContent?.dashboard;
-  const workbook = tableau?.extensions?.dashboardContent?.workbook;
+  const workbook = tableau?.extensions?.workbook ?? tableau?.extensions?.dashboardContent?.workbook;
   const filterUpdateTypeReplace = tableau?.FilterUpdateType?.Replace;
   const filterTypeCategorical = tableau?.FilterType?.Categorical;
   const dashboardObjectId = tableau?.extensions?.dashboardObjectId;

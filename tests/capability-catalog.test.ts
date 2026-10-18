@@ -293,6 +293,34 @@ describe('Tableau capability catalog discovery', () => {
     });
   });
 
+  it('bounds individual scalar values before retaining them', async () => {
+    const oversized = 'x'.repeat(201);
+    const catalog = await discoverCapabilityCatalog(
+      api({
+        worksheets: [
+          {
+            name: 'Orders',
+            applyFilterAsync: async () => undefined,
+            getFiltersAsync: async () => [
+              {
+                fieldName: 'Region',
+                fieldId: 'region-id',
+                filterType: 'categorical',
+                isAllSelected: false,
+                appliedValues: [oversized],
+                getDomainAsync: async () => ({ values: ['East'] }),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(catalog.worksheets[0]!.filters[0]!.state).toMatchObject({
+      read: 'failed',
+      candidateReason: 'MALFORMED_VALUE',
+    });
+  });
+
   it('fails closed for malformed identities, current state, and values', async () => {
     const malformed = api({
       name: '',

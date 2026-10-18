@@ -167,7 +167,8 @@ test.describe('Ambient Analyst debug console', () => {
         extensions: {
           initializeAsync: async () => undefined,
           dashboardObjectId: 101,
-          dashboardContent: { dashboard, workbook },
+          dashboardContent: { dashboard },
+          workbook,
         },
         FilterUpdateType: { Replace: 'replace' },
         FilterType: { Categorical: 'categorical' },
