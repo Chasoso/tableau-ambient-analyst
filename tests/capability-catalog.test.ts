@@ -420,6 +420,47 @@ describe('Tableau capability catalog discovery', () => {
     });
   });
 
+  it('retains a bounded domain when current selection or a filter property is malformed', async () => {
+    const partial = api({
+      worksheets: [
+        {
+          name: 'Orders',
+          getFiltersAsync: async () => [
+            {
+              fieldName: 'Region',
+              fieldId: 'region-id',
+              filterType: 'categorical',
+              getAppliedValues: async () => {
+                throw new Error('selection unavailable');
+              },
+              getDomainAsync: async () => ({ values: ['East', 'West'] }),
+            },
+            Object.defineProperty({}, 'fieldName', {
+              get() {
+                throw new Error('malformed filter');
+              },
+            }),
+          ],
+          applyFilterAsync: async () => undefined,
+        },
+      ],
+    });
+    const catalog = await discoverCapabilityCatalog(partial);
+    expect(catalog.worksheets[0]!.filters[0]).toMatchObject({
+      candidateValues: ['East', 'West'],
+      state: {
+        read: 'failed',
+        candidate: 'unknown',
+        candidateReason: 'selection unavailable',
+      },
+    });
+    expect(catalog.worksheets[0]!.filters[1]!.state).toMatchObject({
+      read: 'failed',
+      candidate: 'unknown',
+      candidateReason: 'malformed filter',
+    });
+  });
+
   it('never invokes Tableau mutation methods during discovery or refresh', async () => {
     let applyCalls = 0;
     let clearCalls = 0;
@@ -576,6 +617,26 @@ describe('Tableau capability catalog discovery', () => {
     await expect(controller.refresh()).resolves.toEqual({
       status: 'unavailable',
       reason: 'TABLEAU_HOST_UNAVAILABLE',
+    });
+  });
+
+  it('reports malformed dashboard reads as unavailable', async () => {
+    const malformed = {
+      dashboard: Object.defineProperty(
+        { worksheets: [], getParametersAsync: async () => [] },
+        'name',
+        {
+          get() {
+            throw new Error('dashboard malformed');
+          },
+        },
+      ),
+      filterUpdateTypeReplace: 'replace',
+      filterTypeCategorical: 'categorical',
+    } as TableauViewActionApi;
+    await expect(new CapabilityCatalogController(() => malformed).refresh()).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'dashboard malformed',
     });
   });
 });

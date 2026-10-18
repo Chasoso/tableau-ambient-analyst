@@ -437,13 +437,37 @@ async function discoverFilter(
     if (filterTypeLower.includes('range')) {
       return discoverRangeFilter(capability, filter);
     }
-    const current = await readFilterValues(filter);
+    let current: Awaited<ReturnType<typeof readFilterValues>>;
+    try {
+      current = await readFilterValues(filter);
+    } catch (error) {
+      current = {
+        current: { status: 'failed', reason: errorReason(error, 'FILTER_READ_FAILED') },
+        allSelected: undefined,
+      };
+    }
+    const domain = await readFilterDomain(filter);
     if (current.current.status !== 'available') {
-      const readStatus = current.current.status;
+      if (domain.status !== 'available') {
+        return {
+          ...capability,
+          state: state(
+            current.current.status,
+            capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+              ? 'ineligible'
+              : 'unknown',
+            capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
+              ? capability.state.candidateReason
+              : current.current.reason,
+          ),
+        };
+      }
       return {
         ...capability,
+        ...(domain.valueType ? { valueType: domain.valueType } : {}),
+        candidateValues: domain.values,
         state: state(
-          readStatus,
+          current.current.status,
           capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE' ? 'ineligible' : 'unknown',
           capability.state.candidateReason === 'UNSUPPORTED_FILTER_TYPE'
             ? capability.state.candidateReason
@@ -451,7 +475,6 @@ async function discoverFilter(
         ),
       };
     }
-    const domain = await readFilterDomain(filter);
     if (domain.status !== 'available') {
       return {
         ...capability,
@@ -515,6 +538,23 @@ async function discoverFilter(
   }
 }
 
+function failedFilterCapability(
+  dashboardName: string,
+  worksheetIndex: number,
+  filterIndex: number,
+  reason: string,
+): FilterCapability {
+  const worksheetIdentity = `${dashboardName}::worksheet:invalid#${worksheetIndex + 1}`;
+  return {
+    kind: 'filter',
+    identity: `${worksheetIdentity}::filter:invalid#${filterIndex + 1}`,
+    worksheet: { name: '', identity: worksheetIdentity, index: worksheetIndex },
+    field: '',
+    filterType: 'unknown',
+    state: state('failed', 'unknown', reason),
+  };
+}
+
 async function discoverWorksheet(
   dashboardName: string,
   worksheet: TableauWorksheet,
@@ -565,7 +605,11 @@ async function discoverWorksheet(
       read: 'available',
       filters: await Promise.all(
         filters.map((filter, filterIndex) => {
-          if (isRecord(filter)) {
+          try {
+            if (!isRecord(filter))
+              return Promise.resolve(
+                failedFilterCapability(dashboardName, index, filterIndex, 'FILTER_ENTRY_MALFORMED'),
+              );
             return discoverFilter(
               dashboardName,
               worksheet,
@@ -573,19 +617,24 @@ async function discoverWorksheet(
               filter as TableauFilter,
               filterIndex,
               filterTypeCategorical,
+            ).catch((error) =>
+              failedFilterCapability(
+                dashboardName,
+                index,
+                filterIndex,
+                errorReason(error, 'FILTER_READ_FAILED'),
+              ),
+            );
+          } catch (error) {
+            return Promise.resolve(
+              failedFilterCapability(
+                dashboardName,
+                index,
+                filterIndex,
+                errorReason(error, 'FILTER_READ_FAILED'),
+              ),
             );
           }
-          return Promise.resolve({
-            ...filterCapability(
-              dashboardName,
-              worksheet,
-              index,
-              {} as TableauFilter,
-              filterIndex,
-              filterTypeCategorical,
-            ),
-            state: state('failed', 'unknown', 'FILTER_ENTRY_MALFORMED'),
-          });
         }),
       ),
     };
@@ -821,18 +870,36 @@ export class CapabilityCatalogController {
   }
 
   async refresh(now = () => new Date().toISOString()): Promise<DiscoveryResult> {
-    const api = this.getApi();
+    let api: TableauViewActionApi | undefined;
+    try {
+      api = this.getApi();
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_HOST_UNAVAILABLE') };
+    }
     if (!api) return { status: 'unavailable', reason: 'TABLEAU_HOST_UNAVAILABLE' };
     const requestId = ++this.generation;
     this.invalidated = false;
-    const initialDashboard = api.dashboard.name;
-    const initialDashboardObject = api.dashboard;
-    const initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
-    if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
-      return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
+    let initialDashboard: unknown;
+    let initialDashboardObject: TableauViewActionApi['dashboard'];
+    let initialDashboardObjectId: string | undefined;
+    let catalog: CapabilityCatalog;
+    try {
+      initialDashboardObject = api.dashboard;
+      initialDashboard = initialDashboardObject.name;
+      initialDashboardObjectId = hostScopeId(api.dashboardObjectId);
+      if (typeof initialDashboard !== 'string' || initialDashboard.length === 0) {
+        return { status: 'unavailable', reason: 'DASHBOARD_IDENTITY_UNAVAILABLE' };
+      }
+      catalog = await discoverCapabilityCatalog(api, requestId, now);
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_DISCOVERY_FAILED') };
     }
-    const catalog = await discoverCapabilityCatalog(api, requestId, now);
-    const currentApi = this.getApi();
+    let currentApi: TableauViewActionApi | undefined;
+    try {
+      currentApi = this.getApi();
+    } catch (error) {
+      return { status: 'unavailable', reason: errorReason(error, 'TABLEAU_HOST_UNAVAILABLE') };
+    }
     if (this.invalidated || requestId !== this.generation)
       return { status: 'stale', reason: 'SUPERSEDED_REFRESH' };
     if (
