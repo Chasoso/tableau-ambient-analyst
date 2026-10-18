@@ -440,6 +440,7 @@ export class MockViewActionAdapter implements ViewActionAdapter {
 }
 
 export type TableauFilter = {
+  fieldId?: unknown;
   fieldName?: unknown;
   filterType?: unknown;
   isAllSelected?: unknown;
@@ -449,6 +450,7 @@ export type TableauFilter = {
 };
 
 export type TableauWorksheet = {
+  id?: unknown;
   name?: unknown;
   getFiltersAsync: () => Promise<readonly TableauFilter[]>;
   applyFilterAsync: (
@@ -460,10 +462,26 @@ export type TableauWorksheet = {
 };
 
 export type TableauParameter = {
+  id?: unknown;
+  dataType?: unknown;
   name?: unknown;
   currentValue?: unknown;
-  allowableValues?: { allowableValues?: readonly unknown[] };
-  getAllowableValuesAsync?: () => Promise<{ allowableValues?: readonly unknown[] }>;
+  allowableValues?: {
+    type?: unknown;
+    allowableValues?: readonly unknown[];
+    minValue?: unknown;
+    maxValue?: unknown;
+    stepSize?: unknown;
+    dateStepPeriod?: unknown;
+  };
+  getAllowableValuesAsync?: () => Promise<{
+    type?: unknown;
+    allowableValues?: readonly unknown[];
+    minValue?: unknown;
+    maxValue?: unknown;
+    stepSize?: unknown;
+    dateStepPeriod?: unknown;
+  }>;
   changeValueAsync: (value: ViewActionScalar) => Promise<void>;
 };
 

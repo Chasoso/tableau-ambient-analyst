@@ -66,13 +66,18 @@ targets, or apply/undo a view action. Existing approved JSON remains the only
 authorization mechanism, and the final adapter revalidates the live target
 before a click-only action.
 
-Each worksheet and target has a stable display identity that includes its
-worksheet index, so same-named fields on different worksheets (or repeated
-fields returned by the host) are not conflated. Read status, candidate-value
+The catalog retains bounded host identifiers when Tableau provides them
+(worksheet id, filter field id, and parameter id), while keeping the caption
+and array position as disambiguation metadata. When an older host omits an
+identifier, the fallback identity is refresh-local and is not treated as a
+stable target or made candidate-eligible. Read status, candidate-value
 eligibility, and authorization/execution state are displayed separately.
 Unsupported filter types, missing current state, malformed values, failed
 worksheet reads, and domains larger than the bounded catalog limit remain
-explicit and are not converted into candidate values.
+explicit and are not converted into candidate values. Parameter list domains
+are bounded as candidate values; supported range restrictions retain validated
+minimum, maximum, step, and date-period metadata but remain ineligible for
+value-specific proposals until a later planner contract supports ranges.
 
 The refresh controller discards a superseded request and clears the catalog
 when the observable dashboard identity changes. The Extensions API does not

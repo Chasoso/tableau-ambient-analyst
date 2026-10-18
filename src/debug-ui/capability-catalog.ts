@@ -32,11 +32,23 @@ export type CapabilityIssue = {
 
 export type CapabilityValue = ViewActionScalar;
 
+export type ParameterDomain =
+  | { kind: 'list'; values?: readonly CapabilityValue[]; reason?: string }
+  | {
+      kind: 'range';
+      minValue?: CapabilityValue;
+      maxValue?: CapabilityValue;
+      stepSize?: number;
+      dateStepPeriod?: string;
+      reason?: string;
+    };
+
 export type FilterCapability = {
   kind: 'filter';
   identity: string;
-  worksheet: { name: string; identity: string; index: number };
+  worksheet: { name: string; identity: string; index: number; worksheetId?: string };
   field: string;
+  fieldId?: string;
   filterType: string;
   valueType?: ViewActionValueType;
   currentValues?: readonly CapabilityValue[];
@@ -50,14 +62,18 @@ export type ParameterCapability = {
   identity: string;
   index: number;
   name: string;
+  parameterId?: string;
+  dataType?: string;
   valueType?: ViewActionValueType;
   currentValue?: CapabilityValue;
   candidateValues?: readonly CapabilityValue[];
+  domain?: ParameterDomain;
   state: CapabilityState;
 };
 
 export type WorksheetCapability = {
   name: string;
+  worksheetId?: string;
   identity: string;
   index: number;
   read: CapabilityReadStatus;
@@ -152,6 +168,66 @@ function boundedValues(
   return { status: 'available', values: normalized, ...(valueType ? { valueType } : {}) };
 }
 
+type ParameterRestriction = {
+  type?: unknown;
+  allowableValues?: unknown;
+  minValue?: unknown;
+  maxValue?: unknown;
+  stepSize?: unknown;
+  dateStepPeriod?: unknown;
+};
+
+function parameterRestriction(
+  restriction: ParameterRestriction | undefined,
+):
+  | { status: 'available'; domain: ParameterDomain; valueType?: ViewActionValueType }
+  | { status: 'unavailable' | 'unsupported' | 'failed'; reason: string } {
+  if (!restriction) return { status: 'unavailable', reason: 'PARAMETER_DOMAIN_UNAVAILABLE' };
+  const type = isBoundedName(restriction.type) ? restriction.type.toLowerCase() : undefined;
+  if (
+    type === 'range' ||
+    restriction.minValue !== undefined ||
+    restriction.maxValue !== undefined
+  ) {
+    const minValue = scalarFrom(restriction.minValue);
+    const maxValue = scalarFrom(restriction.maxValue);
+    if (minValue === undefined || maxValue === undefined) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_BOUNDS_MALFORMED' };
+    }
+    const valueType = typeOfValues([minValue, maxValue]);
+    if (!valueType) return { status: 'failed', reason: 'PARAMETER_RANGE_TYPE_MISMATCH' };
+    const stepSize = restriction.stepSize;
+    if (
+      stepSize !== undefined &&
+      (typeof stepSize !== 'number' || !Number.isFinite(stepSize) || stepSize <= 0)
+    ) {
+      return { status: 'failed', reason: 'PARAMETER_RANGE_STEP_MALFORMED' };
+    }
+    const dateStepPeriod = restriction.dateStepPeriod;
+    if (dateStepPeriod !== undefined && !isBoundedName(dateStepPeriod)) {
+      return { status: 'failed', reason: 'PARAMETER_DATE_STEP_MALFORMED' };
+    }
+    return {
+      status: 'available',
+      valueType,
+      domain: {
+        kind: 'range',
+        minValue,
+        maxValue,
+        ...(typeof stepSize === 'number' ? { stepSize } : {}),
+        ...(typeof dateStepPeriod === 'string' ? { dateStepPeriod } : {}),
+      },
+    };
+  }
+  const values = boundedValues(restriction.allowableValues);
+  if (values.status !== 'available') return values;
+  return {
+    status: 'available',
+    ...(values.valueType ? { valueType: values.valueType } : {}),
+    domain: { kind: 'list', values: values.values },
+  };
+}
+
 async function readFilterValues(filter: TableauFilter): Promise<{
   current: ReturnType<typeof boundedValues>;
   allSelected: boolean | undefined;
@@ -183,8 +259,15 @@ function filterCapability(
   filterTypeCategorical: unknown,
 ): FilterCapability {
   const worksheetName = isBoundedName(worksheet.name) ? worksheet.name : '';
+  const worksheetId = isBoundedName(worksheet.id) ? worksheet.id : undefined;
   const field = isBoundedName(filter.fieldName) ? filter.fieldName : '';
-  const identity = `${dashboardName}::worksheet:${worksheetName || 'invalid'}#${worksheetIndex + 1}::filter:${field || 'invalid'}#${filterIndex + 1}`;
+  const fieldId = isBoundedName((filter as TableauFilter & { fieldId?: unknown }).fieldId)
+    ? (filter as TableauFilter & { fieldId: string }).fieldId
+    : undefined;
+  const worksheetIdentity = worksheetId
+    ? `${dashboardName}::worksheet-id:${worksheetId}`
+    : `${dashboardName}::worksheet:${worksheetName || 'invalid'}#${worksheetIndex + 1}`;
+  const identity = `${worksheetIdentity}::filter:${fieldId ?? `caption:${field || 'invalid'}#${filterIndex + 1}`}`;
   const filterType = isBoundedName(filter.filterType) ? filter.filterType : 'unknown';
   if (!worksheetName) {
     return {
@@ -192,8 +275,9 @@ function filterCapability(
       identity,
       worksheet: {
         name: '',
-        identity: `${dashboardName}::worksheet:invalid#${worksheetIndex + 1}`,
+        identity: worksheetIdentity,
         index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
       },
       field: '',
       filterType,
@@ -206,8 +290,9 @@ function filterCapability(
       identity,
       worksheet: {
         name: worksheetName,
-        identity: `${dashboardName}::worksheet:${worksheetName}#${worksheetIndex + 1}`,
+        identity: worksheetIdentity,
         index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
       },
       field: '',
       filterType,
@@ -220,8 +305,9 @@ function filterCapability(
       identity,
       worksheet: {
         name: worksheetName,
-        identity: `${dashboardName}::worksheet:${worksheetName}#${worksheetIndex + 1}`,
+        identity: worksheetIdentity,
         index: worksheetIndex,
+        ...(worksheetId ? { worksheetId } : {}),
       },
       field,
       filterType,
@@ -237,8 +323,13 @@ function filterCapability(
       index: worksheetIndex,
     },
     field,
+    ...(fieldId ? { fieldId } : {}),
     filterType,
-    state: state('available', 'unknown', 'READING_FILTER_STATE'),
+    state: state(
+      'available',
+      fieldId ? 'unknown' : 'ineligible',
+      fieldId ? 'READING_FILTER_STATE' : 'FILTER_FIELD_ID_UNAVAILABLE',
+    ),
   };
 }
 
@@ -305,7 +396,11 @@ async function discoverFilter(
       currentValues: current.current.values,
       allSelected: current.allSelected,
       candidateValues: domain.values,
-      state: state('available', 'eligible'),
+      state: state(
+        'available',
+        capability.fieldId ? 'eligible' : 'ineligible',
+        capability.fieldId ? undefined : 'FILTER_FIELD_ID_UNAVAILABLE',
+      ),
     };
   } catch (error) {
     return {
@@ -322,7 +417,10 @@ async function discoverWorksheet(
   filterTypeCategorical: unknown,
 ): Promise<WorksheetCapability> {
   const name = isBoundedName(worksheet.name) ? worksheet.name : '';
-  const identity = `${dashboardName}::worksheet:${name || 'invalid'}#${index + 1}`;
+  const worksheetId = isBoundedName(worksheet.id) ? worksheet.id : undefined;
+  const identity = worksheetId
+    ? `${dashboardName}::worksheet-id:${worksheetId}`
+    : `${dashboardName}::worksheet:${name || 'invalid'}#${index + 1}`;
   if (!name) {
     return {
       name,
@@ -356,6 +454,7 @@ async function discoverWorksheet(
     }
     return {
       name,
+      ...(isBoundedName(worksheet.id) ? { worksheetId: worksheet.id } : {}),
       identity,
       index,
       read: 'available',
@@ -423,7 +522,13 @@ async function discoverParameter(
     };
   }
   const name = isBoundedName(parameter.name) ? parameter.name : '';
-  const identity = `${dashboardName}::parameter:${name || 'invalid'}#${index + 1}`;
+  const parameterId = isBoundedName((parameter as TableauParameter & { id?: unknown }).id)
+    ? (parameter as TableauParameter & { id: string }).id
+    : undefined;
+  const dataType = isBoundedName((parameter as TableauParameter & { dataType?: unknown }).dataType)
+    ? (parameter as TableauParameter & { dataType: string }).dataType
+    : undefined;
+  const identity = `${dashboardName}::parameter:${parameterId ?? `caption:${name || 'invalid'}#${index + 1}`}`;
   const currentValue = scalarFrom(parameter.currentValue);
   if (!name) {
     return {
@@ -431,6 +536,8 @@ async function discoverParameter(
       identity,
       index,
       name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
       state: state('failed', 'unknown', 'PARAMETER_NAME_UNAVAILABLE'),
     };
   }
@@ -440,6 +547,8 @@ async function discoverParameter(
       identity,
       index,
       name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
       state: state('failed', 'unknown', 'PARAMETER_VALUE_UNAVAILABLE'),
     };
   }
@@ -447,13 +556,15 @@ async function discoverParameter(
     const restriction = parameter.getAllowableValuesAsync
       ? await parameter.getAllowableValuesAsync()
       : parameter.allowableValues;
-    const domain = boundedValues(restriction?.allowableValues);
+    const domain = parameterRestriction(restriction as ParameterRestriction | undefined);
     if (domain.status !== 'available') {
       return {
         kind: 'parameter',
         identity,
         index,
         name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
         valueType: typeof currentValue as ViewActionValueType,
         currentValue,
         state: state(domain.status, 'ineligible', domain.reason),
@@ -466,6 +577,8 @@ async function discoverParameter(
         identity,
         index,
         name,
+        ...(parameterId ? { parameterId } : {}),
+        ...(dataType ? { dataType } : {}),
         valueType: currentType,
         currentValue,
         state: state('failed', 'ineligible', 'PARAMETER_VALUE_TYPE_MISMATCH'),
@@ -476,10 +589,23 @@ async function discoverParameter(
       identity,
       index,
       name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
       valueType: domain.valueType ?? currentType,
       currentValue,
-      candidateValues: domain.values,
-      state: state('available', 'eligible'),
+      ...(domain.domain.kind === 'list' && domain.domain.values
+        ? { candidateValues: domain.domain.values }
+        : {}),
+      domain: domain.domain,
+      state: state(
+        'available',
+        parameterId && domain.domain.kind === 'list' ? 'eligible' : 'ineligible',
+        parameterId
+          ? domain.domain.kind === 'list'
+            ? undefined
+            : 'RANGE_DOMAIN_NOT_ENUMERATED'
+          : 'PARAMETER_ID_UNAVAILABLE',
+      ),
     };
   } catch (error) {
     return {
@@ -487,6 +613,8 @@ async function discoverParameter(
       identity,
       index,
       name,
+      ...(parameterId ? { parameterId } : {}),
+      ...(dataType ? { dataType } : {}),
       state: state('failed', 'unknown', errorReason(error, 'PARAMETER_READ_FAILED')),
     };
   }

@@ -212,9 +212,13 @@ function renderCapabilityCatalog(): HTMLElement {
     const values = parameter.candidateValues
       ? ` · candidates: ${parameter.candidateValues.join(', ') || 'none'}`
       : '';
+    const range =
+      parameter.domain?.kind === 'range'
+        ? ` · range: ${String(parameter.domain.minValue)}–${String(parameter.domain.maxValue)}${parameter.domain.stepSize ? ` step ${parameter.domain.stepSize}` : ''}${parameter.domain.dateStepPeriod ? ` per ${parameter.domain.dateStepPeriod}` : ''}`
+        : '';
     row.append(
       text(
-        `Parameter ${parameter.name} = ${String(parameter.currentValue ?? 'unavailable')}${values}`,
+        `Parameter ${parameter.name} = ${String(parameter.currentValue ?? 'unavailable')}${values}${range}`,
       ),
     );
     row.append(

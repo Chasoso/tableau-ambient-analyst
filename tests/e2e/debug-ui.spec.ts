@@ -135,6 +135,7 @@ test.describe('Ambient Analyst debug console', () => {
       if (window.self === window.top) return;
       const filter = {
         fieldName: 'Region',
+        fieldId: 'region-id',
         filterType: 'categorical',
         isAllSelected: false,
         getAppliedValues: async () => ['East'],
@@ -142,6 +143,7 @@ test.describe('Ambient Analyst debug console', () => {
       };
       const worksheet = {
         name: 'Orders',
+        id: 'orders-worksheet-id',
         getFiltersAsync: async () => [filter],
         applyFilterAsync: async () => undefined,
       };
@@ -151,6 +153,8 @@ test.describe('Ambient Analyst debug console', () => {
         getParametersAsync: async () => [
           {
             name: 'Threshold',
+            id: 'threshold-id',
+            dataType: 'float',
             currentValue: 1,
             allowableValues: { allowableValues: [0, 1, 2] },
             changeValueAsync: async () => undefined,

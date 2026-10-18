@@ -27,10 +27,12 @@ function catalogApi(): TableauViewActionApi {
     worksheets: [
       {
         name: 'Orders',
+        id: 'orders-worksheet-id',
         applyFilterAsync: async () => undefined,
         getFiltersAsync: async () => [
           {
             fieldName: 'Region',
+            fieldId: 'region-id',
             filterType: 'categorical',
             isAllSelected: false,
             getAppliedValues: async () => [{ value: 'East' }],
@@ -38,6 +40,7 @@ function catalogApi(): TableauViewActionApi {
           },
           {
             fieldName: 'Region',
+            fieldId: 'region-id-duplicate',
             filterType: 'categorical',
             isAllSelected: true,
             appliedValues: [],
@@ -45,6 +48,7 @@ function catalogApi(): TableauViewActionApi {
           },
           {
             fieldName: 'Date',
+            fieldId: 'date-id',
             filterType: 'range',
             appliedValues: [],
           },
@@ -52,6 +56,7 @@ function catalogApi(): TableauViewActionApi {
       },
       {
         name: 'Summary',
+        id: 'summary-worksheet-id',
         applyFilterAsync: async () => undefined,
         getFiltersAsync: async () => {
           throw new Error('worksheet permission denied');
@@ -61,12 +66,16 @@ function catalogApi(): TableauViewActionApi {
     getParametersAsync: async () => [
       {
         name: 'Threshold',
+        id: 'threshold-id',
+        dataType: 'float',
         currentValue: { value: 1 },
         changeValueAsync: async () => undefined,
         getAllowableValuesAsync: async () => ({ allowableValues: [0, 1, 2] }),
       },
       {
         name: 'Unbounded',
+        id: 'unbounded-id',
+        dataType: 'string',
         currentValue: 'x',
         changeValueAsync: async () => undefined,
         getAllowableValuesAsync: async () => ({
@@ -88,7 +97,7 @@ describe('Tableau capability catalog discovery', () => {
     expect(catalog.freshness.capturedAt).toBe('2026-10-18T00:00:00.000Z');
     const filters = catalog.worksheets[0]!.filters;
     expect(filters[0]).toMatchObject({
-      identity: 'Sales::worksheet:Orders#1::filter:Region#1',
+      identity: 'Sales::worksheet-id:orders-worksheet-id::filter:region-id',
       currentValues: ['East'],
       candidateValues: ['East', 'West'],
       state: {
@@ -97,10 +106,20 @@ describe('Tableau capability catalog discovery', () => {
         authorization: { approved: false, executable: false },
       },
     });
-    expect(filters[1]!.identity).toBe('Sales::worksheet:Orders#1::filter:Region#2');
+    expect(filters[1]!.identity).toBe(
+      'Sales::worksheet-id:orders-worksheet-id::filter:region-id-duplicate',
+    );
+    const reordered = catalogApi();
+    const originalGetFilters = reordered.dashboard.worksheets[0]!.getFiltersAsync;
+    reordered.dashboard.worksheets[0]!.getFiltersAsync = async () =>
+      [...(await originalGetFilters())].reverse();
+    const reorderedCatalog = await discoverCapabilityCatalog(reordered);
+    expect(reorderedCatalog.worksheets[0]!.filters.map(({ identity }) => identity).sort()).toEqual(
+      filters.map(({ identity }) => identity).sort(),
+    );
     expect(filters[2]!.state).toMatchObject({ read: 'unsupported', candidate: 'ineligible' });
     expect(catalog.parameters[0]).toMatchObject({
-      identity: 'Sales::parameter:Threshold#1',
+      identity: 'Sales::parameter:threshold-id',
       currentValue: 1,
       candidateValues: [0, 1, 2],
       state: {
@@ -125,7 +144,10 @@ describe('Tableau capability catalog discovery', () => {
     });
     expect(catalog.issues).toEqual(
       expect.arrayContaining([
-        { scope: 'Sales::worksheet:Summary#2', reason: 'worksheet permission denied' },
+        {
+          scope: 'Sales::worksheet-id:summary-worksheet-id',
+          reason: 'worksheet permission denied',
+        },
       ]),
     );
   });
@@ -154,6 +176,43 @@ describe('Tableau capability catalog discovery', () => {
         { scope: 'parameters', reason: 'PARAMETER_LIST_TOO_LARGE' },
       ]),
     );
+  });
+
+  it('retains bounded parameter range metadata without making it enumerable', async () => {
+    const range = api({
+      getParametersAsync: async () => [
+        {
+          id: 'date-range-id',
+          name: 'Date range',
+          dataType: 'date',
+          currentValue: '2026-01-01',
+          changeValueAsync: async () => undefined,
+          allowableValues: {
+            type: 'range',
+            minValue: '2026-01-01',
+            maxValue: '2026-12-31',
+            dateStepPeriod: 'month',
+          },
+        },
+      ],
+    });
+    const catalog = await discoverCapabilityCatalog(range);
+    expect(catalog.parameters[0]).toMatchObject({
+      parameterId: 'date-range-id',
+      dataType: 'date',
+      domain: {
+        kind: 'range',
+        minValue: '2026-01-01',
+        maxValue: '2026-12-31',
+        dateStepPeriod: 'month',
+      },
+      state: {
+        read: 'available',
+        candidate: 'ineligible',
+        candidateReason: 'RANGE_DOMAIN_NOT_ENUMERATED',
+      },
+    });
+    expect(catalog.parameters[0]!.candidateValues).toBeUndefined();
   });
 
   it('fails closed for malformed identities, current state, and values', async () => {
@@ -193,10 +252,12 @@ describe('Tableau capability catalog discovery', () => {
         },
         {
           name: 'Orders',
+          id: 'orders-worksheet-id',
           applyFilterAsync: async () => undefined,
           getFiltersAsync: async () => [
             {
               fieldName: 'Region',
+              fieldId: 'region-id',
               filterType: 'categorical',
               isAllSelected: false,
               appliedValues: [{ bad: true }],
